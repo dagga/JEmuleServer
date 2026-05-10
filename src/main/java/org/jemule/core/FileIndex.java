@@ -61,5 +61,7 @@ public class FileIndex {
         return res;
     }
 
-    public int fileCount() { return byHash.size(); }
+    public int fileCount() {
+        return byHash.size();
+    }
 }

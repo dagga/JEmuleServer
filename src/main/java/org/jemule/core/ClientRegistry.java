@@ -23,8 +23,20 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class ClientRegistry {
     private final ConcurrentHashMap<Integer, ClientState> clients = new ConcurrentHashMap<>();
-    public void add(ClientState s) { clients.put(s.clientId(), s); }
-    public void remove(ClientState s) { clients.remove(s.clientId()); }
-    public ClientState get(int id) { return clients.get(id); }
-    public int size() { return clients.size(); }
+
+    public void add(ClientState s) {
+        clients.put(s.clientId(), s);
+    }
+
+    public void remove(ClientState s) {
+        clients.remove(s.clientId());
+    }
+
+    public ClientState get(int id) {
+        return clients.get(id);
+    }
+
+    public int size() {
+        return clients.size();
+    }
 }

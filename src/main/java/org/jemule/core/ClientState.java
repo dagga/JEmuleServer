@@ -23,16 +23,18 @@ import java.net.InetAddress;
 import java.util.concurrent.atomic.AtomicLong;
 
 public record ClientState(
-    InetAddress address,
-    int port,
-    int clientId,
-    long connectedAt,
-    AtomicLong lastActivity
+        InetAddress address,
+        int port,
+        int clientId,
+        long connectedAt,
+        AtomicLong lastActivity
 ) {
     public static int ipToInt(InetAddress addr) {
         byte[] b = addr.getAddress();
         return ((b[3] & 0xFF) << 24) | ((b[2] & 0xFF) << 16) | ((b[1] & 0xFF) << 8) | (b[0] & 0xFF);
     }
 
-    public boolean isHighId() { return clientId > 0x00FFFFFF; }
+    public boolean isHighId() {
+        return clientId > 0x00FFFFFF;
+    }
 }

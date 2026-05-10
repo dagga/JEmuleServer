@@ -28,17 +28,25 @@ import java.io.IOException;
 
 public class Main {
     private static final Logger log = LoggerFactory.getLogger(Main.class);
+
     public static void main(String[] args) {
         ServerConfig cfg = ServerConfig.DEFAULT;
         if (args.length > 0) {
-            try { cfg = new ServerConfig(Integer.parseInt(args[0]), 2*1024*1024, 300, 50); }
-            catch (NumberFormatException e) { log.error("Usage: java -jar JEmuleServer.jar [port]"); return; }
+            try {
+                cfg = new ServerConfig(Integer.parseInt(args[0]), 2 * 1024 * 1024, 300, 50);
+            } catch (NumberFormatException e) {
+                log.error("Usage: java -jar JEmuleServer.jar [port]");
+                return;
+            }
         }
 
         Server server = new Server(cfg);
         Runtime.getRuntime().addShutdownHook(new Thread(server::stop));
 
-        try { server.start(); }
-        catch (IOException e) { log.error("Startup failed: {}", e.getMessage(), e); }
+        try {
+            server.start();
+        } catch (IOException e) {
+            log.error("Startup failed: {}", e.getMessage(), e);
+        }
     }
 }

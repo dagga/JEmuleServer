@@ -22,11 +22,11 @@ package org.jemule.core;
 import java.util.concurrent.ConcurrentHashMap;
 
 public record FileMetadata(
-    String hash,
-    String name,
-    long size,
-    String type,
-    ConcurrentHashMap<String, ClientState> sources
+        String hash,
+        String name,
+        long size,
+        String type,
+        ConcurrentHashMap<String, ClientState> sources
 ) {
     public FileMetadata(String hash, String name, long size, String type) {
         this(hash, name, size, type, new ConcurrentHashMap<>());

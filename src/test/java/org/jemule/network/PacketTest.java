@@ -19,11 +19,13 @@
 package org.jemule.network;
 
 import org.junit.jupiter.api.Test;
+
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+
 import static org.junit.jupiter.api.Assertions.*;
 
 class PacketTest {
@@ -50,15 +52,15 @@ class PacketTest {
     void testHeaderLengthIncludesOpcode() throws IOException {
         byte[] payload = new byte[10];
         Packet packet = new Packet(Packet.PROTOCOL_ED2K, (byte) 0x42, payload);
-        
+
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         packet.write(out, false);
-        
+
         byte[] result = out.toByteArray();
         ByteBuffer buf = ByteBuffer.wrap(result).order(ByteOrder.LITTLE_ENDIAN);
         buf.get(); // skip protocol
         int length = buf.getInt();
-        
+
         assertEquals(payload.length + 1, length, "Length field should be payload size + 1 (for opcode)");
     }
 }

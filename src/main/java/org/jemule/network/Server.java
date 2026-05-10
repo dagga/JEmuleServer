@@ -61,7 +61,9 @@ public class Server {
                     Socket c = ss.accept();
                     c.setTcpNoDelay(true);
                     executor.submit(new ClientHandler(c, config, registry, fileIndex, floodProtector));
-                } catch (IOException e) { if (running) log.error("Accept error: {}", e.getMessage()); }
+                } catch (IOException e) {
+                    if (running) log.error("Accept error: {}", e.getMessage());
+                }
             }
         }
     }
@@ -76,7 +78,9 @@ public class Server {
                     ds.receive(p);
                     handleUdp(ds, p);
                 }
-            } catch (IOException e) { if (running) log.error("UDP Error: {}", e.getMessage()); }
+            } catch (IOException e) {
+                if (running) log.error("UDP Error: {}", e.getMessage());
+            }
         });
     }
 
@@ -84,17 +88,17 @@ public class Server {
         if (p.getLength() < 2) return;
         byte[] data = p.getData();
         if ((data[0] & 0xFF) != (Packet.PROTOCOL_ED2K & 0xFF)) return;
-        
+
         // Spec says UDP packets are: [Protocol] [Opcode] [Data...]
         // [0xE3] [0x96] [Challenge 4 bytes] -> Total 6 bytes
         byte opcode = data[1];
         if (opcode == (byte) 0x96) { // OP_GLOBSERVSTATREQ
             if (p.getLength() < 6) return;
             log.debug("UDP Status Request from {}", p.getAddress());
-            
+
             // Response: [Protocol] [Opcode] [Challenge 4] [UserCount 4] [FileCount 4]
             // Standard UDP response does NOT have a size field.
-            
+
             ByteBuffer resp = ByteBuffer.allocate(15).order(ByteOrder.LITTLE_ENDIAN);
             resp.put(Packet.PROTOCOL_ED2K);
             resp.put((byte) 0x97); // OP_GLOBSERVSTATRES
@@ -102,7 +106,7 @@ public class Server {
             resp.putInt(registry.size());
             resp.putInt(fileIndex.fileCount());
             resp.put((byte) 0x00); // Aux/Padding common in some implementations
-            
+
             ds.send(new java.net.DatagramPacket(resp.array(), resp.capacity(), p.getAddress(), p.getPort()));
         }
     }

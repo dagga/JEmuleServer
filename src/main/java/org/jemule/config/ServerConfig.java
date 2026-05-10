@@ -20,10 +20,10 @@
 package org.jemule.config;
 
 public record ServerConfig(
-    int port,
-    int maxPacketSize,
-    int maxSearchResults,
-    int floodMaxRequestsPerSecond
+        int port,
+        int maxPacketSize,
+        int maxSearchResults,
+        int floodMaxRequestsPerSecond
 ) {
     public static final ServerConfig DEFAULT = new ServerConfig(4661, 2 * 1024 * 1024, 300, 50);
 }

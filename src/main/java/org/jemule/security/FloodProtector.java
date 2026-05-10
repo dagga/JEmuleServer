@@ -26,7 +26,9 @@ public class FloodProtector {
     private final int maxPerSec;
     private final ConcurrentHashMap<InetAddress, TokenBucket> buckets = new ConcurrentHashMap<>();
 
-    public FloodProtector(int maxPerSec) { this.maxPerSec = maxPerSec; }
+    public FloodProtector(int maxPerSec) {
+        this.maxPerSec = maxPerSec;
+    }
 
     public boolean allow(InetAddress ip) {
         return buckets.computeIfAbsent(ip, k -> new TokenBucket(maxPerSec)).tryConsume();
@@ -37,12 +39,21 @@ public class FloodProtector {
         private long tokens;
         private long lastRefill = System.nanoTime();
 
-        TokenBucket(long max) { tokens = max; this.maxTokens = max; }
+        TokenBucket(long max) {
+            tokens = max;
+            this.maxTokens = max;
+        }
 
         synchronized boolean tryConsume() {
             long now = System.nanoTime();
-            if (now - lastRefill >= 1_000_000_000L) { tokens = maxTokens; lastRefill = now; }
-            if (tokens > 0) { tokens--; return true; }
+            if (now - lastRefill >= 1_000_000_000L) {
+                tokens = maxTokens;
+                lastRefill = now;
+            }
+            if (tokens > 0) {
+                tokens--;
+                return true;
+            }
             return false;
         }
     }

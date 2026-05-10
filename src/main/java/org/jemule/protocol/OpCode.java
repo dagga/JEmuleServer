@@ -34,7 +34,10 @@ public enum OpCode {
     PUBLISH_ACK((byte) 0x21);
 
     public final byte value;
-    OpCode(byte value) { this.value = value; }
+
+    OpCode(byte value) {
+        this.value = value;
+    }
 
     public static OpCode fromByte(byte b) {
         for (OpCode op : values()) if (op.value == b) return op;
