@@ -23,14 +23,24 @@ import java.util.*;
 import org.jemule.core.event.EventManager;
 import org.jemule.core.event.FileEvent;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 public class FileIndex {
     private final ConcurrentHashMap<String, FileMetadata> byHash = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<String, Set<String>> invertedIndex = new ConcurrentHashMap<>();
+    private final ConcurrentSkipListMap<String, Set<String>> invertedIndex = new ConcurrentSkipListMap<>();
     private static final Pattern TOKENIZER = Pattern.compile("[^a-zA-Z0-9]+");
     private final DatabaseManager db;
     private final EventManager eventManager;
+
+    // Cache LRU pour les recherches (Thread-safe via Collections.synchronizedMap)
+    private final Map<String, List<FileMetadata>> searchCache = Collections.synchronizedMap(new LinkedHashMap<>(128, 0.75f, true) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<String, List<FileMetadata>> eldest) {
+            return size() > 100; // Limite à 100 entrées
+        }
+    });
 
     public FileIndex(DatabaseManager db, EventManager eventManager) {
         this.db = db;
@@ -54,6 +64,7 @@ public class FileIndex {
 
     public void addFile(FileMetadata meta) {
         indexInMemory(meta);
+        searchCache.clear(); // Invalider le cache lors de l'ajout d'un nouveau fichier
         if (db != null) {
             db.saveFile(meta);
         }
@@ -78,8 +89,12 @@ public class FileIndex {
         FileMetadata m = byHash.get(hash);
         if (m == null) return Collections.emptyList();
         
-        List<ClientState> all = new ArrayList<>(m.sources().values());
-        if (all.size() <= limit) {
+        // On évite la copie complète si possible
+        Collection<ClientState> sources = m.sources().values();
+        if (sources.isEmpty()) return Collections.emptyList();
+
+        List<ClientState> all = new ArrayList<>(sources);
+        if (all.size() <= limit && requester == null) {
             Collections.shuffle(all);
             return all;
         }
@@ -127,12 +142,14 @@ public class FileIndex {
         if (query == null || query.trim().isEmpty()) {
             return byHash.values().stream().limit(limit).toList();
         }
+        
         String queryLower = query.toLowerCase().trim();
         
-        // Handle boolean operators in simple text search if present
-        if (queryLower.contains(" and ") || queryLower.contains(" or ") || queryLower.contains(" not ")) {
-             // Basic text-based logic for clients sending plain text boolean queries
-             // (Some very old or simple clients might do this)
+        // Vérification du cache
+        String cacheKey = queryLower + "|" + limit;
+        List<FileMetadata> cached = searchCache.get(cacheKey);
+        if (cached != null) {
+            return cached;
         }
 
         String[] tokens = TOKENIZER.split(queryLower);
@@ -141,19 +158,12 @@ public class FileIndex {
             if (t.isEmpty()) continue;
             
             Set<String> matches = new HashSet<>();
-            // Exact match in inverted index
-            Set<String> exactMatches = invertedIndex.get(t);
-            if (exactMatches != null) {
-                matches.addAll(exactMatches);
-            }
             
-            // If token is short or we want prefix/partial search support:
-            // Scan inverted index keys for prefix matches
-            // (Optimization possible with a Trie or more advanced index)
-            for (Map.Entry<String, Set<String>> entry : invertedIndex.entrySet()) {
-                if (entry.getKey().startsWith(t) && !entry.getKey().equals(t)) {
-                    matches.addAll(entry.getValue());
-                }
+            // Recherche par préfixe optimisée via subMap (O(log n))
+            String nextPrefix = t.substring(0, t.length() - 1) + (char) (t.charAt(t.length() - 1) + 1);
+            SortedMap<String, Set<String>> prefixMatches = invertedIndex.subMap(t, nextPrefix);
+            for (Set<String> fileHashes : prefixMatches.values()) {
+                matches.addAll(fileHashes);
             }
             
             if (matches.isEmpty()) return Collections.emptyList();
@@ -161,6 +171,7 @@ public class FileIndex {
             candidates.retainAll(matches);
             if (candidates.isEmpty()) break;
         }
+        
         if (candidates == null || candidates.isEmpty()) return Collections.emptyList();
 
         List<FileMetadata> res = new ArrayList<>(Math.min(candidates.size(), limit));
@@ -169,6 +180,10 @@ public class FileIndex {
             if (m != null) res.add(m);
             if (res.size() >= limit) break;
         }
+        
+        // Mise en cache du résultat
+        searchCache.put(cacheKey, res);
+        
         return res;
     }
 

@@ -20,6 +20,7 @@ servers (Lugdunum type).
   queries.
 - [x] **Index Limitation**: Add per-user quotas for the number of published files.
 - [x] **Source Management**: Improve the source return algorithm to favor diversity and proximity.
+- [x] **Performance & Security**: Optimize `FileIndex` with `ConcurrentSkipListMap`, LRU cache and better concurrency management.
 
 ## 3. Security & Stability
 
