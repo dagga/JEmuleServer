@@ -34,7 +34,7 @@ public class FloodProtector {
         return buckets.computeIfAbsent(ip, k -> new TokenBucket(maxPerSec)).tryConsume();
     }
 
-    private class TokenBucket {
+    private static class TokenBucket {
         private final long maxTokens;
         private long tokens;
         private long lastRefill = System.nanoTime();
