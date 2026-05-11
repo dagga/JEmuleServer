@@ -96,16 +96,17 @@ public class Server {
             if (p.getLength() < 6) return;
             log.debug("UDP Status Request from {}", p.getAddress());
 
-            // Response: [Protocol] [Opcode] [Challenge 4] [UserCount 4] [FileCount 4]
+            // Response: [Protocol] [Opcode] [Challenge 4] [UserCount 4] [FileCount 4] [MaxUsers 4] [MaxFiles 4]
             // Standard UDP response does NOT have a size field.
 
-            ByteBuffer resp = ByteBuffer.allocate(15).order(ByteOrder.LITTLE_ENDIAN);
+            ByteBuffer resp = ByteBuffer.allocate(22).order(ByteOrder.LITTLE_ENDIAN);
             resp.put(Packet.PROTOCOL_ED2K);
             resp.put((byte) 0x97); // OP_GLOBSERVSTATRES
             resp.put(data, 2, 4); // Echo challenge
             resp.putInt(registry.size());
             resp.putInt(fileIndex.fileCount());
-            resp.put((byte) 0x00); // Aux/Padding common in some implementations
+            resp.putInt(config.maxUsers());
+            resp.putInt(config.maxFiles());
 
             ds.send(new java.net.DatagramPacket(resp.array(), resp.capacity(), p.getAddress(), p.getPort()));
         }

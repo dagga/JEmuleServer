@@ -44,6 +44,8 @@ public record Tag(byte type, String name, Object value) {
     public static final String NAME_DESCRIPTION = "\u000B";
     public static final String NAME_TCP_FLAGS = "\u0090";
     public static final String NAME_AUX_PORT = "\u0091";
+    public static final String NAME_MAX_USERS = "\u0092";
+    public static final String NAME_MAX_FILES = "\u0093";
     public static final String NAME_EMULE_VERSION = "\u00FB";
 
     public void write(ByteBuffer buf) {

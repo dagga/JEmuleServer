@@ -19,6 +19,7 @@
 
 package org.jemule.network;
 
+import org.jemule.Main;
 import org.jemule.config.ServerConfig;
 import org.jemule.core.ClientRegistry;
 import org.jemule.core.ClientState;
@@ -282,7 +283,8 @@ public class ClientHandler implements Runnable {
     }
 
     private void sendServerMessage(OutputStream out, String msg) throws IOException {
-        byte[] content = msg.getBytes(StandardCharsets.UTF_8);
+        String welcome = "Welcome to " + Main.VERSION + " (JEmuleServer)";
+        byte[] content = welcome.getBytes(StandardCharsets.UTF_8);
         ByteBuffer buf = ByteBuffer.allocate(2 + content.length).order(ByteOrder.LITTLE_ENDIAN);
         buf.putShort((short) content.length);
         buf.put(content);
@@ -293,17 +295,19 @@ public class ClientHandler implements Runnable {
         byte[] hash = new byte[16]; // Empty hash
         short port = (short) config.port();
 
-        String version = "0.2.0";
-        String name = version + " (JEmuleServer)";
+        String serverName = "JEmuleServer (https://github.com/dagga/JEmuleServer/)";
+        String serverVersion = Main.VERSION + " (JEmuleServer)";
         String desc = "Experimental eMule Server";
 
         List<Tag> tags = new ArrayList<>();
-        tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_NAME, name));
+        tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_NAME, serverName));
         tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_DESCRIPTION, desc));
-        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_VERSION, 60));
+        tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_VERSION, serverVersion));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_EMULE_VERSION, 0x3C)); // 0x3C = 60, typical for eMule 0.4x/0.5x compatible
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_TCP_FLAGS, 0x01 | 0x08 | 0x10)); // ZLIB + OBFUSCATION + NEWTAGS support bits
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_AUX_PORT, (int) port));
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_MAX_USERS, config.maxUsers()));
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_MAX_FILES, config.maxFiles()));
 
         // Use a dynamic buffer to avoid manual size calculation errors
         ByteBuffer buf = ByteBuffer.allocate(4096).order(ByteOrder.LITTLE_ENDIAN);
@@ -327,9 +331,11 @@ public class ClientHandler implements Runnable {
     }
 
     private void sendServerStatus(OutputStream out) throws IOException {
-        ByteBuffer buf = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN);
+        ByteBuffer buf = ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN);
         buf.putInt(registry.size());
         buf.putInt(fileIndex.fileCount());
+        buf.putInt(config.maxUsers()); // Soft/Hard Limit for users
+        buf.putInt(config.maxFiles()); // Soft/Hard Limit for files
         new Packet(Packet.PROTOCOL_ED2K, OpCode.SERVER_STATUS.value, buf.array()).write(out, state.isZlibSupported());
     }
 

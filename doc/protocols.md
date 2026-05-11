@@ -14,10 +14,10 @@ All ed2k TCP packets start with a 6-byte header:
 
 ### Login and Identification
 Upon connection, the client sends a `LOGIN_REQUEST` (0x01) containing its name, port, and capabilities. The server responds with a series of packets to finalize the connection:
-1. `SERVER_IDENT` (0x41): Contains the server hash, its IP, port, and tags (name, version, etc.).
-2. `SERVER_MESSAGE` (0x38): Welcome message (MotD).
-3. `LOGIN_ACCEPTED` (0x1B) or `ID_CHANGE` (0x40): Assigns the ClientID to the client.
-4. `SERVER_STATUS` (0x34): Current number of users and files.
+1. `SERVER_IDENT` (0x41): Contains the server hash, its IP, port, and tags (name, version, limits, etc.).
+2. `SERVER_STATUS` (0x34): Current number of users and files, along with soft/hard limits for both.
+3. `SERVER_MESSAGE` (0x38): Welcome message (MotD).
+4. `LOGIN_ACCEPTED` (0x1B) or `ID_CHANGE` (0x40): Assigns the ClientID to the client.
 
 ## 2. eMule Extension (0xC5)
 

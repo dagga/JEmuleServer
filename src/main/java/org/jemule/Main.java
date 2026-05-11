@@ -28,12 +28,20 @@ import java.io.IOException;
 
 public class Main {
     private static final Logger log = LoggerFactory.getLogger(Main.class);
+    public static final String VERSION = "0.2.0";
 
     public static void main(String[] args) {
         ServerConfig cfg = ServerConfig.DEFAULT;
         if (args.length > 0) {
             try {
-                cfg = new ServerConfig(Integer.parseInt(args[0]), 2 * 1024 * 1024, 300, 50);
+                cfg = new ServerConfig(
+                        Integer.parseInt(args[0]),
+                        2 * 1024 * 1024,
+                        300,
+                        50,
+                        ServerConfig.DEFAULT.maxUsers(),
+                        ServerConfig.DEFAULT.maxFiles()
+                );
             } catch (NumberFormatException e) {
                 log.error("Usage: java -jar JEmuleServer.jar [port]");
                 return;
