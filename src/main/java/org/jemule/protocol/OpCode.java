@@ -37,8 +37,10 @@ public enum OpCode {
 
     // eMule Protocol (0xC5) Extensions
     GET_SOURCES_OBFU((byte) 0x23), // Used for obfuscated/extended source requests
+    SOURCES_RESULT_OBFU((byte) 0x24), // OP_EXT_SOURCESRES
     EMULE_INFO((byte) 0x01),      // OP_EMULE_INFO
-    EMULE_INFO_ACK((byte) 0x02);
+    EMULE_INFO_ACK((byte) 0x02),
+    COMPRESSED_PART((byte) 0x28); // OP_COMPRESSEDPART
 
     public final byte value;
 
@@ -51,6 +53,8 @@ public enum OpCode {
             if (b == (byte) 0x01) return EMULE_INFO;
             if (b == (byte) 0x02) return EMULE_INFO_ACK;
             if (b == (byte) 0x23) return GET_SOURCES_OBFU;
+            if (b == (byte) 0x24) return SOURCES_RESULT_OBFU;
+            if (b == (byte) 0x28) return COMPRESSED_PART;
         }
         for (OpCode op : values()) {
             // Avoid collision if same byte used in different protocols

@@ -302,34 +302,28 @@ public class ClientHandler implements Runnable {
         tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_DESCRIPTION, desc));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_VERSION, 60));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_EMULE_VERSION, 0x3C)); // 0x3C = 60, typical for eMule 0.4x/0.5x compatible
-        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_TCP_FLAGS, 0x01 | 0x08)); // ZLIB + OBFUSCATION support bits
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_TCP_FLAGS, 0x01 | 0x08 | 0x10)); // ZLIB + OBFUSCATION + NEWTAGS support bits
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_AUX_PORT, (int) port));
 
-        // Calculate size: Hash(16) + IP(4) + Port(2) + TagListSize(4) + Tags...
-        int tagsSize = 0;
-        for (Tag t : tags) {
-            tagsSize += 1; // type
-            tagsSize += 2 + 1; // name len + name (all our names are 1 byte here)
-            if (t.type() == Tag.TYPE_STRING) {
-                tagsSize += 2 + ((String) t.value()).length();
-            } else if (t.type() == Tag.TYPE_INTEGER) {
-                tagsSize += 4;
-            }
-        }
-
-        ByteBuffer buf = ByteBuffer.allocate(16 + 4 + 2 + 4 + tagsSize).order(ByteOrder.LITTLE_ENDIAN);
+        // Use a dynamic buffer to avoid manual size calculation errors
+        ByteBuffer buf = ByteBuffer.allocate(4096).order(ByteOrder.LITTLE_ENDIAN);
         buf.put(hash);
 
         // Write IP and Port in BIG_ENDIAN specifically for this part of the packet
+        // For local testing, we use 127.0.0.1
         buf.put((byte) 0x7F);
         buf.put((byte) 0x00);
         buf.put((byte) 0x00);
         buf.put((byte) 0x01);
-        buf.putShort(Short.reverseBytes(port)); // reverse since LE
+        buf.putShort(Short.reverseBytes(port)); // reverse since LE buffer
 
         Tag.writeList(buf, tags);
 
-        new Packet(Packet.PROTOCOL_ED2K, OpCode.SERVER_IDENT.value, buf.array()).write(out, state.isZlibSupported());
+        buf.flip();
+        byte[] response = new byte[buf.remaining()];
+        buf.get(response);
+
+        new Packet(Packet.PROTOCOL_ED2K, OpCode.SERVER_IDENT.value, response).write(out, state.isZlibSupported());
     }
 
     private void sendServerStatus(OutputStream out) throws IOException {

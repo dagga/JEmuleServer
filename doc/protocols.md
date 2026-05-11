@@ -26,6 +26,21 @@ The eMule protocol adds extended features on top of the original ed2k protocol.
 - **Implemented OpCodes**:
     - `EMULE_INFO` (0x01) / `EMULE_INFO_ACK` (0x02): Information exchange on eMule-specific capabilities.
     - `GET_SOURCES_OBFU` (0x23): Extended source request supporting obfuscation.
+    - `SOURCES_RESULT_OBFU` (0x24): Extended source answer.
+    - `COMPRESSED_PART` (0x28): Used for transferring compressed data parts.
+
+### Tag Support
+JEmuleServer supports the standard and extended ed2k tag types:
+- **0x01 (Hash)**: 16-byte MD4/MD5 hash.
+- **0x02 (String)**: UTF-8 string with 2-byte length prefix.
+- **0x03 (Integer)**: 4-byte unsigned integer (DWORD).
+- **0x04 (Float)**: 4-byte floating point.
+- **0x05 / 0x06 (Bool)**: Boolean value (1 byte).
+- **0x07 (Blob)**: Arbitrary binary data with 4-byte length prefix.
+- **0x08 (Int16)**: 2-byte unsigned integer.
+- **0x09 (Int8)**: 1-byte unsigned integer.
+
+The server advertises support for extended tags via the `NEWTAGS` (0x10) bit in the `TCP_FLAGS` tag during `SERVER_IDENT`.
 
 ## 3. Lugdunum (eServer) Extensions
 
@@ -59,7 +74,13 @@ To reduce bandwidth, some packets can be compressed.
 
 - **eMule Wiki**: [Protocol Obfuscation](https://www.emule-project.net/home/perl/help.cgi?l=1&topic_id=848)
 - **aMule Documentation**: [ed2k Protocol Specification](https://wiki.amule.org/wiki/Ed2k_protocol)
-- **eMule Protocol Specification (Yoram Kulbak & Danny Bickson)**: Comprehensive PDF guide on ed2k/eMule internals.
+- **eMule Protocol Specification (Yoram Kulbak & Danny Bickson)**: [IPTPS02 - eMule: The Peer-to-Peer System of the Next Generation](http://www.cs.rice.edu/Conferences/IPTPS02/109.pdf)
+- **eDonkey Protocol 0.6.2**: [Historical documentation by pdonkey](http://prdownloads.sourceforge.net/pdonkey/eDonkey-protocol-0.6.2.html?download)
+- **eFarm Project**: [ed2k Protocol Documentation Client-Server Version 3.0](http://www.filesharingweb.de/emule_protokolle/eFarm-Protocol_V3_1_EN.pdf)
+- **Hydranode Project**: [ed2k Protocol Specification](http://hydranode.com/docs/ed2k/ed2kproto.html)
+- **eMule Plus**: [Developer Knowledge Base and Diagrams](http://emuleplus.info/forum/index.php?showforum=23&hyperlink=/Developers/KB/Diagrams)
 - **Lugdunum eServer**: Historical reference server that introduced opcodes 0x40-0x42.
 - **Wireshark Wiki**: [eDonkey Protocol](https://wiki.wireshark.org/eDonkey)
 - **NatT Protocol**: [eMule Wiki - NatT and Callbacks](https://wiki.emule-web.de/NatT_protocol) (Reference for Lugdunum callback methods).
+- **eMule source code**: [SourceForge - eMule project](http://sourceforge.net/project/showfiles.php?group_id=53489&package_id=145950)
+- **eMule Presentation**: [Hebrew University of Jerusalem - eMule internals](http://www.cs.huji.ac.il/labs/danss/p2p/eMule/eMule.ppt)

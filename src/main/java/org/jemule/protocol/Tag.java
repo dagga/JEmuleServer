@@ -27,13 +27,15 @@ import java.util.List;
  * Represents an ed2k tag.
  */
 public record Tag(byte type, String name, Object value) {
-    public static final byte TYPE_HASH = (byte) 0x01; // Not really a type, but used for special tags in some contexts?
+    public static final byte TYPE_HASH = (byte) 0x01;
     public static final byte TYPE_STRING = (byte) 0x02;
-    public static final byte TYPE_INTEGER = (byte) 0x03;
+    public static final byte TYPE_INTEGER = (byte) 0x03; // DWORD (4 bytes)
     public static final byte TYPE_FLOAT = (byte) 0x04;
     public static final byte TYPE_BOOL = (byte) 0x05;
-    public static final byte TYPE_BOOL_ALT = (byte) 0x06; // Sometimes used
+    public static final byte TYPE_BOOL_ALT = (byte) 0x06;
     public static final byte TYPE_BLOB = (byte) 0x07;
+    public static final byte TYPE_INT16 = (byte) 0x08;
+    public static final byte TYPE_INT8 = (byte) 0x09;
 
     public static final String NAME_VERSION = "\u0011";
     public static final String NAME_PORT = "\u000F";
@@ -73,7 +75,13 @@ public record Tag(byte type, String name, Object value) {
                 buf.putInt(blob.length);
                 buf.put(blob);
             }
-            default -> throw new IllegalArgumentException("Unknown tag type: " + type);
+            case TYPE_HASH -> {
+                byte[] hash = (byte[]) value;
+                buf.put(hash); // 16 bytes assumed
+            }
+            case TYPE_INT16 -> buf.putShort(((Number) value).shortValue());
+            case TYPE_INT8 -> buf.put(((Number) value).byteValue());
+            default -> throw new IllegalArgumentException("Unknown tag type: 0x" + String.format("%02X", type));
         }
     }
 
@@ -106,7 +114,14 @@ public record Tag(byte type, String name, Object value) {
                 buf.get(blob);
                 value = blob;
             }
-            default -> throw new IllegalArgumentException("Unknown tag type: " + type);
+            case TYPE_HASH -> {
+                byte[] hash = new byte[16];
+                buf.get(hash);
+                value = hash;
+            }
+            case TYPE_INT16 -> value = buf.getShort();
+            case TYPE_INT8 -> value = buf.get();
+            default -> throw new IllegalArgumentException("Unknown tag type: 0x" + String.format("%02X", type));
         }
         return new Tag(type, name, value);
     }

@@ -134,6 +134,9 @@ class PacketTest {
 
     @Test
     void testTags() {
+        byte[] hash = new byte[16];
+        for (int i = 0; i < 16; i++) hash[i] = (byte) i;
+
         List<Tag> tags = List.of(
                 new Tag(Tag.TYPE_STRING, "Name", "JEmule"),
                 new Tag(Tag.TYPE_INTEGER, "Version", 60),
@@ -141,7 +144,10 @@ class PacketTest {
                 new Tag(Tag.TYPE_BOOL, "BoolTrue", true),
                 new Tag(Tag.TYPE_BOOL, "BoolFalse", false),
                 new Tag(Tag.TYPE_BLOB, "Blob", new byte[]{0x01, 0x02, 0x03}),
-                new Tag(Tag.TYPE_STRING, "\u0001", "ShortName")
+                new Tag(Tag.TYPE_STRING, "\u0001", "ShortName"),
+                new Tag(Tag.TYPE_HASH, "Hash", hash),
+                new Tag(Tag.TYPE_INT16, "Int16", (short) 1234),
+                new Tag(Tag.TYPE_INT8, "Int8", (byte) 123)
         );
 
         ByteBuffer buf = ByteBuffer.allocate(1024).order(ByteOrder.LITTLE_ENDIAN);
@@ -154,13 +160,19 @@ class PacketTest {
         for (int i = 0; i < tags.size(); i++) {
             Tag expected = tags.get(i);
             Tag actual = readTags.get(i);
-            assertEquals(expected.type(), actual.type());
+            assertEquals(expected.type(), actual.type(), "Type mismatch for tag " + expected.name());
             assertEquals(expected.name(), actual.name());
-            if (expected.type() == Tag.TYPE_BLOB) {
+            if (expected.type() == Tag.TYPE_BLOB || expected.type() == Tag.TYPE_HASH) {
                 assertArrayEquals((byte[]) expected.value(), (byte[]) actual.value());
             } else {
                 assertEquals(expected.value(), actual.value());
             }
         }
+    }
+
+    @Test
+    void testNewOpCodes() {
+        assertEquals(OpCode.SOURCES_RESULT_OBFU, OpCode.fromByte(Packet.PROTOCOL_EMULE, (byte) 0x24));
+        assertEquals(OpCode.COMPRESSED_PART, OpCode.fromByte(Packet.PROTOCOL_EMULE, (byte) 0x28));
     }
 }
