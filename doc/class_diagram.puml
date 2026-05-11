@@ -50,6 +50,13 @@ package "org.jemule" {
     }
 
     package "org.jemule.core" {
+        class DatabaseManager {
+            -connection: Connection
+            -circuitBreaker: CircuitBreaker
+            +saveFile(FileMetadata)
+            +loadFiles(): List<FileMetadata>
+        }
+
         class ClientRegistry {
             -clients: Map<Integer, ClientState>
             +add(ClientState)
@@ -62,13 +69,22 @@ package "org.jemule" {
             -port: int
             -clientId: int
             -zlibSupported: boolean
+            -publishedFilesCount: AtomicInteger
             +isHighId(): boolean
         }
 
+        class ClientFactory {
+            +createClient(InetAddress, int, int): ClientState
+        }
+
         class FileIndex {
-            -files: Map<String, FileMetadata>
+            -byHash: Map<String, FileMetadata>
+            -invertedIndex: ConcurrentSkipListMap
+            -searchCache: Map
             +addFile(FileMetadata)
             +search(String, int): List<FileMetadata>
+            +searchComplex(SearchQuery, int): List<FileMetadata>
+            +getSources(String, ClientState, int): List<ClientState>
         }
 
         class FileMetadata <<record>> {
@@ -78,6 +94,27 @@ package "org.jemule" {
             +type: String
             +tags: List<Tag>
             +sources: ConcurrentHashMap
+        }
+
+        class SearchQueryBuilder {
+            +build(): SearchQuery
+        }
+
+        interface SearchQuery <<functional>> {
+            +test(FileMetadata): boolean
+            +{static} parse(ByteBuffer): SearchQuery
+        }
+    }
+
+    package "org.jemule.core.event" {
+        class EventManager {
+            -subscribers: Map
+            +subscribe(String, Consumer)
+            +broadcast(Event)
+        }
+        interface Event {
+            +getType(): String
+            +getMessage(): String
         }
     }
 
@@ -116,13 +153,25 @@ Server --> ServerConfig
 Server --> ClientRegistry
 Server --> FileIndex
 Server --> FloodProtector
+Server --> EventManager
+Server --> ClientFactory
+Server --> DatabaseManager
 Server ..> ClientHandler : creates
 ClientHandler --> ServerConfig
 ClientHandler --> ClientRegistry
 ClientHandler --> FileIndex
 ClientHandler --> ClientState
+ClientHandler --> EventManager
+ClientHandler --> ClientFactory
 ClientHandler ..> Packet : uses
 ClientHandler ..> OpCode : uses
 FileIndex --> FileMetadata
+FileIndex --> DatabaseManager
+FileIndex --> EventManager
 FileMetadata --> Tag
+SearchQueryBuilder ..> SearchQuery : builds
+SearchQuery <|.. TermQuery
+SearchQuery <|.. AndQuery
+SearchQuery <|.. OrQuery
+SearchQuery <|.. NotQuery
 @enduml

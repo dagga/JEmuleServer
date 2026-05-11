@@ -71,6 +71,24 @@ To reduce bandwidth, some packets can be compressed.
 - **Mechanism**: If the compressed payload is smaller than the original, the server uses protocol `0xD4` and compresses the data (after the OpCode).
 - **Threshold**: JEmuleServer compresses packets with data size greater than 64 bytes.
 
+## 6. Architecture & Design Patterns
+
+JEmuleServer follows modern Java 21+ practices and several software design patterns:
+- **Virtual Threads (Project Loom)**: The server uses `Executors.newVirtualThreadPerTaskExecutor()` to handle a high number of concurrent connections (50k+) with a simple, synchronous thread-per-client model.
+- **Factory Pattern**: Centralized creation of `ClientState` objects via `ClientFactory`, ensuring validation of IP addresses and ports before instantiating client sessions.
+- **Builder Pattern**: Uses `SearchQueryBuilder` for fluent and validated construction of complex Boolean search queries.
+- **Observer (Pub-Sub)**: An asynchronous `EventManager` allows decoupling core logic (Login, Search, Publish) from monitoring and logging systems.
+- **Circuit Breaker (Resilience4j)**: Protects the server from cascading failures if the H2 database becomes slow or unresponsive.
+- **Non-blocking Anti-Flood**: Implements a lock-free Token Bucket algorithm using `AtomicLong` for high-performance rate limiting per IP.
+
+## 7. Security Features
+
+- **Protocol Obfuscation**: RC4 encryption layer as described in Section 4.
+- **Anti-Replay Protection**: Stores client nonces in an LRU cache during the obfuscation handshake to prevent replay attacks.
+- **Flood Protection**: Rate limiting per IP to mitigate DoS/Flood attacks.
+- **Resource Quotas**: Per-user limits on the number of published files to prevent index exhaustion.
+- **Port Validation**: Strict validation of server and client ports to prevent binding to privileged ranges or invalid values.
+
 ## Sources and References
 
 - **eMule Wiki**: [Protocol Obfuscation](https://www.emule-project.net/home/perl/help.cgi?l=1&topic_id=848)

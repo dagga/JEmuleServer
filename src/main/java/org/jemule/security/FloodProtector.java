@@ -32,8 +32,7 @@ public class FloodProtector {
     }
 
     public boolean allow(InetAddress ip) {
-        // Nettoyage opportuniste : si la map devient trop grande, on pourrait la vider
-        // Mais pour l'instant, on se concentre sur la performance du bucket.
+        // Opportunistic cleanup: if map becomes too large, clear expired entries
         if (buckets.size() > 10000) {
             buckets.entrySet().removeIf(entry -> entry.getValue().isExpired());
         }

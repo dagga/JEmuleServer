@@ -34,11 +34,11 @@ public class FileIndex {
     private final DatabaseManager db;
     private final EventManager eventManager;
 
-    // Cache LRU pour les recherches (Thread-safe via Collections.synchronizedMap)
+    // LRU Cache for searches (Thread-safe via Collections.synchronizedMap)
     private final Map<String, List<FileMetadata>> searchCache = Collections.synchronizedMap(new LinkedHashMap<>(128, 0.75f, true) {
         @Override
         protected boolean removeEldestEntry(Map.Entry<String, List<FileMetadata>> eldest) {
-            return size() > 100; // Limite à 100 entrées
+            return size() > 100; // Limit to 100 entries
         }
     });
 
@@ -64,7 +64,7 @@ public class FileIndex {
 
     public void addFile(FileMetadata meta) {
         indexInMemory(meta);
-        searchCache.clear(); // Invalider le cache lors de l'ajout d'un nouveau fichier
+        searchCache.clear(); // Invalidate cache when adding a new file
         if (db != null) {
             db.saveFile(meta);
         }
@@ -89,7 +89,7 @@ public class FileIndex {
         FileMetadata m = byHash.get(hash);
         if (m == null) return Collections.emptyList();
         
-        // On évite la copie complète si possible
+        // Avoid full copy if possible
         Collection<ClientState> sources = m.sources().values();
         if (sources.isEmpty()) return Collections.emptyList();
 
@@ -99,16 +99,16 @@ public class FileIndex {
             return all;
         }
 
-        // Diversité : on commence par mélanger
+        // Diversity: start by shuffling
         Collections.shuffle(all);
 
         if (requester != null) {
             byte[] reqIp = requester.address().getAddress();
-            // On trie pour mettre en avant la proximité IP (même /16 ou /24)
+            // Sort to prioritize IP proximity (same /16 or /24)
             all.sort((a, b) -> {
                 int scoreA = calculateProximity(a.address().getAddress(), reqIp);
                 int scoreB = calculateProximity(b.address().getAddress(), reqIp);
-                return Integer.compare(scoreB, scoreA); // Plus haut score d'abord
+                return Integer.compare(scoreB, scoreA); // Highest score first
             });
         }
 
@@ -145,7 +145,7 @@ public class FileIndex {
         
         String queryLower = query.toLowerCase().trim();
         
-        // Vérification du cache
+        // Cache check
         String cacheKey = queryLower + "|" + limit;
         List<FileMetadata> cached = searchCache.get(cacheKey);
         if (cached != null) {
@@ -159,7 +159,7 @@ public class FileIndex {
             
             Set<String> matches = new HashSet<>();
             
-            // Recherche par préfixe optimisée via subMap (O(log n))
+            // Optimized prefix search via subMap (O(log n))
             String nextPrefix = t.substring(0, t.length() - 1) + (char) (t.charAt(t.length() - 1) + 1);
             SortedMap<String, Set<String>> prefixMatches = invertedIndex.subMap(t, nextPrefix);
             for (Set<String> fileHashes : prefixMatches.values()) {
@@ -181,7 +181,7 @@ public class FileIndex {
             if (res.size() >= limit) break;
         }
         
-        // Mise en cache du résultat
+        // Cache the result
         searchCache.put(cacheKey, res);
         
         return res;
