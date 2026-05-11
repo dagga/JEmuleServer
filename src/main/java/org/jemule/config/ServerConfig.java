@@ -26,6 +26,7 @@ public record ServerConfig(
         int floodMaxRequestsPerSecond,
         int maxUsers,
         int maxFiles,
+        int maxFilesPerUser,
         String databasePath
 ) {
     public static final ServerConfig DEFAULT = new ServerConfig(
@@ -35,6 +36,7 @@ public record ServerConfig(
             50,
             100000,
             10000000,
+            5000,
             "./jemule_db"
     );
 }

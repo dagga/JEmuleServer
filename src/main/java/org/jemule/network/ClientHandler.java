@@ -379,10 +379,15 @@ public class ClientHandler implements Runnable {
     private void handlePublish(byte[] data, OutputStream out) throws IOException {
         String[] p = new String(data, StandardCharsets.UTF_8).split("\\|");
         if (p.length >= 4) {
-            FileMetadata meta = new FileMetadata(p[0], p[1], Long.parseLong(p[2]), p[3]);
-            meta.sources().put(String.valueOf(state.clientId()), state);
-            fileIndex.addFile(meta);
-            log.info("Published: {}", p[1]);
+            if (state.publishedFilesCount().get() >= config.maxFilesPerUser()) {
+                log.warn("Client {} reached max files quota ({})", socket.getRemoteSocketAddress(), config.maxFilesPerUser());
+            } else {
+                FileMetadata meta = new FileMetadata(p[0], p[1], Long.parseLong(p[2]), p[3]);
+                meta.sources().put(String.valueOf(state.clientId()), state);
+                fileIndex.addFile(meta);
+                state.publishedFilesCount().incrementAndGet();
+                log.info("Published: {}", p[1]);
+            }
         }
         new Packet(Packet.PROTOCOL_ED2K, OpCode.PUBLISH_ACK.value, new byte[0]).write(out, state.isZlibSupported());
     }

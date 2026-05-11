@@ -34,15 +34,16 @@ public class Main {
         ServerConfig cfg = ServerConfig.DEFAULT;
         if (args.length > 0) {
             try {
-                cfg = new ServerConfig(
-                        Integer.parseInt(args[0]),
-                        2 * 1024 * 1024,
-                        300,
-                        50,
-                        ServerConfig.DEFAULT.maxUsers(),
-                        ServerConfig.DEFAULT.maxFiles(),
-                        ServerConfig.DEFAULT.databasePath()
-                );
+                        cfg = new ServerConfig(
+                                Integer.parseInt(args[0]),
+                                2 * 1024 * 1024,
+                                300,
+                                50,
+                                ServerConfig.DEFAULT.maxUsers(),
+                                ServerConfig.DEFAULT.maxFiles(),
+                                ServerConfig.DEFAULT.maxFilesPerUser(),
+                                ServerConfig.DEFAULT.databasePath()
+                        );
             } catch (NumberFormatException e) {
                 log.error("Usage: java -jar JEmuleServer.jar [port]");
                 return;

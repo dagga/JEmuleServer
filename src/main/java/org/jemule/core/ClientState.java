@@ -20,6 +20,7 @@
 package org.jemule.core;
 
 import java.net.InetAddress;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 public final class ClientState {
@@ -28,6 +29,7 @@ public final class ClientState {
     private final int clientId;
     private final long connectedAt;
     private final AtomicLong lastActivity;
+    private final AtomicInteger publishedFilesCount = new AtomicInteger(0);
     private boolean zlibSupported = false;
 
     public ClientState(InetAddress address, int port, int clientId, long connectedAt, AtomicLong lastActivity) {
@@ -43,6 +45,8 @@ public final class ClientState {
     public int clientId() { return clientId; }
     public long connectedAt() { return connectedAt; }
     public AtomicLong lastActivity() { return lastActivity; }
+
+    public AtomicInteger publishedFilesCount() { return publishedFilesCount; }
 
     public boolean isZlibSupported() { return zlibSupported; }
     public void setZlibSupported(boolean zlibSupported) { this.zlibSupported = zlibSupported; }

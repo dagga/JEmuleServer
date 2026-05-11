@@ -26,7 +26,7 @@ import java.util.regex.Pattern;
 public class FileIndex {
     private final ConcurrentHashMap<String, FileMetadata> byHash = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Set<String>> invertedIndex = new ConcurrentHashMap<>();
-    private static final Pattern TOKENIZER = Pattern.compile("\\W+");
+    private static final Pattern TOKENIZER = Pattern.compile("[^a-zA-Z0-9]+");
     private final DatabaseManager db;
 
     public FileIndex(DatabaseManager db) {
