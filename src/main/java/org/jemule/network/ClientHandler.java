@@ -25,6 +25,7 @@ import org.jemule.core.ClientState;
 import org.jemule.core.FileIndex;
 import org.jemule.core.FileMetadata;
 import org.jemule.protocol.OpCode;
+import org.jemule.protocol.Tag;
 import org.jemule.security.FloodProtector;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -34,6 +35,8 @@ import java.net.Socket;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 
 public class ClientHandler implements Runnable {
     private static final Logger log = LoggerFactory.getLogger(ClientHandler.class);
@@ -110,7 +113,7 @@ public class ClientHandler implements Runnable {
         sendServerIdent(out);
 
         // 2. Server Message (0x38) - MotD (Mandatory before ID Change for some)
-        sendServerMessage(out, "Welcome to JEmuleServer 0.1.1\n" +
+        sendServerMessage(out, "Welcome to JEmuleServer 0.1.2\n" +
                 "Your HighID is: " + Integer.toUnsignedString(clientId) + "\n" +
                 "Enjoy the extended protocol support!");
 
@@ -139,27 +142,31 @@ public class ClientHandler implements Runnable {
 
     private void sendServerIdent(OutputStream out) throws IOException {
         byte[] hash = new byte[16]; // Empty hash
-        // IP in eD2k is usually sent as 4 bytes in network byte order?
-        // Wait, eDonkey spec says IP and Port in ServerIdent are in network byte order (Big-Endian).
-        // But our ByteBuffer is set to LITTLE_ENDIAN.
-
-        // 127.0.0.1 in Big-Endian is 0x7F 00 00 01
-        // Port 4661 in Big-Endian is 0x12 35
-
-        int ip = 0x7F000001;
         short port = (short) config.port();
 
         String name = "JEmuleServer";
         String desc = "Experimental eMule Server";
 
-        int totalSize = 16 + 4 + 2 + 4;
-        totalSize += (1 + 2 + 1 + 2 + name.length());
-        totalSize += (1 + 2 + 1 + 2 + desc.length());
-        totalSize += (1 + 2 + 1 + 4); // Version
-        totalSize += (1 + 2 + 1 + 4); // TCPFlags
-        totalSize += (1 + 2 + 1 + 4); // AuxPort (UDP)
+        List<Tag> tags = new ArrayList<>();
+        tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_NAME, name));
+        tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_DESCRIPTION, desc));
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_VERSION, 60));
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_TCP_FLAGS, 0x01 | 0x08)); // ZLIB + OBFUSCATION support bits
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_AUX_PORT, (int) port));
 
-        ByteBuffer buf = ByteBuffer.allocate(totalSize).order(ByteOrder.LITTLE_ENDIAN);
+        // Calculate size: Hash(16) + IP(4) + Port(2) + TagListSize(4) + Tags...
+        int tagsSize = 0;
+        for (Tag t : tags) {
+            tagsSize += 1; // type
+            tagsSize += 2 + 1; // name len + name (all our names are 1 byte here)
+            if (t.type() == Tag.TYPE_STRING) {
+                tagsSize += 2 + ((String) t.value()).length();
+            } else if (t.type() == Tag.TYPE_INTEGER) {
+                tagsSize += 4;
+            }
+        }
+
+        ByteBuffer buf = ByteBuffer.allocate(16 + 4 + 2 + 4 + tagsSize).order(ByteOrder.LITTLE_ENDIAN);
         buf.put(hash);
 
         // Write IP and Port in BIG_ENDIAN specifically for this part of the packet
@@ -167,41 +174,9 @@ public class ClientHandler implements Runnable {
         buf.put((byte) 0x00);
         buf.put((byte) 0x00);
         buf.put((byte) 0x01);
-        buf.putShort(Short.reverseBytes(port)); // reverse since buf is LE
+        buf.putShort(Short.reverseBytes(port)); // reverse since LE
 
-        buf.putInt(5); // 5 tags
-
-        // Tag 1: Server Name (ID 0x01)
-        buf.put((byte) 0x02);
-        buf.putShort((short) 1);
-        buf.put((byte) 0x01);
-        buf.putShort((short) name.length());
-        buf.put(name.getBytes(StandardCharsets.UTF_8));
-
-        // Tag 2: Server Description (ID 0x0B)
-        buf.put((byte) 0x02);
-        buf.putShort((short) 1);
-        buf.put((byte) 0x0B);
-        buf.putShort((short) desc.length());
-        buf.put(desc.getBytes(StandardCharsets.UTF_8));
-
-        // Tag 3: Version (ID 0x11)
-        buf.put((byte) 0x03);
-        buf.putShort((short) 1);
-        buf.put((byte) 0x11);
-        buf.putInt(60);
-
-        // Tag 4: TCP Flags (ID 0x90) -> Support Compression, Obfuscation, etc.
-        buf.put((byte) 0x03);
-        buf.putShort((short) 1);
-        buf.put((byte) 0x90);
-        buf.putInt(0x01 | 0x08); // ZLIB + OBFUSCATION support bits
-
-        // Tag 5: Aux Port / UDP Port (ID 0x91)
-        buf.put((byte) 0x03);
-        buf.putShort((short) 1);
-        buf.put((byte) 0x91);
-        buf.putInt(port);
+        Tag.writeList(buf, tags);
 
         new Packet(Packet.PROTOCOL_ED2K, OpCode.SERVER_IDENT.value, buf.array()).write(out, state.isZlibSupported());
     }

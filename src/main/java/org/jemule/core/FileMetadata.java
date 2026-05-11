@@ -19,6 +19,9 @@
 
 package org.jemule.core;
 
+import org.jemule.protocol.Tag;
+
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 
 public record FileMetadata(
@@ -26,9 +29,14 @@ public record FileMetadata(
         String name,
         long size,
         String type,
+        List<Tag> tags,
         ConcurrentHashMap<String, ClientState> sources
 ) {
     public FileMetadata(String hash, String name, long size, String type) {
-        this(hash, name, size, type, new ConcurrentHashMap<>());
+        this(hash, name, size, type, List.of(), new ConcurrentHashMap<>());
+    }
+
+    public FileMetadata(String hash, String name, long size, String type, List<Tag> tags) {
+        this(hash, name, size, type, tags, new ConcurrentHashMap<>());
     }
 }

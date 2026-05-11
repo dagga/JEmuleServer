@@ -18,6 +18,7 @@
 
 package org.jemule.network;
 
+import org.jemule.protocol.Tag;
 import org.junit.jupiter.api.Test;
 
 import java.io.ByteArrayInputStream;
@@ -25,6 +26,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -88,5 +90,37 @@ class PacketTest {
         assertArrayEquals(payload, readPacket.data());
         // Note: Packet.read sets the protocol to the one read from stream, which is PROTOCOL_ZLIB here
         assertEquals(Packet.PROTOCOL_ZLIB, readPacket.protocol());
+    }
+
+    @Test
+    void testTags() {
+        List<Tag> tags = List.of(
+                new Tag(Tag.TYPE_STRING, "Name", "JEmule"),
+                new Tag(Tag.TYPE_INTEGER, "Version", 60),
+                new Tag(Tag.TYPE_FLOAT, "Float", 1.23f),
+                new Tag(Tag.TYPE_BOOL, "BoolTrue", true),
+                new Tag(Tag.TYPE_BOOL, "BoolFalse", false),
+                new Tag(Tag.TYPE_BLOB, "Blob", new byte[]{0x01, 0x02, 0x03}),
+                new Tag(Tag.TYPE_STRING, "\u0001", "ShortName")
+        );
+
+        ByteBuffer buf = ByteBuffer.allocate(1024).order(ByteOrder.LITTLE_ENDIAN);
+        Tag.writeList(buf, tags);
+        buf.flip();
+
+        List<Tag> readTags = Tag.readList(buf);
+        assertEquals(tags.size(), readTags.size());
+
+        for (int i = 0; i < tags.size(); i++) {
+            Tag expected = tags.get(i);
+            Tag actual = readTags.get(i);
+            assertEquals(expected.type(), actual.type());
+            assertEquals(expected.name(), actual.name());
+            if (expected.type() == Tag.TYPE_BLOB) {
+                assertArrayEquals((byte[]) expected.value(), (byte[]) actual.value());
+            } else {
+                assertEquals(expected.value(), actual.value());
+            }
+        }
     }
 }
