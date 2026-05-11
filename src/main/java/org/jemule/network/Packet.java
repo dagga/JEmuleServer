@@ -58,7 +58,7 @@ public record Packet(byte protocol, byte opcode, byte[] data) {
     }
 
     public void write(OutputStream out, boolean useCompression) throws IOException {
-        byte proto = PROTOCOL_ED2K;
+        byte proto = protocol;
         byte[] payload = data;
         if (useCompression && data.length > 64) {
             payload = compress(data);

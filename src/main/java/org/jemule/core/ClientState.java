@@ -22,13 +22,31 @@ package org.jemule.core;
 import java.net.InetAddress;
 import java.util.concurrent.atomic.AtomicLong;
 
-public record ClientState(
-        InetAddress address,
-        int port,
-        int clientId,
-        long connectedAt,
-        AtomicLong lastActivity
-) {
+public final class ClientState {
+    private final InetAddress address;
+    private final int port;
+    private final int clientId;
+    private final long connectedAt;
+    private final AtomicLong lastActivity;
+    private boolean zlibSupported = false;
+
+    public ClientState(InetAddress address, int port, int clientId, long connectedAt, AtomicLong lastActivity) {
+        this.address = address;
+        this.port = port;
+        this.clientId = clientId;
+        this.connectedAt = connectedAt;
+        this.lastActivity = lastActivity;
+    }
+
+    public InetAddress address() { return address; }
+    public int port() { return port; }
+    public int clientId() { return clientId; }
+    public long connectedAt() { return connectedAt; }
+    public AtomicLong lastActivity() { return lastActivity; }
+
+    public boolean isZlibSupported() { return zlibSupported; }
+    public void setZlibSupported(boolean zlibSupported) { this.zlibSupported = zlibSupported; }
+
     public static int ipToInt(InetAddress addr) {
         byte[] b = addr.getAddress();
         return ((b[3] & 0xFF) << 24) | ((b[2] & 0xFF) << 16) | ((b[1] & 0xFF) << 8) | (b[0] & 0xFF);

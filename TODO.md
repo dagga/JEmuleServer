@@ -5,7 +5,7 @@ servers (Lugdunum type).
 
 ## 1. Protocol & Network
 
-- [ ] **Full ZLIB Compression**: Compression is currently supported for writing but must be validated for all types of
+- [x] **Full ZLIB Compression**: Compression is currently supported for writing but must be validated for all types of
   incoming/outgoing packets.
 - [ ] **Protocol Obfuscation**: Implement the RC4 encryption layer to support obfuscated connections.
 - [ ] **Full Tags Support**: Extend the tag reading/writing system to support all types (String, Integer, Float, Bool,

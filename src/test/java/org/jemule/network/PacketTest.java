@@ -63,4 +63,30 @@ class PacketTest {
 
         assertEquals(payload.length + 1, length, "Length field should be payload size + 1 (for opcode)");
     }
+
+    @Test
+    void testCompression() throws IOException {
+        byte protocol = Packet.PROTOCOL_ED2K;
+        byte opcode = (byte) 0x42;
+        // More compressible data
+        byte[] payload = new byte[1000];
+        for (int i = 0; i < payload.length; i++) payload[i] = (byte) (i % 10);
+
+        Packet packet = new Packet(protocol, opcode, payload);
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        packet.write(out, true); // Force compression
+
+        byte[] compressedData = out.toByteArray();
+        assertTrue(compressedData.length < payload.length + Packet.HEADER_SIZE, "Compressed data should be smaller");
+        assertEquals(Packet.PROTOCOL_ZLIB, compressedData[0], "Protocol should be ZLIB (0xD4)");
+
+        ByteArrayInputStream in = new ByteArrayInputStream(compressedData);
+        Packet readPacket = Packet.read(in, 1024);
+
+        assertEquals(opcode, readPacket.opcode());
+        assertArrayEquals(payload, readPacket.data());
+        // Note: Packet.read sets the protocol to the one read from stream, which is PROTOCOL_ZLIB here
+        assertEquals(Packet.PROTOCOL_ZLIB, readPacket.protocol());
+    }
 }

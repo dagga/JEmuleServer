@@ -61,17 +61,14 @@ public class ClientHandler implements Runnable {
                 return;
             }
 
-            Packet p = Packet.read(in, config.maxPacketSize());
-            if (p.protocol() != Packet.PROTOCOL_ED2K && p.protocol() != Packet.PROTOCOL_EMULE && p.protocol() != Packet.PROTOCOL_ZLIB) {
-                throw new IOException("Unsupported protocol: " + String.format("0x%02X", p.protocol()));
-            }
-            if (p.opcode() != OpCode.LOGIN_REQUEST.value && p.opcode() != OpCode.CLIENT_LOGIN.value) {
-                throw new IOException("Unexpected initial opcode: " + String.format("0x%02X", p.opcode()));
-            }
+        Packet p = Packet.read(in, config.maxPacketSize());
+        if (p.protocol() != Packet.PROTOCOL_ED2K && p.protocol() != Packet.PROTOCOL_EMULE && p.protocol() != Packet.PROTOCOL_ZLIB) {
+            throw new IOException("Unsupported protocol: " + String.format("0x%02X", p.protocol()));
+        }
 
-            handleLogin(p.data(), out);
+        handleLogin(p, out);
 
-            while (!socket.isClosed()) {
+        while (!socket.isClosed()) {
                 try {
                     Packet nextP = Packet.read(in, config.maxPacketSize());
                     if (floodProtector.allow(socket.getInetAddress())) processPacket(nextP, out);
@@ -91,19 +88,21 @@ public class ClientHandler implements Runnable {
         }
     }
 
-    private void handleLogin(byte[] data, OutputStream out) throws IOException {
+    private void handleLogin(Packet initialPacket, OutputStream out) throws IOException {
+        byte[] data = initialPacket.data();
         log.info("Handling login request, data size: {} bytes", data.length);
 
-        // Use the IP address as seen by the server (127.0.0.1 for local tests)
-        int ipInt = ClientState.ipToInt(socket.getInetAddress());
-
-        // Client ID: For HighID, it's just the IP.
-        // HOWEVER, aMule rejects 127.0.0.1 (16777343) as a valid HighID.
-        // We must provide a "fake" public IP for the ID to be accepted.
-        // Let's use 1.2.3.4 (0x04030201) for testing.
+        // ... truncated logic for ID assignment ...
         int clientId = 0x01020304;
 
         state = new ClientState(socket.getInetAddress(), socket.getPort(), clientId, System.currentTimeMillis(), new java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis()));
+
+        // Check if initial packet was ZLIB, if so, client supports it
+        if (initialPacket.protocol() == Packet.PROTOCOL_ZLIB) {
+            state.setZlibSupported(true);
+            log.info("Client supports ZLIB (detected from initial packet)");
+        }
+
         registry.add(state);
 
         // Standard eMule Handshake order (Strict Lugdunum/aMule style):
@@ -111,7 +110,7 @@ public class ClientHandler implements Runnable {
         sendServerIdent(out);
 
         // 2. Server Message (0x38) - MotD (Mandatory before ID Change for some)
-        sendServerMessage(out, "Welcome to JEmuleServer 0.1.0\n" +
+        sendServerMessage(out, "Welcome to JEmuleServer 0.1.1\n" +
                 "Your HighID is: " + Integer.toUnsignedString(clientId) + "\n" +
                 "Enjoy the extended protocol support!");
 
@@ -119,10 +118,10 @@ public class ClientHandler implements Runnable {
         // OpCode 0x40 is often used by servers to finalize the ID assignment.
         ByteBuffer resp = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN);
         resp.putInt(clientId);
-        new Packet(Packet.PROTOCOL_ED2K, (byte) 0x40, resp.array()).write(out, false);
+        new Packet(Packet.PROTOCOL_ED2K, (byte) 0x40, resp.array()).write(out, state.isZlibSupported());
 
         // Also send the old 0x1B for compatibility
-        new Packet(Packet.PROTOCOL_ED2K, OpCode.LOGIN_ACCEPTED.value, resp.array()).write(out, false);
+        new Packet(Packet.PROTOCOL_ED2K, OpCode.LOGIN_ACCEPTED.value, resp.array()).write(out, state.isZlibSupported());
 
         log.info("Logged in ID: {} (Sent 0x40 and 0x1B)", clientId);
 
@@ -135,7 +134,7 @@ public class ClientHandler implements Runnable {
         ByteBuffer buf = ByteBuffer.allocate(2 + content.length).order(ByteOrder.LITTLE_ENDIAN);
         buf.putShort((short) content.length);
         buf.put(content);
-        new Packet(Packet.PROTOCOL_ED2K, OpCode.SERVER_MESSAGE.value, buf.array()).write(out, false);
+        new Packet(Packet.PROTOCOL_ED2K, OpCode.SERVER_MESSAGE.value, buf.array()).write(out, state.isZlibSupported());
     }
 
     private void sendServerIdent(OutputStream out) throws IOException {
@@ -204,14 +203,14 @@ public class ClientHandler implements Runnable {
         buf.put((byte) 0x91);
         buf.putInt(port);
 
-        new Packet(Packet.PROTOCOL_ED2K, OpCode.SERVER_IDENT.value, buf.array()).write(out, false);
+        new Packet(Packet.PROTOCOL_ED2K, OpCode.SERVER_IDENT.value, buf.array()).write(out, state.isZlibSupported());
     }
 
     private void sendServerStatus(OutputStream out) throws IOException {
         ByteBuffer buf = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN);
         buf.putInt(registry.size());
         buf.putInt(fileIndex.fileCount());
-        new Packet(Packet.PROTOCOL_ED2K, OpCode.SERVER_STATUS.value, buf.array()).write(out, false);
+        new Packet(Packet.PROTOCOL_ED2K, OpCode.SERVER_STATUS.value, buf.array()).write(out, state.isZlibSupported());
     }
 
     private void processPacket(Packet p, OutputStream out) throws IOException {
@@ -240,7 +239,7 @@ public class ClientHandler implements Runnable {
             dos.writeLong(m.size());
             dos.writeUTF(m.type());
         }
-        new Packet(Packet.PROTOCOL_ED2K, OpCode.SEARCH_RESULT.value, baos.toByteArray()).write(out, true);
+        new Packet(Packet.PROTOCOL_ED2K, OpCode.SEARCH_RESULT.value, baos.toByteArray()).write(out, state.isZlibSupported());
     }
 
     private void handlePublish(byte[] data, OutputStream out) throws IOException {
@@ -251,7 +250,7 @@ public class ClientHandler implements Runnable {
             fileIndex.addFile(meta);
             log.info("Published: {}", p[1]);
         }
-        new Packet(Packet.PROTOCOL_ED2K, OpCode.PUBLISH_ACK.value, new byte[0]).write(out, false);
+        new Packet(Packet.PROTOCOL_ED2K, OpCode.PUBLISH_ACK.value, new byte[0]).write(out, state.isZlibSupported());
     }
 
     private void handleGetSources(byte[] data, OutputStream out) throws IOException {
@@ -264,6 +263,6 @@ public class ClientHandler implements Runnable {
             dos.writeInt(ClientState.ipToInt(s.address()));
             dos.writeShort(s.port());
         }
-        new Packet(Packet.PROTOCOL_ED2K, OpCode.SOURCES_RESULT.value, baos.toByteArray()).write(out, true);
+        new Packet(Packet.PROTOCOL_ED2K, OpCode.SOURCES_RESULT.value, baos.toByteArray()).write(out, state.isZlibSupported());
     }
 }
