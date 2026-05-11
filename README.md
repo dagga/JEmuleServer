@@ -17,7 +17,7 @@ To compile the project and generate the executable JAR file (Fat JAR):
 ./gradlew build
 ```
 
-The JAR file will be generated in `build/libs/JEmuleServer-0.2.0.jar`.
+The JAR file will be generated in `build/libs/JEmuleServer-0.3.0.jar`.
 
 ## Running
 
@@ -64,6 +64,26 @@ sudo firewall-cmd --list-ports
 ```
 
 *Note: Don't forget to also configure Port Forwarding on your router/internet box if necessary.*
+
+## Features Comparison
+
+Here is a comparison between JEmuleServer and the historical **eServer (Lugdunum)**:
+
+| Feature | JEmuleServer | eServer (Lugdunum) |
+| :--- | :---: | :---: |
+| **Language / Runtime** | Java 21 (Virtual Threads) | C / C++ (Native) |
+| **Protocol Obfuscation (RC4)** | ✅ Supported | ✅ Supported |
+| **ZLIB Compression** | ✅ Supported | ✅ Supported |
+| **Advanced Search (AND/OR/NOT)** | ✅ Supported | ✅ Supported |
+| **Large Files (>4GB) Support** | ✅ Supported | ✅ Supported |
+| **Lugdunum Extensions (0x40-0x42)** | ✅ Supported | ✅ Supported |
+| **Embedded Database** | ✅ Supported (H2) | ❌ No (Memory/Files) |
+| **User Quotas** | ✅ Supported | ✅ Supported |
+| **IP Filtering (ipfilter.dat)** | 🚧 In Progress | ✅ Supported |
+| **LowID Management (Callback)** | 🚧 In Progress | ✅ Supported |
+| **External Config File** | 🚧 In Progress | ✅ Supported |
+| **Web Admin Interface** | ❌ Planned | ✅ Supported |
+| **IPv6 Support** | ❌ Planned | ❌ No |
 
 ## License
 
