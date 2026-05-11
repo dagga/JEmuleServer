@@ -27,21 +27,75 @@ public interface SearchQuery extends Predicate<FileMetadata> {
     byte MODE_MIN = 0x01;
     byte MODE_MAX = 0x02;
 
+    record AndQuery(SearchQuery left, SearchQuery right) implements SearchQuery {
+        @Override
+        public boolean test(FileMetadata meta) {
+            return left.test(meta) && right.test(meta);
+        }
+    }
+
+    record OrQuery(SearchQuery left, SearchQuery right) implements SearchQuery {
+        @Override
+        public boolean test(FileMetadata meta) {
+            return left.test(meta) || right.test(meta);
+        }
+    }
+
+    record NotQuery(SearchQuery left, SearchQuery right) implements SearchQuery {
+        @Override
+        public boolean test(FileMetadata meta) {
+            return left.test(meta) && !right.test(meta);
+        }
+    }
+
+    record TermQuery(String term, byte id) implements SearchQuery {
+        @Override
+        public boolean test(FileMetadata meta) {
+            String lowerTerm = term.toLowerCase();
+            return switch (id) {
+                case ID_FILENAME -> {
+                    if (meta.name() == null) yield false;
+                    String nameLower = meta.name().toLowerCase();
+                    String[] tokens = lowerTerm.split("[^a-zA-Z0-9]+");
+                    for (String t : tokens) {
+                        if (!t.isEmpty() && !nameLower.contains(t)) yield false;
+                    }
+                    yield true;
+                }
+                case ID_FILETYPE -> meta.type() != null && meta.type().equalsIgnoreCase(lowerTerm);
+                case ID_FORMAT -> meta.name() != null && meta.name().toLowerCase().endsWith("." + lowerTerm);
+                default -> true;
+            };
+        }
+    }
+
+    record SizeQuery(long value, byte mode) implements SearchQuery {
+        @Override
+        public boolean test(FileMetadata meta) {
+            return switch (mode) {
+                case MODE_MIN -> meta.size() >= value;
+                case MODE_MAX -> meta.size() <= value;
+                default -> true;
+            };
+        }
+    }
+
     /**
      * Parses a SEARCH_REQUEST payload recursively.
      */
     static SearchQuery parse(ByteBuffer buf) {
         buf.order(ByteOrder.LITTLE_ENDIAN);
         byte first = buf.get();
+        SearchQueryBuilder builder = new SearchQueryBuilder();
         if (first == 0x00) {
             // Operator node
             byte op = buf.get();
             SearchQuery left = parse(buf);
             SearchQuery right = parse(buf);
             return switch (op) {
-                case OP_AND -> (meta) -> left.test(meta) && right.test(meta);
-                case OP_OR -> (meta) -> left.test(meta) || right.test(meta);
-                case OP_NOT -> (meta) -> left.test(meta) && !right.test(meta);
+                case OP_AND -> builder.and(left, right);
+                case OP_OR -> builder.or(left, right);
+                case OP_NOT -> builder.not(left, right);
                 default -> throw new IllegalArgumentException("Unknown search operator: 0x" + String.format("%02X", op));
             };
         } else {
@@ -54,41 +108,17 @@ public interface SearchQuery extends Predicate<FileMetadata> {
                     int len = Short.toUnsignedInt(buf.getShort());
                     byte[] b = new byte[len];
                     buf.get(b);
-                    String term = new String(b, StandardCharsets.UTF_8).toLowerCase();
-                    // Use FileIndex.TOKENIZER to split term into tokens for broader matching
-                    String[] tokens = term.split("[^a-zA-Z0-9]+");
-                    yield (meta) -> {
-                        if (meta.name() == null) return false;
-                        String nameLower = meta.name().toLowerCase();
-                        for (String t : tokens) {
-                            if (!t.isEmpty() && !nameLower.contains(t)) return false;
-                        }
-                        return true;
-                    };
+                    String term = new String(b, StandardCharsets.UTF_8);
+                    yield builder.term(term, ID_FILENAME);
                 }
                 case 0x02 -> { // String tag with numeric ID
                     int len = Short.toUnsignedInt(buf.getShort());
                     byte[] b = new byte[len];
                     buf.get(b);
-                    String term = new String(b, StandardCharsets.UTF_8).toLowerCase();
+                    String term = new String(b, StandardCharsets.UTF_8);
                     buf.getShort(); // name length (1)
                     byte id = buf.get();
-                    yield switch (id) {
-                        case ID_FILENAME -> {
-                            String[] tokens = term.split("[^a-zA-Z0-9]+");
-                            yield (meta) -> {
-                                if (meta.name() == null) return false;
-                                String nameLower = meta.name().toLowerCase();
-                                for (String t : tokens) {
-                                    if (!t.isEmpty() && !nameLower.contains(t)) return false;
-                                }
-                                return true;
-                            };
-                        }
-                        case ID_FILETYPE -> (meta) -> meta.type() != null && meta.type().equalsIgnoreCase(term);
-                        case ID_FORMAT -> (meta) -> meta.name() != null && meta.name().toLowerCase().endsWith("." + term);
-                        default -> (meta) -> true; // Unknown filter, ignore
-                    };
+                    yield builder.term(term, id);
                 }
                 case 0x03 -> { // Numeric tag with numeric ID (Size)
                     long val = Integer.toUnsignedLong(buf.getInt());
@@ -96,11 +126,7 @@ public interface SearchQuery extends Predicate<FileMetadata> {
                     buf.getShort(); // name length (1)
                     byte id = buf.get();
                     if (id == ID_FILESIZE) {
-                        yield switch (mode) {
-                            case MODE_MIN -> (meta) -> meta.size() >= val;
-                            case MODE_MAX -> (meta) -> meta.size() <= val;
-                            default -> (meta) -> true;
-                        };
+                        yield builder.size(val, mode);
                     }
                     yield (meta) -> true;
                 }
