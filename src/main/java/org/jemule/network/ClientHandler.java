@@ -260,8 +260,9 @@ public class ClientHandler implements Runnable {
         byte[] data = initialPacket.data();
         log.info("Handling login request, data size: {} bytes", data.length);
 
-        // ... truncated logic for ID assignment ...
-        int clientId = 0x01020304;
+        // Use a dynamic client ID generation (simple IP-based ID for now or random)
+        // For eMule, high ID is often the IP address in little-endian if public.
+        int clientId = ByteBuffer.wrap(socket.getInetAddress().getAddress()).order(ByteOrder.LITTLE_ENDIAN).getInt();
 
         state = clientFactory.createClient(socket.getInetAddress(), socket.getPort(), clientId);
         
@@ -281,9 +282,9 @@ public class ClientHandler implements Runnable {
         // 1. Server Ident (0x41)
         sendServerIdent(out);
 
-        // 2. Server Message (0x38) - MotD (Mandatory before ID Change for some)
-        sendServerMessage(out, "Welcome to 0.2.0 (JEmuleServer)\n" +
-                "Your HighID is: " + Integer.toUnsignedString(clientId) + "\n" +
+        // 2. Server Message (0x38) - MotD
+        sendServerMessage(out, "Welcome to " + Main.VERSION + " (JEmuleServer)\n" +
+                "Your ID is: " + Integer.toUnsignedString(clientId) + "\n" +
                 "Enjoy the extended protocol support!");
 
         // 3. Login Accepted / ID Change (0x40) - Standard Lugdunum ID Change
@@ -302,8 +303,7 @@ public class ClientHandler implements Runnable {
     }
 
     private void sendServerMessage(OutputStream out, String msg) throws IOException {
-        String welcome = "Welcome to " + Main.VERSION + " (JEmuleServer)";
-        byte[] content = welcome.getBytes(StandardCharsets.UTF_8);
+        byte[] content = msg.getBytes(StandardCharsets.UTF_8);
         ByteBuffer buf = ByteBuffer.allocate(2 + content.length).order(ByteOrder.LITTLE_ENDIAN);
         buf.putShort((short) content.length);
         buf.put(content);
@@ -333,11 +333,16 @@ public class ClientHandler implements Runnable {
         buf.put(hash);
 
         // Write IP and Port in BIG_ENDIAN specifically for this part of the packet
-        // For local testing, we use 127.0.0.1
-        buf.put((byte) 0x7F);
-        buf.put((byte) 0x00);
-        buf.put((byte) 0x00);
-        buf.put((byte) 0x01);
+        byte[] addr = socket.getLocalAddress().getAddress();
+        if (addr.length == 4) {
+            buf.put(addr);
+        } else {
+            // Fallback to localhost if not IPv4
+            buf.put((byte) 0x7F);
+            buf.put((byte) 0x00);
+            buf.put((byte) 0x00);
+            buf.put((byte) 0x01);
+        }
         buf.putShort(Short.reverseBytes(port)); // reverse since LE buffer
 
         Tag.writeList(buf, tags);
