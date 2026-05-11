@@ -35,7 +35,8 @@ servers (Lugdunum type).
   `config.yml` file.
 - [ ] **Administration Interface**: Add an interface (command line) to monitor performance and manage
   bans.
-- [ ] **Detailed Statistics**: Log transfer statistics, number of searches per minute, and client version distribution.
+- [x] **Detailed Statistics**: Log transfer statistics, number of searches per minute, and client version distribution.
+- [x] **Observer/Pub-Sub Event System**: Implement an event system for better monitoring and decoupled hooks.
 
 ## 5. Miscellaneous
 

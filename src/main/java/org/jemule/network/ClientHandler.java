@@ -30,6 +30,8 @@ import org.jemule.protocol.OpCode;
 import org.jemule.protocol.Tag;
 import org.jemule.security.FloodProtector;
 import org.jemule.security.Obfuscation;
+import org.jemule.core.event.ClientEvent;
+import org.jemule.core.event.EventManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -50,17 +52,19 @@ public class ClientHandler implements Runnable {
     private final ClientRegistry registry;
     private final FileIndex fileIndex;
     private final FloodProtector floodProtector;
+    private final EventManager eventManager;
     private ClientState state;
     private Obfuscation.RC4 sendRC4;
     private Obfuscation.RC4 receiveRC4;
     private boolean obfuscated = false;
 
-    public ClientHandler(Socket socket, ServerConfig config, ClientRegistry registry, FileIndex fileIndex, FloodProtector floodProtector) {
+    public ClientHandler(Socket socket, ServerConfig config, ClientRegistry registry, FileIndex fileIndex, FloodProtector floodProtector, EventManager eventManager) {
         this.socket = socket;
         this.config = config;
         this.registry = registry;
         this.fileIndex = fileIndex;
         this.floodProtector = floodProtector;
+        this.eventManager = eventManager;
     }
 
     @Override
@@ -68,7 +72,11 @@ public class ClientHandler implements Runnable {
         try {
             InputStream in = socket.getInputStream();
             OutputStream out = socket.getOutputStream();
-            log.info("Client connected: {}", socket.getRemoteSocketAddress());
+            String remoteAddr = socket.getRemoteSocketAddress().toString();
+            log.info("Client connected: {}", remoteAddr);
+            if (eventManager != null) {
+                eventManager.broadcast(new ClientEvent(ClientEvent.CONNECTED, remoteAddr, "anonymous", "Client connected"));
+            }
             if (!floodProtector.allow(socket.getInetAddress())) {
                 log.warn("Flood blocked: {}", socket.getInetAddress());
                 return;
@@ -95,12 +103,16 @@ public class ClientHandler implements Runnable {
         } catch (IOException e) {
             log.error("IO Error: {}", e.getMessage());
         } finally {
+            String remoteAddr = socket.getRemoteSocketAddress().toString();
             if (state != null) registry.remove(state);
             try {
                 socket.close();
             } catch (IOException ignored) {
             }
-            log.info("Disconnected: {}", socket.getRemoteSocketAddress());
+            log.info("Disconnected: {}", remoteAddr);
+            if (eventManager != null) {
+                eventManager.broadcast(new ClientEvent(ClientEvent.DISCONNECTED, remoteAddr, state != null ? String.valueOf(state.clientId()) : "anonymous", "Client disconnected"));
+            }
         }
     }
 
@@ -250,6 +262,10 @@ public class ClientHandler implements Runnable {
         int clientId = 0x01020304;
 
         state = new ClientState(socket.getInetAddress(), socket.getPort(), clientId, System.currentTimeMillis(), new java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis()));
+        
+        if (eventManager != null) {
+            eventManager.broadcast(new ClientEvent(ClientEvent.LOGIN, socket.getInetAddress().getHostAddress(), "ID:" + clientId, "Client logged in with ID " + clientId));
+        }
 
         // Check if initial packet was ZLIB, if so, client supports it
         if (initialPacket.protocol() == Packet.PROTOCOL_ZLIB) {

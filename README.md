@@ -79,6 +79,7 @@ Here is a comparison between JEmuleServer and the historical **eServer (Lugdunum
 | **Lugdunum Extensions (0x40-0x42)** | ✅ Supported | ✅ Supported |
 | **Embedded Database** | ✅ Supported (H2) | ❌ No (Memory/Files) |
 | **User Quotas** | ✅ Supported | ✅ Supported |
+| **Event-Driven Monitoring** | ✅ Supported | ❌ No |
 | **IP Filtering (ipfilter.dat)** | 🚧 In Progress | ✅ Supported |
 | **LowID Management (Callback)** | 🚧 In Progress | ✅ Supported |
 | **External Config File** | 🚧 In Progress | ✅ Supported |

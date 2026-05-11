@@ -23,6 +23,9 @@ import org.jemule.config.ServerConfig;
 import org.jemule.core.ClientRegistry;
 import org.jemule.core.DatabaseManager;
 import org.jemule.core.FileIndex;
+import org.jemule.core.event.ClientEvent;
+import org.jemule.core.event.EventManager;
+import org.jemule.core.event.FileEvent;
 import org.jemule.security.FloodProtector;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -44,10 +47,13 @@ public class Server {
     private final FloodProtector floodProtector;
     private final ExecutorService executor;
     private final DatabaseManager db;
+    private final EventManager eventManager;
     private volatile boolean running = true;
 
     public Server(ServerConfig config) {
         this.config = config;
+        this.eventManager = new EventManager();
+        setupDefaultListeners();
         this.floodProtector = new FloodProtector(config.floodMaxRequestsPerSecond());
         this.executor = Executors.newVirtualThreadPerTaskExecutor();
         
@@ -63,7 +69,19 @@ public class Server {
             log.error("Failed to initialize database: {}", e.getMessage());
         }
         this.db = dbMgr;
-        this.fileIndex = new FileIndex(db);
+        this.fileIndex = new FileIndex(db, eventManager);
+    }
+
+    private void setupDefaultListeners() {
+        eventManager.subscribeAll(event -> {
+            if (event instanceof ClientEvent ce) {
+                log.info("[CLIENT] {} - {} ({})", ce.getType(), ce.getUsername(), ce.getClientIp());
+            } else if (event instanceof FileEvent fe) {
+                log.info("[FILE] {} - {} ({})", fe.getType(), fe.getFileName(), fe.getFileHash());
+            } else {
+                log.info("[EVENT] {}: {}", event.getType(), event.getMessage());
+            }
+        });
     }
 
     public void start() throws IOException {
@@ -77,7 +95,7 @@ public class Server {
                 try {
                     Socket c = ss.accept();
                     c.setTcpNoDelay(true);
-                    executor.submit(new ClientHandler(c, config, registry, fileIndex, floodProtector));
+                    executor.submit(new ClientHandler(c, config, registry, fileIndex, floodProtector, eventManager));
                 } catch (IOException e) {
                     if (running) log.error("Accept error: {}", e.getMessage());
                 }

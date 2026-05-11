@@ -20,6 +20,8 @@
 package org.jemule.core;
 
 import java.util.*;
+import org.jemule.core.event.EventManager;
+import org.jemule.core.event.FileEvent;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
 
@@ -28,9 +30,11 @@ public class FileIndex {
     private final ConcurrentHashMap<String, Set<String>> invertedIndex = new ConcurrentHashMap<>();
     private static final Pattern TOKENIZER = Pattern.compile("[^a-zA-Z0-9]+");
     private final DatabaseManager db;
+    private final EventManager eventManager;
 
-    public FileIndex(DatabaseManager db) {
+    public FileIndex(DatabaseManager db, EventManager eventManager) {
         this.db = db;
+        this.eventManager = eventManager;
         if (db != null) {
             List<FileMetadata> loaded = db.loadFiles();
             for (FileMetadata meta : loaded) {
@@ -39,10 +43,17 @@ public class FileIndex {
         }
     }
 
+    public FileIndex(DatabaseManager db) {
+        this(db, null);
+    }
+
     public void addFile(FileMetadata meta) {
         indexInMemory(meta);
         if (db != null) {
             db.saveFile(meta);
+        }
+        if (eventManager != null) {
+            eventManager.broadcast(new FileEvent(FileEvent.PUBLISHED, meta.name(), meta.hash(), "File published: " + meta.name()));
         }
     }
 
@@ -95,6 +106,9 @@ public class FileIndex {
     }
 
     public List<FileMetadata> searchComplex(SearchQuery query, int limit) {
+        if (eventManager != null) {
+            eventManager.broadcast(new FileEvent(FileEvent.SEARCHED, "ComplexQuery", "", "Complex search executed"));
+        }
         return byHash.values().stream()
                 .filter(query)
                 .limit(limit)
@@ -102,6 +116,9 @@ public class FileIndex {
     }
 
     public List<FileMetadata> search(String query, int limit) {
+        if (eventManager != null) {
+            eventManager.broadcast(new FileEvent(FileEvent.SEARCHED, query, "", "Search executed: " + query));
+        }
         if (query == null || query.trim().isEmpty()) {
             return byHash.values().stream().limit(limit).toList();
         }
