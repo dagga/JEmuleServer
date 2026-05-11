@@ -25,6 +25,8 @@ dependencies {
     "implementation"("io.github.resilience4j:resilience4j-circuitbreaker:2.2.0")
     "implementation"("io.github.resilience4j:resilience4j-all:2.2.0")
     "testImplementation"("org.junit.jupiter:junit-jupiter:5.10.1")
+    "testImplementation"("org.mockito:mockito-core:5.8.0")
+    "testImplementation"("org.mockito:mockito-junit-jupiter:5.8.0")
     "testRuntimeOnly"("org.junit.platform:junit-platform-launcher")
 }
 

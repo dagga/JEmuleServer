@@ -72,9 +72,12 @@ public class ClientHandler implements Runnable {
     @Override
     public void run() {
         try {
+            // Set socket timeout (30 seconds)
+            socket.setSoTimeout(30000);
+
             InputStream in = socket.getInputStream();
             OutputStream out = socket.getOutputStream();
-            String remoteAddr = socket.getRemoteSocketAddress().toString();
+            String remoteAddr = maskIp(socket.getRemoteSocketAddress().toString());
             log.info("Client connected: {}", remoteAddr);
             if (eventManager != null) {
                 eventManager.broadcast(new ClientEvent(ClientEvent.CONNECTED, remoteAddr, "anonymous", "Client connected"));
@@ -391,6 +394,11 @@ public class ClientHandler implements Runnable {
     }
 
     private void handleSearch(byte[] data, OutputStream out) throws IOException {
+        if (data == null || data.length < 1) {
+            log.warn("Invalid search request: empty data");
+            return;
+        }
+
         List<FileMetadata> results;
         try {
             SearchQuery query = SearchQuery.parse(ByteBuffer.wrap(data));
@@ -398,9 +406,14 @@ public class ClientHandler implements Runnable {
             log.debug("Complex search -> {} results", results.size());
         } catch (Exception e) {
             log.warn("Failed to parse complex search, falling back to simple search: {}", e.getMessage());
-            String queryStr = new String(data, StandardCharsets.UTF_8);
-            results = fileIndex.search(queryStr, config.maxSearchResults());
-            log.debug("Simple search '{}' -> {} results", queryStr, results.size());
+            String queryStr = new String(data, StandardCharsets.UTF_8).trim();
+            if (queryStr.length() < 3) {
+                log.warn("Simple search query too short: '{}'", queryStr);
+                results = List.of();
+            } else {
+                results = fileIndex.search(queryStr, config.maxSearchResults());
+                log.debug("Simple search '{}' -> {} results", queryStr, results.size());
+            }
         }
 
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
@@ -415,23 +428,53 @@ public class ClientHandler implements Runnable {
     }
 
     private void handlePublish(byte[] data, OutputStream out) throws IOException {
-        String[] p = new String(data, StandardCharsets.UTF_8).split("\\|");
+        if (data == null || data.length == 0) {
+            log.warn("Invalid publish request: empty data");
+            return;
+        }
+
+        String raw = new String(data, StandardCharsets.UTF_8);
+        String[] p = raw.split("\\|");
         if (p.length >= 4) {
-            if (state.publishedFilesCount().get() >= config.maxFilesPerUser()) {
+            String hash = p[0].trim();
+            String name = p[1].trim();
+            String sizeStr = p[2].trim();
+            String type = p[3].trim();
+
+            if (hash.length() != 32) {
+                log.warn("Invalid hash length for PUBLISH: {}", hash.length());
+            } else if (name.isEmpty()) {
+                log.warn("Empty filename for PUBLISH from {}", socket.getRemoteSocketAddress());
+            } else if (state.publishedFilesCount().get() >= config.maxFilesPerUser()) {
                 log.warn("Client {} reached max files quota ({})", socket.getRemoteSocketAddress(), config.maxFilesPerUser());
             } else {
-                FileMetadata meta = new FileMetadata(p[0], p[1], Long.parseLong(p[2]), p[3]);
-                meta.sources().put(String.valueOf(state.clientId()), state);
-                fileIndex.addFile(meta);
-                state.publishedFilesCount().incrementAndGet();
-                log.info("Published: {}", p[1]);
+                try {
+                    long size = Long.parseLong(sizeStr);
+                    if (size < 0) {
+                        log.warn("Invalid negative file size for PUBLISH: {}", size);
+                    } else {
+                        FileMetadata meta = new FileMetadata(hash, name, size, type);
+                        meta.sources().put(String.valueOf(state.clientId()), state);
+                        fileIndex.addFile(meta);
+                        state.publishedFilesCount().incrementAndGet();
+                        log.info("Published: {}", name);
+                    }
+                } catch (NumberFormatException e) {
+                    log.warn("Invalid size format for PUBLISH: {}", sizeStr);
+                }
             }
+        } else {
+            log.warn("Invalid publish format (expected 4+ fields, got {}): {}", p.length, raw);
         }
         new Packet(Packet.PROTOCOL_ED2K, OpCode.PUBLISH_ACK.value, new byte[0]).write(out, state.isZlibSupported());
     }
 
     private void handleGetSources(byte[] data, OutputStream out) throws IOException {
         String hash = new String(data, StandardCharsets.UTF_8).trim();
+        if (hash.length() != 32) {
+            log.warn("Invalid hash length for GET_SOURCES: {}", hash.length());
+            return;
+        }
         var sources = fileIndex.getSources(hash, state, config.maxSourcesPerFile());
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         DataOutputStream dos = new DataOutputStream(baos);
@@ -441,5 +484,27 @@ public class ClientHandler implements Runnable {
             dos.writeShort((short) s.port());
         }
         new Packet(Packet.PROTOCOL_ED2K, OpCode.SOURCES_RESULT.value, baos.toByteArray()).write(out, state.isZlibSupported());
+    }
+
+    /**
+     * Masks the last part of an IP address for GDPR compliance.
+     */
+    private String maskIp(String addr) {
+        if (addr == null) return "unknown";
+        // Handles both "/1.2.3.4:port" and "1.2.3.4"
+        String ipPart = addr;
+        if (ipPart.startsWith("/")) ipPart = ipPart.substring(1);
+        int colonIdx = ipPart.indexOf(':');
+        String portPart = "";
+        if (colonIdx != -1) {
+            portPart = ipPart.substring(colonIdx);
+            ipPart = ipPart.substring(0, colonIdx);
+        }
+
+        String[] parts = ipPart.split("\\.");
+        if (parts.length == 4) {
+            return parts[0] + "." + parts[1] + "." + parts[2] + ".xxx" + portPart;
+        }
+        return addr; // Return as is for IPv6 or unknown format for now
     }
 }
