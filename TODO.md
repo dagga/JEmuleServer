@@ -14,7 +14,7 @@ servers (Lugdunum type).
 
 ## 2. Indexing & Search
 
-- [ ] **Data Persistence**: Implement a H2 database to save the file index and statistics between
+- [x] **Data Persistence**: Implement a H2 database to save the file index and statistics between
   restarts.
 - [ ] **Advanced Search**: Support boolean operators (AND, OR, NOT) and filters (size, type, availability) in search
   queries.

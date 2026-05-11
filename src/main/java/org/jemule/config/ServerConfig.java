@@ -25,7 +25,8 @@ public record ServerConfig(
         int maxSearchResults,
         int floodMaxRequestsPerSecond,
         int maxUsers,
-        int maxFiles
+        int maxFiles,
+        String databasePath
 ) {
     public static final ServerConfig DEFAULT = new ServerConfig(
             4661,
@@ -33,6 +34,7 @@ public record ServerConfig(
             300,
             50,
             100000,
-            10000000
+            10000000,
+            "./jemule_db"
     );
 }

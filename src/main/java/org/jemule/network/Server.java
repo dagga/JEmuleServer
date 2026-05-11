@@ -21,6 +21,7 @@ package org.jemule.network;
 
 import org.jemule.config.ServerConfig;
 import org.jemule.core.ClientRegistry;
+import org.jemule.core.DatabaseManager;
 import org.jemule.core.FileIndex;
 import org.jemule.security.FloodProtector;
 import org.slf4j.Logger;
@@ -31,6 +32,7 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.sql.SQLException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -38,15 +40,25 @@ public class Server {
     private static final Logger log = LoggerFactory.getLogger(Server.class);
     private final ServerConfig config;
     private final ClientRegistry registry = new ClientRegistry();
-    private final FileIndex fileIndex = new FileIndex();
+    private final FileIndex fileIndex;
     private final FloodProtector floodProtector;
     private final ExecutorService executor;
+    private final DatabaseManager db;
     private volatile boolean running = true;
 
     public Server(ServerConfig config) {
         this.config = config;
         this.floodProtector = new FloodProtector(config.floodMaxRequestsPerSecond());
         this.executor = Executors.newVirtualThreadPerTaskExecutor();
+        
+        DatabaseManager dbMgr = null;
+        try {
+            dbMgr = new DatabaseManager(config.databasePath());
+        } catch (SQLException e) {
+            log.error("Failed to initialize database: {}", e.getMessage());
+        }
+        this.db = dbMgr;
+        this.fileIndex = new FileIndex(db);
     }
 
     public void start() throws IOException {
@@ -115,6 +127,13 @@ public class Server {
     public void stop() {
         running = false;
         executor.shutdownNow();
+        if (db != null) {
+            try {
+                db.close();
+            } catch (SQLException e) {
+                log.error("Error closing database: {}", e.getMessage());
+            }
+        }
         log.info("Server halted.");
     }
 }

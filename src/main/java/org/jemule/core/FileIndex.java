@@ -27,12 +27,35 @@ public class FileIndex {
     private final ConcurrentHashMap<String, FileMetadata> byHash = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Set<String>> invertedIndex = new ConcurrentHashMap<>();
     private static final Pattern TOKENIZER = Pattern.compile("\\W+");
+    private final DatabaseManager db;
+
+    public FileIndex(DatabaseManager db) {
+        this.db = db;
+        if (db != null) {
+            List<FileMetadata> loaded = db.loadFiles();
+            for (FileMetadata meta : loaded) {
+                indexInMemory(meta);
+            }
+        }
+    }
 
     public void addFile(FileMetadata meta) {
+        indexInMemory(meta);
+        if (db != null) {
+            db.saveFile(meta);
+        }
+    }
+
+    private void indexInMemory(FileMetadata meta) {
         byHash.put(meta.hash(), meta);
-        String[] tokens = TOKENIZER.split(meta.name().toLowerCase());
-        for (String t : tokens)
-            if (!t.isEmpty()) invertedIndex.computeIfAbsent(t, k -> ConcurrentHashMap.newKeySet()).add(meta.hash());
+        String name = meta.name();
+        if (name == null) return;
+        String[] tokens = TOKENIZER.split(name.toLowerCase());
+        for (String t : tokens) {
+            if (!t.isEmpty()) {
+                invertedIndex.computeIfAbsent(t, k -> ConcurrentHashMap.newKeySet()).add(meta.hash());
+            }
+        }
     }
 
     public Set<ClientState> getSources(String hash) {
@@ -41,9 +64,14 @@ public class FileIndex {
     }
 
     public List<FileMetadata> search(String query, int limit) {
-        String[] tokens = TOKENIZER.split(query.toLowerCase());
+        if (query == null || query.trim().isEmpty()) {
+            return byHash.values().stream().limit(limit).toList();
+        }
+        String queryLower = query.toLowerCase();
+        String[] tokens = TOKENIZER.split(queryLower);
         Set<String> candidates = null;
         for (String t : tokens) {
+            if (t.isEmpty()) continue;
             Set<String> matches = invertedIndex.get(t);
             if (matches == null) return Collections.emptyList();
             candidates = (candidates == null) ? new HashSet<>(matches) : candidates;

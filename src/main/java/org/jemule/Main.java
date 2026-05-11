@@ -40,7 +40,8 @@ public class Main {
                         300,
                         50,
                         ServerConfig.DEFAULT.maxUsers(),
-                        ServerConfig.DEFAULT.maxFiles()
+                        ServerConfig.DEFAULT.maxFiles(),
+                        ServerConfig.DEFAULT.databasePath()
                 );
             } catch (NumberFormatException e) {
                 log.error("Usage: java -jar JEmuleServer.jar [port]");
