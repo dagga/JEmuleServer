@@ -55,7 +55,16 @@ public interface SearchQuery extends Predicate<FileMetadata> {
                     byte[] b = new byte[len];
                     buf.get(b);
                     String term = new String(b, StandardCharsets.UTF_8).toLowerCase();
-                    yield (meta) -> meta.name() != null && meta.name().toLowerCase().contains(term);
+                    // Use FileIndex.TOKENIZER to split term into tokens for broader matching
+                    String[] tokens = term.split("[^a-zA-Z0-9]+");
+                    yield (meta) -> {
+                        if (meta.name() == null) return false;
+                        String nameLower = meta.name().toLowerCase();
+                        for (String t : tokens) {
+                            if (!t.isEmpty() && !nameLower.contains(t)) return false;
+                        }
+                        return true;
+                    };
                 }
                 case 0x02 -> { // String tag with numeric ID
                     int len = Short.toUnsignedInt(buf.getShort());
@@ -65,7 +74,17 @@ public interface SearchQuery extends Predicate<FileMetadata> {
                     buf.getShort(); // name length (1)
                     byte id = buf.get();
                     yield switch (id) {
-                        case ID_FILENAME -> (meta) -> meta.name() != null && meta.name().toLowerCase().contains(term);
+                        case ID_FILENAME -> {
+                            String[] tokens = term.split("[^a-zA-Z0-9]+");
+                            yield (meta) -> {
+                                if (meta.name() == null) return false;
+                                String nameLower = meta.name().toLowerCase();
+                                for (String t : tokens) {
+                                    if (!t.isEmpty() && !nameLower.contains(t)) return false;
+                                }
+                                return true;
+                            };
+                        }
                         case ID_FILETYPE -> (meta) -> meta.type() != null && meta.type().equalsIgnoreCase(term);
                         case ID_FORMAT -> (meta) -> meta.name() != null && meta.name().toLowerCase().endsWith("." + term);
                         default -> (meta) -> true; // Unknown filter, ignore

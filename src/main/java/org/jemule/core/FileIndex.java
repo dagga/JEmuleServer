@@ -117,8 +117,24 @@ public class FileIndex {
         Set<String> candidates = null;
         for (String t : tokens) {
             if (t.isEmpty()) continue;
-            Set<String> matches = invertedIndex.get(t);
-            if (matches == null) return Collections.emptyList();
+            
+            Set<String> matches = new HashSet<>();
+            // Exact match in inverted index
+            Set<String> exactMatches = invertedIndex.get(t);
+            if (exactMatches != null) {
+                matches.addAll(exactMatches);
+            }
+            
+            // If token is short or we want prefix/partial search support:
+            // Scan inverted index keys for prefix matches
+            // (Optimization possible with a Trie or more advanced index)
+            for (Map.Entry<String, Set<String>> entry : invertedIndex.entrySet()) {
+                if (entry.getKey().startsWith(t) && !entry.getKey().equals(t)) {
+                    matches.addAll(entry.getValue());
+                }
+            }
+            
+            if (matches.isEmpty()) return Collections.emptyList();
             candidates = (candidates == null) ? new HashSet<>(matches) : candidates;
             candidates.retainAll(matches);
             if (candidates.isEmpty()) break;
