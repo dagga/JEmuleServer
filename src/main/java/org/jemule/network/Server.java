@@ -53,7 +53,12 @@ public class Server {
         
         DatabaseManager dbMgr = null;
         try {
-            dbMgr = new DatabaseManager(config.databasePath());
+            dbMgr = new DatabaseManager(
+                    config.databasePath(),
+                    config.cbFailureRateThreshold(),
+                    config.cbMinimumNumberOfCalls(),
+                    config.cbWaitDurationInSeconds()
+            );
         } catch (SQLException e) {
             log.error("Failed to initialize database: {}", e.getMessage());
         }

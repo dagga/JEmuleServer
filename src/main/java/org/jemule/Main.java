@@ -43,7 +43,10 @@ public class Main {
                                 ServerConfig.DEFAULT.maxFiles(),
                                 ServerConfig.DEFAULT.maxFilesPerUser(),
                                 ServerConfig.DEFAULT.maxSourcesPerFile(),
-                                ServerConfig.DEFAULT.databasePath()
+                                ServerConfig.DEFAULT.databasePath(),
+                                ServerConfig.DEFAULT.cbFailureRateThreshold(),
+                                ServerConfig.DEFAULT.cbMinimumNumberOfCalls(),
+                                ServerConfig.DEFAULT.cbWaitDurationInSeconds()
                         );
             } catch (NumberFormatException e) {
                 log.error("Usage: java -jar JEmuleServer.jar [port]");

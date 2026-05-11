@@ -25,14 +25,15 @@ servers (Lugdunum type).
 
 - [ ] **IP Filtering (IPFilter)**: Support loading `ipfilter.dat` files to block undesirable IP ranges.
 - [ ] **Fake File Detection**: Implement heuristics to detect and ban corrupted or malicious files (spam).
-- [ ] **Advanced Anti-Flood Protection**: Refine limits per opcode and per IP to prevent DoS attacks.
+- [x] **Advanced Anti-Flood Protection**: Refine limits per opcode and per IP to prevent DoS attacks.
+- [x] **Circuit Breaker**: Implement the Circuit Breaker pattern (Resilience4j) to prevent error propagation.
 - [ ] **LowID Management**: Improve support for clients behind a firewall (callback mechanism).
 
 ## 4. Administration & Monitoring
 
 - [ ] **External Configuration File**: Move all parameters (port, limits, names) to a `server.properties` or
   `config.yml` file.
-- [ ] **Administration Interface**: Add an interface (command line or mini web server) to monitor performance and manage
+- [ ] **Administration Interface**: Add an interface (command line) to monitor performance and manage
   bans.
 - [ ] **Detailed Statistics**: Log transfer statistics, number of searches per minute, and client version distribution.
 

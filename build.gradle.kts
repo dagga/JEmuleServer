@@ -22,6 +22,8 @@ dependencies {
     "implementation"("org.slf4j:slf4j-api:2.0.9")
     "implementation"("ch.qos.logback:logback-classic:1.5.13")
     "implementation"("com.h2database:h2:2.3.232")
+    "implementation"("io.github.resilience4j:resilience4j-circuitbreaker:2.2.0")
+    "implementation"("io.github.resilience4j:resilience4j-all:2.2.0")
     "testImplementation"("org.junit.jupiter:junit-jupiter:5.10.1")
     "testRuntimeOnly"("org.junit.platform:junit-platform-launcher")
 }

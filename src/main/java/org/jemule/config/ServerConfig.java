@@ -28,7 +28,12 @@ public record ServerConfig(
         int maxFiles,
         int maxFilesPerUser,
         int maxSourcesPerFile,
-        String databasePath
+        String databasePath,
+        
+        // Circuit Breaker settings
+        float cbFailureRateThreshold,
+        int cbMinimumNumberOfCalls,
+        int cbWaitDurationInSeconds
 ) {
     public static final ServerConfig DEFAULT = new ServerConfig(
             4661,
@@ -39,6 +44,9 @@ public record ServerConfig(
             10000000,
             5000,
             200,
-            "./jemule_db"
+            "./jemule_db",
+            50.0f,
+            10,
+            60
     );
 }

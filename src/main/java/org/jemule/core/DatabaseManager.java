@@ -18,6 +18,8 @@
 
 package org.jemule.core;
 
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import org.jemule.protocol.Tag;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,10 +32,23 @@ import java.util.List;
 public class DatabaseManager implements AutoCloseable {
     private static final Logger logger = LoggerFactory.getLogger(DatabaseManager.class);
     private final Connection connection;
+    private final CircuitBreaker circuitBreaker;
 
     public DatabaseManager(String dbPath) throws SQLException {
+        this(dbPath, 50.0f, 10, 60);
+    }
+
+    public DatabaseManager(String dbPath, float failureRateThreshold, int minCalls, int waitDurationInSeconds) throws SQLException {
         String url = "jdbc:h2:" + dbPath;
         this.connection = DriverManager.getConnection(url, "sa", "");
+        
+        CircuitBreakerConfig config = CircuitBreakerConfig.custom()
+                .failureRateThreshold(failureRateThreshold)
+                .minimumNumberOfCalls(minCalls)
+                .waitDurationInOpenState(java.time.Duration.ofSeconds(waitDurationInSeconds))
+                .build();
+        this.circuitBreaker = CircuitBreaker.of("database", config);
+        
         initSchema();
     }
 
@@ -73,6 +88,17 @@ public class DatabaseManager implements AutoCloseable {
 
     public void saveFile(FileMetadata meta) {
         try {
+            circuitBreaker.executeCheckedSupplier(() -> {
+                saveFileInternal(meta);
+                return null;
+            });
+        } catch (Throwable e) {
+            logger.error("Circuit breaker prevented or caught error during saveFile: {}", e.getMessage());
+        }
+    }
+
+    private void saveFileInternal(FileMetadata meta) throws SQLException {
+        try {
             connection.setAutoCommit(false);
             try (PreparedStatement ps = connection.prepareStatement(
                     "MERGE INTO files (hash, name, size, type) KEY (hash) VALUES (?, ?, ?, ?)")) {
@@ -110,14 +136,23 @@ public class DatabaseManager implements AutoCloseable {
             }
             connection.commit();
         } catch (SQLException e) {
-            logger.error("Error saving file to database", e);
             try { connection.rollback(); } catch (SQLException ex) { /* ignore */ }
+            throw e;
         } finally {
             try { connection.setAutoCommit(true); } catch (SQLException e) { /* ignore */ }
         }
     }
 
     public List<FileMetadata> loadFiles() {
+        try {
+            return circuitBreaker.executeCheckedSupplier(this::loadFilesInternal);
+        } catch (Throwable e) {
+            logger.error("Circuit breaker prevented or caught error during loadFiles: {}", e.getMessage());
+            return new ArrayList<>();
+        }
+    }
+
+    private List<FileMetadata> loadFilesInternal() throws SQLException {
         List<FileMetadata> files = new ArrayList<>();
         try (Statement stmt = connection.createStatement();
              ResultSet rs = stmt.executeQuery("SELECT * FROM files")) {
@@ -130,8 +165,6 @@ public class DatabaseManager implements AutoCloseable {
                 List<Tag> tags = loadTags(hash);
                 files.add(new FileMetadata(hash, name, size, type, tags));
             }
-        } catch (SQLException e) {
-            logger.error("Error loading files from database", e);
         }
         return files;
     }
@@ -167,24 +200,40 @@ public class DatabaseManager implements AutoCloseable {
     }
 
     public void setStat(String key, long value) {
+        try {
+            circuitBreaker.executeCheckedSupplier(() -> {
+                setStatInternal(key, value);
+                return null;
+            });
+        } catch (Throwable e) {
+            logger.error("Circuit breaker prevented or caught error during setStat: {}", e.getMessage());
+        }
+    }
+
+    private void setStatInternal(String key, long value) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
                 "MERGE INTO stats (stat_key, stat_value) KEY (stat_key) VALUES (?, ?)")) {
             ps.setString(1, key);
             ps.setLong(2, value);
             ps.executeUpdate();
-        } catch (SQLException e) {
-            logger.error("Error saving stat", e);
         }
     }
 
     public long getStat(String key, long defaultValue) {
+        try {
+            return circuitBreaker.executeCheckedSupplier(() -> getStatInternal(key, defaultValue));
+        } catch (Throwable e) {
+            logger.error("Circuit breaker prevented or caught error during getStat: {}", e.getMessage());
+            return defaultValue;
+        }
+    }
+
+    private long getStatInternal(String key, long defaultValue) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement("SELECT stat_value FROM stats WHERE stat_key = ?")) {
             ps.setString(1, key);
             try (ResultSet rs = ps.executeQuery()) {
                 if (rs.next()) return rs.getLong("stat_value");
             }
-        } catch (SQLException e) {
-            logger.error("Error loading stat", e);
         }
         return defaultValue;
     }
