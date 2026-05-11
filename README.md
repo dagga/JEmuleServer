@@ -17,7 +17,7 @@ To compile the project and generate the executable JAR file (Fat JAR):
 ./gradlew build
 ```
 
-The JAR file will be generated in `build/libs/JEmuleServer-0.1.2.jar`.
+The JAR file will be generated in `build/libs/JEmuleServer-0.1.3.jar`.
 
 ## Running
 
@@ -34,7 +34,7 @@ You can start the server directly via Gradle:
 Once the project is compiled, you can start the server with the following command:
 
 ```bash
-java -Djava.net.preferIPv4Stack=true -jar build/libs/JEmuleServer-0.1.2.jar [port]
+java -Djava.net.preferIPv4Stack=true -jar build/libs/JEmuleServer-0.1.3.jar [port]
 ```
 
 - `-Djava.net.preferIPv4Stack=true`: Recommended to avoid connectivity issues with some eMule/aMule clients (forces the

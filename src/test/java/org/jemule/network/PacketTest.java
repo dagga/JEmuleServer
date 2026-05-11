@@ -18,6 +18,7 @@
 
 package org.jemule.network;
 
+import org.jemule.protocol.OpCode;
 import org.jemule.protocol.Tag;
 import org.junit.jupiter.api.Test;
 
@@ -90,6 +91,27 @@ class PacketTest {
         assertArrayEquals(payload, readPacket.data());
         // Note: Packet.read sets the protocol to the one read from stream, which is PROTOCOL_ZLIB here
         assertEquals(Packet.PROTOCOL_ZLIB, readPacket.protocol());
+    }
+
+    @Test
+    void testEmuleProtocolPacket() throws IOException {
+        byte protocol = Packet.PROTOCOL_EMULE;
+        byte opcode = (byte) 0x23; // GET_SOURCES_OBFU
+        byte[] payload = "FileHash12345678".getBytes();
+        Packet packet = new Packet(protocol, opcode, payload);
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        packet.write(out, false);
+
+        ByteArrayInputStream in = new ByteArrayInputStream(out.toByteArray());
+        Packet readPacket = Packet.read(in, 1024);
+
+        assertEquals(protocol, readPacket.protocol());
+        assertEquals(opcode, readPacket.opcode());
+        assertArrayEquals(payload, readPacket.data());
+
+        OpCode op = OpCode.fromByte(readPacket.protocol(), readPacket.opcode());
+        assertEquals(OpCode.GET_SOURCES_OBFU, op);
     }
 
     @Test

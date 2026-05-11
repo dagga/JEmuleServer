@@ -113,7 +113,7 @@ public class ClientHandler implements Runnable {
         sendServerIdent(out);
 
         // 2. Server Message (0x38) - MotD (Mandatory before ID Change for some)
-        sendServerMessage(out, "Welcome to JEmuleServer 0.1.2\n" +
+        sendServerMessage(out, "Welcome to 0.1.3 (JEmuleServer)\n" +
                 "Your HighID is: " + Integer.toUnsignedString(clientId) + "\n" +
                 "Enjoy the extended protocol support!");
 
@@ -144,7 +144,8 @@ public class ClientHandler implements Runnable {
         byte[] hash = new byte[16]; // Empty hash
         short port = (short) config.port();
 
-        String name = "JEmuleServer";
+        String version = "0.1.3";
+        String name = version + " (JEmuleServer)";
         String desc = "Experimental eMule Server";
 
         List<Tag> tags = new ArrayList<>();
@@ -190,15 +191,23 @@ public class ClientHandler implements Runnable {
 
     private void processPacket(Packet p, OutputStream out) throws IOException {
         state.lastActivity().set(System.currentTimeMillis());
-        OpCode op = OpCode.fromByte(p.opcode());
+        OpCode op = OpCode.fromByte(p.protocol(), p.opcode());
         if (op == null) return;
 
         switch (op) {
             case SEARCH_REQUEST -> handleSearch(p.data(), out);
             case PUBLISH_FILES -> handlePublish(p.data(), out);
-            case GET_SOURCES -> handleGetSources(p.data(), out);
-            default -> log.debug("Unhandled: {}", op);
+            case GET_SOURCES, GET_SOURCES_OBFU -> handleGetSources(p.data(), out);
+            case EMULE_INFO -> handleEmuleInfo(p.data(), out);
+            default -> log.debug("Unhandled: {} (Proto: 0x{:02X})", op, p.protocol());
         }
+    }
+
+    private void handleEmuleInfo(byte[] data, OutputStream out) throws IOException {
+        log.debug("Received EMULE_INFO from {}", socket.getRemoteSocketAddress());
+        // For now, just ACK it with basic server info or empty EMULE_INFO_ACK
+        // eMule Info usually contains client capabilities.
+        new Packet(Packet.PROTOCOL_EMULE, OpCode.EMULE_INFO_ACK.value, new byte[0]).write(out, state.isZlibSupported());
     }
 
     private void handleSearch(byte[] data, OutputStream out) throws IOException {

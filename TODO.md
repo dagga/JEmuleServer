@@ -10,7 +10,7 @@ servers (Lugdunum type).
 - [ ] **Protocol Obfuscation**: Implement the RC4 encryption layer to support obfuscated connections.
 - [x] **Full Tags Support**: Extend the tag reading/writing system to support all types (String, Integer, Float, Bool,
   Blob).
-- [ ] **eMule Packets Support (0xC5)**: Add support for specific eMule messages (e.g., extended source requests).
+- [x] **eMule Packets Support (0xC5)**: Add support for specific eMule messages (e.g., extended source requests).
 
 ## 2. Indexing & Search
 
