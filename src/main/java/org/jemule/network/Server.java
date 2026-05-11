@@ -89,6 +89,7 @@ public class Server {
 
     public void start() throws IOException {
         try (ServerSocket ss = new ServerSocket(config.port())) {
+            ss.setSoTimeout(1000); // Allow checking the 'running' flag periodically
             log.info("JEmuleServer listening on port {}", config.port());
             log.info("Virtual Threads ready for 50k+ concurrent clients");
 
@@ -99,6 +100,8 @@ public class Server {
                     Socket c = ss.accept();
                     c.setTcpNoDelay(true);
                     executor.submit(new ClientHandler(c, config, registry, fileIndex, floodProtector, eventManager, clientFactory));
+                } catch (java.net.SocketTimeoutException e) {
+                    // Just a timeout, go back to loop start and check 'running'
                 } catch (IOException e) {
                     if (running) log.error("Accept error: {}", e.getMessage());
                 }
@@ -108,16 +111,31 @@ public class Server {
 
     private void startUdpResponder() {
         executor.submit(() -> {
-            try (java.net.DatagramSocket ds = new java.net.DatagramSocket(config.port())) {
-                log.info("UDP Responder listening on port {}", config.port());
-                byte[] buf = new byte[1024];
-                while (running) {
-                    java.net.DatagramPacket p = new java.net.DatagramPacket(buf, buf.length);
-                    ds.receive(p);
-                    handleUdp(ds, p);
+            while (running) {
+                try (java.net.DatagramSocket ds = new java.net.DatagramSocket(config.port())) {
+                    ds.setSoTimeout(1000);
+                    log.info("UDP Responder listening on port {}", config.port());
+                    byte[] buf = new byte[1024];
+                    while (running) {
+                        try {
+                            java.net.DatagramPacket p = new java.net.DatagramPacket(buf, buf.length);
+                            ds.receive(p);
+                            handleUdp(ds, p);
+                        } catch (java.net.SocketTimeoutException e) {
+                            // Timeout, check 'running'
+                        }
+                    }
+                } catch (IOException e) {
+                    if (running) {
+                        log.error("UDP Error (retrying in 5s): {}", e.getMessage());
+                        try {
+                            Thread.sleep(5000);
+                        } catch (InterruptedException ie) {
+                            Thread.currentThread().interrupt();
+                            break;
+                        }
+                    }
                 }
-            } catch (IOException e) {
-                if (running) log.error("UDP Error: {}", e.getMessage());
             }
         });
     }

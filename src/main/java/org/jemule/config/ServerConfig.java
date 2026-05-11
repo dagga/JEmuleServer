@@ -35,6 +35,16 @@ public record ServerConfig(
         int cbMinimumNumberOfCalls,
         int cbWaitDurationInSeconds
 ) {
+    public ServerConfig {
+        if (port < 1 || port > 65535) {
+            throw new IllegalArgumentException("Port must be between 1 and 65535");
+        }
+        if (port < 1024) {
+            // Non-blocking warning for privileged ports
+            System.err.println("[WARNING] Running on a privileged port (" + port + "). This might require root privileges.");
+        }
+    }
+
     public static final ServerConfig DEFAULT = new ServerConfig(
             4661,
             2 * 1024 * 1024,

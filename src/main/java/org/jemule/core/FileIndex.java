@@ -36,9 +36,14 @@ public class FileIndex {
         this.db = db;
         this.eventManager = eventManager;
         if (db != null) {
-            List<FileMetadata> loaded = db.loadFiles();
-            for (FileMetadata meta : loaded) {
-                indexInMemory(meta);
+            try {
+                List<FileMetadata> loaded = db.loadFiles();
+                for (FileMetadata meta : loaded) {
+                    indexInMemory(meta);
+                }
+            } catch (Exception e) {
+                // If DB fails during load, we continue with empty memory index
+                // DatabaseManager with CircuitBreaker should handle specific errors
             }
         }
     }
