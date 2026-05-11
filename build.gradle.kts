@@ -1,8 +1,16 @@
-import com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar
+
+import org.gradle.api.plugins.JavaPluginExtension
+import org.gradle.api.tasks.testing.Test
+import org.gradle.api.tasks.JavaExec
+import org.gradle.api.tasks.SourceSetContainer
+import org.gradle.api.tasks.compile.JavaCompile
+import org.gradle.api.tasks.bundling.Jar
+import org.gradle.testing.jacoco.tasks.JacocoReport
 
 plugins {
     java
-    id("com.gradleup.shadow") version "8.3.0"
+    id("com.github.johnrengelman.shadow") version "8.1.1"
+    jacoco
 }
 
 group = "org.jemule"
@@ -32,13 +40,23 @@ dependencies {
 
 tasks.withType<Test>().configureEach {
     useJUnitPlatform()
+    finalizedBy(tasks.named("jacocoTestReport"))
+}
+
+tasks.named<JacocoReport>("jacocoTestReport").configure {
+    dependsOn(tasks.named("test"))
+    reports {
+        xml.required.set(false)
+        csv.required.set(false)
+        html.required.set(true)
+    }
 }
 
 tasks.withType<JavaCompile>().configureEach {
     options.compilerArgs.add("-parameters")
 }
 
-tasks.withType<ShadowJar>().configureEach {
+tasks.named<Jar>("shadowJar").configure {
     archiveBaseName.set("JEmuleServer")
     archiveClassifier.set("")
     manifest {

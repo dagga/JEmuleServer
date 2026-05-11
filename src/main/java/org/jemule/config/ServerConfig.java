@@ -19,6 +19,22 @@
 
 package org.jemule.config;
 
+/**
+ * Configuration parameters for the JEmuleServer.
+ *
+ * @param port                       The port to listen on for TCP/UDP connections.
+ * @param maxPacketSize              Maximum allowed size for incoming packets.
+ * @param maxSearchResults           Limit of results returned per search.
+ * @param floodMaxRequestsPerSecond  Anti-flood threshold per IP.
+ * @param maxUsers                   Maximum concurrent users allowed on server.
+ * @param maxFiles                   Maximum global indexed files.
+ * @param maxFilesPerUser            Quota of files a single user can publish.
+ * @param maxSourcesPerFile          Maximum sources returned per file request.
+ * @param databasePath               Path to the H2 database file.
+ * @param cbFailureRateThreshold     Circuit Breaker: threshold percentage for opening.
+ * @param cbMinimumNumberOfCalls     Circuit Breaker: min calls before calculating rate.
+ * @param cbWaitDurationInSeconds    Circuit Breaker: how long to stay open.
+ */
 public record ServerConfig(
         int port,
         int maxPacketSize,
@@ -45,6 +61,9 @@ public record ServerConfig(
         }
     }
 
+    /**
+     * Default configuration for a standard eMule server.
+     */
     public static final ServerConfig DEFAULT = new ServerConfig(
             4661,
             2 * 1024 * 1024,

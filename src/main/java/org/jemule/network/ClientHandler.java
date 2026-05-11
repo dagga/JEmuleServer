@@ -21,10 +21,6 @@ package org.jemule.network;
 
 import org.jemule.Main;
 import org.jemule.config.ServerConfig;
-import org.jemule.core.ClientRegistry;
-import org.jemule.core.ClientState;
-import org.jemule.core.FileIndex;
-import org.jemule.core.FileMetadata;
 import org.jemule.core.*;
 import org.jemule.protocol.OpCode;
 import org.jemule.protocol.Tag;
@@ -69,38 +65,36 @@ public class ClientHandler implements Runnable {
         this.clientFactory = clientFactory;
     }
 
+    /**
+     * Entry point of the client handler thread.
+     * Manages the lifecycle of a single client connection, from handshake to disconnection.
+     */
     @Override
     public void run() {
         try {
-            // Set socket timeout (30 seconds)
             socket.setSoTimeout(30000);
-
-            InputStream in = socket.getInputStream();
-            OutputStream out = socket.getOutputStream();
             String remoteAddr = maskIp(socket.getRemoteSocketAddress().toString());
             log.info("Client connected: {}", remoteAddr);
-            if (eventManager != null) {
-                eventManager.broadcast(new ClientEvent(ClientEvent.CONNECTED, remoteAddr, "anonymous", "Client connected"));
-            }
+            broadcastEvent(ClientEvent.CONNECTED, remoteAddr, "anonymous", "Client connected");
+
             if (!floodProtector.allow(socket.getInetAddress())) {
                 log.warn("Flood blocked: {}", socket.getInetAddress());
                 return;
             }
 
-            // Negotiation / Obfuscation detection
-            in = negotiateObfuscation(in, out);
-
+            InputStream in = negotiateObfuscation(socket.getInputStream(), socket.getOutputStream());
             Packet p = Packet.read(in, config.maxPacketSize());
-            if (p.protocol() != Packet.PROTOCOL_ED2K && p.protocol() != Packet.PROTOCOL_EMULE && p.protocol() != Packet.PROTOCOL_ZLIB) {
-                throw new IOException("Unsupported protocol: " + String.format("0x%02X", p.protocol()));
-            }
+            validateProtocol(p.protocol());
 
+            OutputStream out = wrappedOut != null ? wrappedOut : socket.getOutputStream();
             handleLogin(p, out);
 
             while (!socket.isClosed()) {
                 try {
                     Packet nextP = Packet.read(in, config.maxPacketSize());
-                    if (floodProtector.allow(socket.getInetAddress())) processPacket(nextP, wrappedOut != null ? wrappedOut : out);
+                    if (floodProtector.allow(socket.getInetAddress())) {
+                        processPacket(nextP, out);
+                    }
                 } catch (EOFException e) {
                     break;
                 }
@@ -108,19 +102,41 @@ public class ClientHandler implements Runnable {
         } catch (IOException e) {
             log.error("IO Error: {}", e.getMessage());
         } finally {
-            String remoteAddr = socket.getRemoteSocketAddress().toString();
-            if (state != null) registry.remove(state);
-            try {
-                socket.close();
-            } catch (IOException ignored) {
-            }
-            log.info("Disconnected: {}", remoteAddr);
-            if (eventManager != null) {
-                eventManager.broadcast(new ClientEvent(ClientEvent.DISCONNECTED, remoteAddr, state != null ? String.valueOf(state.clientId()) : "anonymous", "Client disconnected"));
-            }
+            cleanup();
         }
     }
 
+    private void validateProtocol(byte protocol) throws IOException {
+        if (protocol != Packet.PROTOCOL_ED2K && protocol != Packet.PROTOCOL_EMULE && protocol != Packet.PROTOCOL_ZLIB) {
+            throw new IOException("Unsupported protocol: " + String.format("0x%02X", protocol));
+        }
+    }
+
+    private void broadcastEvent(String type, String addr, String id, String msg) {
+        if (eventManager != null) {
+            eventManager.broadcast(new ClientEvent(type, addr, id, msg));
+        }
+    }
+
+    private void cleanup() {
+        String remoteAddr = socket.getRemoteSocketAddress().toString();
+        if (state != null) registry.remove(state);
+        try {
+            socket.close();
+        } catch (IOException ignored) {}
+        log.info("Disconnected: {}", remoteAddr);
+        broadcastEvent(ClientEvent.DISCONNECTED, remoteAddr, 
+            state != null ? String.valueOf(state.clientId()) : "anonymous", "Client disconnected");
+    }
+
+    /**
+     * Determines if the connection is obfuscated and returns the appropriate input stream.
+     *
+     * @param in  The original input stream.
+     * @param out The original output stream.
+     * @return A {@link PushbackInputStream} or a decrypted stream if obfuscated.
+     * @throws IOException If a network error occurs.
+     */
     private InputStream negotiateObfuscation(InputStream in, OutputStream out) throws IOException {
         PushbackInputStream pin = new PushbackInputStream(in, 1);
         int firstByte = pin.read();
@@ -138,15 +154,22 @@ public class ClientHandler implements Runnable {
         return pin;
     }
 
+    /**
+     * Performs the eMule obfuscation handshake (RC4).
+     *
+     * @param firstByte The first byte already read from the stream.
+     * @param in        The input stream.
+     * @param out       The output stream.
+     * @return A decrypted input stream wrapper.
+     * @throws IOException If the handshake fails or an attack is detected.
+     */
     private InputStream handleObfuscatedHandshake(int firstByte, InputStream in, OutputStream out) throws IOException {
         // Obfuscated handshake:
         // Client -> Server: [1 byte random] [4 bytes random] [1 byte 0x97] [n bytes random] [1 byte padding len] [n bytes padding] [1 byte encryption method]
-        // But eMule clients usually send a bigger chunk.
-        // Let's use a DataInputStream for convenience
         DataInputStream dis = new DataInputStream(in);
         byte[] clientRandom = new byte[4];
         dis.readFully(clientRandom);
-        
+
         // Anti-replay check
         if (Obfuscation.isReplay(clientRandom)) {
             throw new IOException("Replay attack detected from " + socket.getRemoteSocketAddress());
@@ -166,47 +189,14 @@ public class ClientHandler implements Runnable {
         receiveRC4.crypt(new byte[1024]);
         sendRC4.crypt(new byte[1024]);
 
-        // Handshake is encrypted from now on
-        // Read random bytes until padding len
-        // We don't know exactly how many random bytes were sent before 0x97, 
-        // but typically the client sends [1 random] [4 random] [0x97] [random...] [padding_len] [padding] [method]
-        // Actually, the spec says: [Random byte] [4 random (used for key)] [0x97] [Random bytes] [1 byte PaddingLen] [Padding] [1 byte EncryptionMethod]
-        // We need to read until we find a valid PaddingLen and EncryptionMethod.
-        // Since we already read 6 bytes (1 + 4 + 1), we continue.
+        // Wrap streams
+        InputStream encryptedIn = new ObfuscatedInputStream(in, receiveRC4);
         
-        // Use a wrapper to decrypt on the fly
-        InputStream encryptedIn = new InputStream() {
-            @Override
-            public int read() throws IOException {
-                int b = in.read();
-                if (b == -1) return -1;
-                byte[] data = {(byte) b};
-                receiveRC4.crypt(data);
-                return data[0] & 0xFF;
-            }
-
-            @Override
-            public int read(byte[] b, int off, int len) throws IOException {
-                int r = in.read(b, off, len);
-                if (r > 0) receiveRC4.crypt(b, off, r);
-                return r;
-            }
-        };
-
-        // Read remaining handshake (random + padding_len + padding + method)
-        // This is tricky because "random bytes" length is variable. 
-        // eMule usually sends a fixed amount or we read until we get the method.
-        // Lugdunum uses some heuristic. 
-        // For simplicity, we'll read a reasonable amount or wait for the method byte.
-        // Usually, total handshake is around 20-50 bytes.
-        
-        // Actually, many implementations expect at least one byte of encryption method.
-        // Let's skip random bytes. 0x00 is Obfuscation method.
+        // Read until EncryptionMethod = Obfuscation (0x00)
         int method = -1;
-        // Read up to 256 bytes to find the method
         for (int k = 0; k < 256; k++) {
             int b = encryptedIn.read();
-            if (b == 0x00) { // Found EncryptionMethod = Obfuscation
+            if (b == 0x00) {
                 method = b;
                 break;
             }
@@ -229,41 +219,80 @@ public class ClientHandler implements Runnable {
 
         log.info("Obfuscation handshake complete for {}", socket.getRemoteSocketAddress());
         obfuscated = true;
-
-        // Wrap output stream as well
-        final OutputStream originalOut = out;
-        OutputStream encryptedOut = new OutputStream() {
-            @Override
-            public void write(int b) throws IOException {
-                byte[] data = {(byte) b};
-                sendRC4.crypt(data);
-                originalOut.write(data[0]);
-            }
-
-            @Override
-            public void write(byte[] b, int off, int len) throws IOException {
-                byte[] copy = Arrays.copyOfRange(b, off, off + len);
-                sendRC4.crypt(copy);
-                originalOut.write(copy);
-            }
-
-            @Override
-            public void flush() throws IOException {
-                originalOut.flush();
-            }
-        };
-
-        // Replace 'out' in handleLogin with this one. 
-        // Since run() uses local variables for in/out, we need to return the wrapped in.
-        // But handleLogin takes out. We'll need to pass the wrapped out.
-        // I will refactor run() to use fields for streams or pass them around.
-        
-        this.wrappedOut = encryptedOut;
+        this.wrappedOut = new ObfuscatedOutputStream(out, sendRC4);
         return encryptedIn;
+    }
+
+    /**
+     * Helper stream to decrypt data on the fly using RC4.
+     */
+    private static class ObfuscatedInputStream extends InputStream {
+        private final InputStream in;
+        private final Obfuscation.RC4 rc4;
+
+        public ObfuscatedInputStream(InputStream in, Obfuscation.RC4 rc4) {
+            this.in = in;
+            this.rc4 = rc4;
+        }
+
+        @Override
+        public int read() throws IOException {
+            int b = in.read();
+            if (b == -1) return -1;
+            byte[] data = {(byte) b};
+            rc4.crypt(data);
+            return data[0] & 0xFF;
+        }
+
+        @Override
+        public int read(byte[] b, int off, int len) throws IOException {
+            int r = in.read(b, off, len);
+            if (r > 0) rc4.crypt(b, off, r);
+            return r;
+        }
+    }
+
+    /**
+     * Helper stream to encrypt data on the fly using RC4.
+     */
+    private static class ObfuscatedOutputStream extends OutputStream {
+        private final OutputStream out;
+        private final Obfuscation.RC4 rc4;
+
+        public ObfuscatedOutputStream(OutputStream out, Obfuscation.RC4 rc4) {
+            this.out = out;
+            this.rc4 = rc4;
+        }
+
+        @Override
+        public void write(int b) throws IOException {
+            byte[] data = {(byte) b};
+            rc4.crypt(data);
+            out.write(data[0]);
+        }
+
+        @Override
+        public void write(byte[] b, int off, int len) throws IOException {
+            byte[] copy = Arrays.copyOfRange(b, off, off + len);
+            rc4.crypt(copy);
+            out.write(copy);
+        }
+
+        @Override
+        public void flush() throws IOException {
+            out.flush();
+        }
     }
 
     private OutputStream wrappedOut;
 
+    /**
+     * Processes the initial login packet and establishes the client session.
+     *
+     * @param initialPacket The first packet received from the client.
+     * @param out           The output stream to send responses.
+     * @throws IOException If login fails or network error occurs.
+     */
     private void handleLogin(Packet initialPacket, OutputStream out) throws IOException {
         if (wrappedOut != null) out = wrappedOut;
         byte[] data = initialPacket.data();
@@ -311,6 +340,13 @@ public class ClientHandler implements Runnable {
         sendServerStatus(out);
     }
 
+    /**
+     * Sends a text message to the client (typically used for MotD).
+     *
+     * @param out The output stream.
+     * @param msg The message string.
+     * @throws IOException If sending fails.
+     */
     private void sendServerMessage(OutputStream out, String msg) throws IOException {
         byte[] content = msg.getBytes(StandardCharsets.UTF_8);
         ByteBuffer buf = ByteBuffer.allocate(2 + content.length).order(ByteOrder.LITTLE_ENDIAN);
@@ -319,6 +355,12 @@ public class ClientHandler implements Runnable {
         new Packet(Packet.PROTOCOL_ED2K, OpCode.SERVER_MESSAGE.value, buf.array()).write(out, state.isZlibSupported());
     }
 
+    /**
+     * Sends the server identification packet (OpCode 0x41) including tags.
+     *
+     * @param out The output stream.
+     * @throws IOException If sending fails.
+     */
     private void sendServerIdent(OutputStream out) throws IOException {
         byte[] hash = new byte[16]; // Empty hash
         short port = (short) config.port();
@@ -363,6 +405,12 @@ public class ClientHandler implements Runnable {
         new Packet(Packet.PROTOCOL_ED2K, OpCode.SERVER_IDENT.value, response).write(out, state.isZlibSupported());
     }
 
+    /**
+     * Sends the current server status (OpCode 0x34) including user and file counts.
+     *
+     * @param out The output stream.
+     * @throws IOException If sending fails.
+     */
     private void sendServerStatus(OutputStream out) throws IOException {
         ByteBuffer buf = ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN);
         buf.putInt(registry.size());
@@ -372,6 +420,13 @@ public class ClientHandler implements Runnable {
         new Packet(Packet.PROTOCOL_ED2K, OpCode.SERVER_STATUS.value, buf.array()).write(out, state.isZlibSupported());
     }
 
+    /**
+     * Dispatches the received packet to the appropriate handler method.
+     *
+     * @param p   The received packet.
+     * @param out The output stream for responses.
+     * @throws IOException If handling fails.
+     */
     private void processPacket(Packet p, OutputStream out) throws IOException {
         state.lastActivity().set(System.currentTimeMillis());
         OpCode op = OpCode.fromByte(p.protocol(), p.opcode());
@@ -386,6 +441,13 @@ public class ClientHandler implements Runnable {
         }
     }
 
+    /**
+     * Handles eMule capability information packets (OpCode 0xC5:0x01).
+     *
+     * @param data The packet payload.
+     * @param out  The output stream for the ACK.
+     * @throws IOException If sending fails.
+     */
     private void handleEmuleInfo(byte[] data, OutputStream out) throws IOException {
         log.debug("Received EMULE_INFO from {}", socket.getRemoteSocketAddress());
         // For now, just ACK it with basic server info or empty EMULE_INFO_ACK
@@ -393,6 +455,14 @@ public class ClientHandler implements Runnable {
         new Packet(Packet.PROTOCOL_EMULE, OpCode.EMULE_INFO_ACK.value, new byte[0]).write(out, state.isZlibSupported());
     }
 
+    /**
+     * Handles file search requests (OpCode 0x16).
+     * Supports both complex (binary tree) and simple (textual) search fallbacks.
+     *
+     * @param data The search query data.
+     * @param out  The output stream for results.
+     * @throws IOException If sending results fails.
+     */
     private void handleSearch(byte[] data, OutputStream out) throws IOException {
         if (data == null || data.length < 1) {
             log.warn("Invalid search request: empty data");
@@ -427,6 +497,14 @@ public class ClientHandler implements Runnable {
         new Packet(Packet.PROTOCOL_ED2K, OpCode.SEARCH_RESULT.value, baos.toByteArray()).write(out, state.isZlibSupported());
     }
 
+    /**
+     * Handles file publication requests (OpCode 0x20).
+     * Validates quotas and metadata before adding to the index.
+     *
+     * @param data The publication data string.
+     * @param out  The output stream for ACK.
+     * @throws IOException If sending ACK fails.
+     */
     private void handlePublish(byte[] data, OutputStream out) throws IOException {
         if (data == null || data.length == 0) {
             log.warn("Invalid publish request: empty data");
@@ -469,6 +547,13 @@ public class ClientHandler implements Runnable {
         new Packet(Packet.PROTOCOL_ED2K, OpCode.PUBLISH_ACK.value, new byte[0]).write(out, state.isZlibSupported());
     }
 
+    /**
+     * Handles requests for file sources (OpCode 0x15 or 0xC5:0x23).
+     *
+     * @param data The file hash.
+     * @param out  The output stream for results.
+     * @throws IOException If sending results fails.
+     */
     private void handleGetSources(byte[] data, OutputStream out) throws IOException {
         String hash = new String(data, StandardCharsets.UTF_8).trim();
         if (hash.length() != 32) {

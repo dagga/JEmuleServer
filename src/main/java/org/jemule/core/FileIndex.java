@@ -25,8 +25,11 @@ import org.jemule.core.event.FileEvent;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 
+/**
+ * Manages the global file index for the server.
+ * Provides fast full-text and complex search capabilities using an inverted index.
+ */
 public class FileIndex {
     private final ConcurrentHashMap<String, FileMetadata> byHash = new ConcurrentHashMap<>();
     private final ConcurrentSkipListMap<String, Set<String>> invertedIndex = new ConcurrentSkipListMap<>();
@@ -42,6 +45,12 @@ public class FileIndex {
         }
     });
 
+    /**
+     * Constructs a FileIndex, optionally loading existing files from the database.
+     *
+     * @param db           The database manager for persistence.
+     * @param eventManager The event manager for broadcasting file events.
+     */
     public FileIndex(DatabaseManager db, EventManager eventManager) {
         this.db = db;
         this.eventManager = eventManager;
@@ -62,6 +71,11 @@ public class FileIndex {
         this(db, null);
     }
 
+    /**
+     * Registers a new file in the index and persists it to the database.
+     *
+     * @param meta The file metadata to add.
+     */
     public void addFile(FileMetadata meta) {
         indexInMemory(meta);
         searchCache.clear(); // Invalidate cache when adding a new file
@@ -85,6 +99,15 @@ public class FileIndex {
         }
     }
 
+    /**
+     * Retrieves a list of clients (sources) currently sharing a file.
+     * Implements IP proximity sorting and diversity via shuffling.
+     *
+     * @param hash      The MD4 hash of the file.
+     * @param requester The client state of the requester (for proximity matching).
+     * @param limit     The maximum number of sources to return.
+     * @return A list of {@link ClientState} representing sources.
+     */
     public List<ClientState> getSources(String hash, ClientState requester, int limit) {
         FileMetadata m = byHash.get(hash);
         if (m == null) return Collections.emptyList();
@@ -125,6 +148,13 @@ public class FileIndex {
         return score;
     }
 
+    /**
+     * Executes a complex search query using boolean logic and filters.
+     *
+     * @param query The parsed {@link SearchQuery}.
+     * @param limit The maximum number of results.
+     * @return A list of matching {@link FileMetadata}.
+     */
     public List<FileMetadata> searchComplex(SearchQuery query, int limit) {
         if (eventManager != null) {
             eventManager.broadcast(new FileEvent(FileEvent.SEARCHED, "ComplexQuery", "", "Complex search executed"));
@@ -135,6 +165,14 @@ public class FileIndex {
                 .toList();
     }
 
+    /**
+     * Executes a simple keyword-based search.
+     * Supports prefix matching and uses a result cache for performance.
+     *
+     * @param query The textual query string.
+     * @param limit The maximum number of results.
+     * @return A list of matching {@link FileMetadata}.
+     */
     public List<FileMetadata> search(String query, int limit) {
         if (eventManager != null) {
             eventManager.broadcast(new FileEvent(FileEvent.SEARCHED, query, "", "Search executed: " + query));
@@ -187,6 +225,11 @@ public class FileIndex {
         return res;
     }
 
+    /**
+     * Returns the total number of files indexed.
+     *
+     * @return The file count.
+     */
     public int fileCount() {
         return byHash.size();
     }

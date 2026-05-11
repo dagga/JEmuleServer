@@ -10,7 +10,7 @@ class SearchQueryBuilderTest {
     @Test
     void testTermBuilder() {
         SearchQuery query = builder.term("test", SearchQuery.ID_FILENAME);
-        assertTrue(query instanceof SearchQuery.TermQuery);
+        assertInstanceOf(SearchQuery.TermQuery.class, query);
         
         FileMetadata meta = new FileMetadata("HASH", "test_file.txt", 100, "Text", java.util.List.of());
         assertTrue(query.test(meta));
@@ -26,7 +26,7 @@ class SearchQueryBuilderTest {
     @Test
     void testSizeBuilder() {
         SearchQuery query = builder.size(1000, SearchQuery.MODE_MIN);
-        assertTrue(query instanceof SearchQuery.SizeQuery);
+        assertInstanceOf(SearchQuery.SizeQuery.class, query);
         
         FileMetadata meta = new FileMetadata("HASH", "file.txt", 2000, "Text", java.util.List.of());
         assertTrue(query.test(meta));
@@ -44,13 +44,13 @@ class SearchQueryBuilderTest {
         SearchQuery right = builder.term("B", SearchQuery.ID_FILENAME);
         
         SearchQuery andQuery = builder.and(left, right);
-        assertTrue(andQuery instanceof SearchQuery.AndQuery);
+        assertInstanceOf(SearchQuery.AndQuery.class, andQuery);
         
         SearchQuery orQuery = builder.or(left, right);
-        assertTrue(orQuery instanceof SearchQuery.OrQuery);
+        assertInstanceOf(SearchQuery.OrQuery.class, orQuery);
         
         SearchQuery notQuery = builder.not(left, right);
-        assertTrue(notQuery instanceof SearchQuery.NotQuery);
+        assertInstanceOf(SearchQuery.NotQuery.class, notQuery);
     }
 
     @Test

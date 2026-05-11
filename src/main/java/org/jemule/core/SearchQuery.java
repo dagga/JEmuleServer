@@ -1,7 +1,5 @@
 package org.jemule.core;
 
-import org.jemule.protocol.Tag;
-
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;

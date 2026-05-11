@@ -24,6 +24,17 @@ import org.jemule.protocol.Tag;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 
+/**
+ * Represents metadata for a file indexed by the server.
+ * Includes hash, name, size, type, and the collection of sources (clients) sharing it.
+ *
+ * @param hash    The 16-byte MD4 hash as a 32-character hex string.
+ * @param name    The filename.
+ * @param size    The file size in bytes.
+ * @param type    The file category (e.g., Video, Audio, Archive).
+ * @param tags    Additional metadata tags.
+ * @param sources Map of client IDs to {@link ClientState} currently sharing this file.
+ */
 public record FileMetadata(
         String hash,
         String name,

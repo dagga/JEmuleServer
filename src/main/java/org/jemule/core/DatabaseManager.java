@@ -26,7 +26,6 @@ import org.slf4j.LoggerFactory;
 
 import java.sql.*;
 import java.util.ArrayList;
-import java.util.Base64;
 import java.util.List;
 
 public class DatabaseManager implements AutoCloseable {

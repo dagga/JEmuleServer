@@ -72,7 +72,7 @@ public class Obfuscation {
      */
     private static final int MAX_NONCES = 10000;
     private static final java.util.Map<java.nio.ByteBuffer, Boolean> seenNonces = 
-        java.util.Collections.synchronizedMap(new java.util.LinkedHashMap<java.nio.ByteBuffer, Boolean>(MAX_NONCES, 0.75f, true) {
+        java.util.Collections.synchronizedMap(new java.util.LinkedHashMap<>(MAX_NONCES, 0.75f, true) {
             @Override
             protected boolean removeEldestEntry(java.util.Map.Entry<java.nio.ByteBuffer, Boolean> eldest) {
                 return size() > MAX_NONCES;

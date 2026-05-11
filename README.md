@@ -69,22 +69,22 @@ sudo firewall-cmd --list-ports
 
 Here is a comparison between JEmuleServer and the historical **eServer (Lugdunum)**:
 
-| Feature | JEmuleServer | eServer (Lugdunum) |
-| :--- | :---: | :---: |
-| **Language / Runtime** | Java 21 (Virtual Threads) | C / C++ (Native) |
-| **Protocol Obfuscation (RC4)** | ✅ Supported | ✅ Supported |
-| **ZLIB Compression** | ✅ Supported | ✅ Supported |
-| **Advanced Search (AND/OR/NOT)** | ✅ Supported | ✅ Supported |
-| **Large Files (>4GB) Support** | ✅ Supported | ✅ Supported |
-| **Lugdunum Extensions (0x40-0x42)** | ✅ Supported | ✅ Supported |
-| **Embedded Database** | ✅ Supported (H2) | ❌ No (Memory/Files) |
-| **User Quotas** | ✅ Supported | ✅ Supported |
-| **Event-Driven Monitoring** | ✅ Supported | ❌ No |
-| **IP Filtering (ipfilter.dat)** | 🚧 In Progress | ✅ Supported |
-| **LowID Management (Callback)** | 🚧 In Progress | ✅ Supported |
-| **External Config File** | 🚧 In Progress | ✅ Supported |
-| **Web Admin Interface** | ❌ Planned | ✅ Supported |
-| **IPv6 Support** | ❌ Planned | ❌ No |
+| Feature                             |       JEmuleServer        | eServer (Lugdunum)  |
+|:------------------------------------|:-------------------------:|:-------------------:|
+| **Language / Runtime**              | Java 21 (Virtual Threads) |  C / C++ (Native)   |
+| **Protocol Obfuscation (RC4)**      |        ✅ Supported        |     ✅ Supported     |
+| **ZLIB Compression**                |        ✅ Supported        |     ✅ Supported     |
+| **Advanced Search (AND/OR/NOT)**    |        ✅ Supported        |     ✅ Supported     |
+| **Large Files (>4GB) Support**      |        ✅ Supported        |     ✅ Supported     |
+| **Lugdunum Extensions (0x40-0x42)** |        ✅ Supported        |     ✅ Supported     |
+| **Embedded Database**               |     ✅ Supported (H2)      | ❌ No (Memory/Files) |
+| **User Quotas**                     |        ✅ Supported        |     ✅ Supported     |
+| **Event-Driven Monitoring**         |        ✅ Supported        |        ❌ No         |
+| **IP Filtering (ipfilter.dat)**     |      🚧 In Progress       |     ✅ Supported     |
+| **LowID Management (Callback)**     |      🚧 In Progress       |     ✅ Supported     |
+| **External Config File**            |      🚧 In Progress       |     ✅ Supported     |
+| **Web Admin Interface**             |         ❌ Planned         |     ✅ Supported     |
+| **IPv6 Support**                    |         ❌ Planned         |        ❌ No         |
 
 ## License
 

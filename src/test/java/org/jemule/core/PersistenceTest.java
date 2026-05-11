@@ -39,12 +39,12 @@ class PersistenceTest {
             assertEquals(1, index.fileCount(), "File count should be 1 after loading from DB");
             List<FileMetadata> results = index.search("test", 10);
             assertEquals(1, results.size(), "Search should return 1 result");
-            FileMetadata loaded = results.get(0);
+            FileMetadata loaded = results.getFirst();
             assertEquals(file.hash(), loaded.hash());
             assertEquals(file.name(), loaded.name());
             assertEquals(file.size(), loaded.size());
             assertEquals(1, loaded.tags().size());
-            assertEquals("A test file", loaded.tags().get(0).value());
+            assertEquals("A test file", loaded.tags().getFirst().value());
         }
     }
 

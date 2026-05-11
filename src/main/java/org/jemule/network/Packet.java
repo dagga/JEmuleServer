@@ -27,12 +27,32 @@ import java.util.zip.DataFormatException;
 import java.util.zip.Deflater;
 import java.util.zip.Inflater;
 
+/**
+ * Represents an ed2k/eMule network packet.
+ * Handles serialization, deserialization, and optional ZLIB compression.
+ *
+ * @param protocol The protocol identifier (0xE3, 0xC5, or 0xD4).
+ * @param opcode   The operation code within the protocol.
+ * @param data     The payload data of the packet.
+ */
 public record Packet(byte protocol, byte opcode, byte[] data) {
+    /** Protocol ID for standard eDonkey2000 (ed2k) packets. */
     public static final byte PROTOCOL_ED2K = (byte) 0xE3;
+    /** Protocol ID for eMule extended packets. */
     public static final byte PROTOCOL_EMULE = (byte) 0xC5;
+    /** Protocol ID for ZLIB compressed packets. */
     public static final byte PROTOCOL_ZLIB = (byte) 0xD4;
+    /** Fixed size of the packet header (1 byte protocol + 4 bytes length + 1 byte opcode). */
     public static final int HEADER_SIZE = 6;
 
+    /**
+     * Reads a packet from an input stream.
+     *
+     * @param in            The input stream to read from.
+     * @param maxPacketSize The maximum allowed packet length to prevent DoS.
+     * @return A new {@link Packet} instance.
+     * @throws IOException If a network error occurs or packet is malformed.
+     */
     public static Packet read(InputStream in, int maxPacketSize) throws IOException {
         byte[] header = in.readNBytes(HEADER_SIZE);
         if (header.length < HEADER_SIZE) {
@@ -57,6 +77,13 @@ public record Packet(byte protocol, byte opcode, byte[] data) {
         return new Packet(protocol, opcode, data);
     }
 
+    /**
+     * Writes this packet to an output stream.
+     *
+     * @param out            The output stream to write to.
+     * @param useCompression Whether to use ZLIB compression if the payload is large enough.
+     * @throws IOException If a network error occurs.
+     */
     public void write(OutputStream out, boolean useCompression) throws IOException {
         byte proto = protocol;
         byte[] payload = data;

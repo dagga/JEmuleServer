@@ -1,7 +1,6 @@
 package org.jemule.core;
 
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
-import org.jemule.config.ServerConfig;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 

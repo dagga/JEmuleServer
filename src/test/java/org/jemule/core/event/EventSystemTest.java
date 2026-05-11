@@ -1,16 +1,10 @@
 package org.jemule.core.event;
 
-import org.jemule.config.ServerConfig;
 import org.jemule.core.*;
-import org.jemule.network.ClientHandler;
-import org.jemule.security.FloodProtector;
 import org.junit.jupiter.api.Test;
 
-import java.net.InetAddress;
-import java.net.Socket;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -27,8 +21,8 @@ public class EventSystemTest {
         em.broadcast(ce);
         
         assertEquals(1, received.size());
-        assertEquals(ClientEvent.CONNECTED, received.get(0).getType());
-        assertEquals("127.0.0.1", ((ClientEvent)received.get(0)).getClientIp());
+        assertEquals(ClientEvent.CONNECTED, received.getFirst().getType());
+        assertEquals("127.0.0.1", ((ClientEvent)received.getFirst()).getClientIp());
     }
 
     @Test
@@ -46,8 +40,8 @@ public class EventSystemTest {
         
         assertEquals(1, clientEvents.size());
         assertEquals(1, fileEvents.size());
-        assertEquals(ClientEvent.CONNECTED, clientEvents.get(0).getType());
-        assertEquals(FileEvent.PUBLISHED, fileEvents.get(0).getType());
+        assertEquals(ClientEvent.CONNECTED, clientEvents.getFirst().getType());
+        assertEquals(FileEvent.PUBLISHED, fileEvents.getFirst().getType());
     }
 
     @Test
@@ -62,8 +56,8 @@ public class EventSystemTest {
         index.addFile(meta);
         
         assertEquals(1, events.size());
-        assertTrue(events.get(0) instanceof FileEvent);
-        assertEquals(FileEvent.PUBLISHED, events.get(0).getType());
+        assertInstanceOf(FileEvent.class, events.getFirst());
+        assertEquals(FileEvent.PUBLISHED, events.getFirst().getType());
         
         index.search("test", 10);
         assertEquals(2, events.size());

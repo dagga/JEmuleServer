@@ -40,6 +40,10 @@ import java.sql.SQLException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+/**
+ * Main server class that coordinates networking, security, and data management.
+ * Uses Java 21 Virtual Threads to handle massive concurrency.
+ */
 public class Server {
     private static final Logger log = LoggerFactory.getLogger(Server.class);
     private final ServerConfig config;
@@ -52,6 +56,12 @@ public class Server {
     private final ClientFactory clientFactory;
     private volatile boolean running = true;
 
+    /**
+     * Initializes the server with configuration and core components.
+     *
+     * @param config        The server configuration.
+     * @param clientFactory The factory for creating client states.
+     */
     public Server(ServerConfig config, ClientFactory clientFactory) {
         this.config = config;
         this.clientFactory = clientFactory;
@@ -87,6 +97,11 @@ public class Server {
         });
     }
 
+    /**
+     * Starts the TCP server loop and the UDP responder.
+     *
+     * @throws IOException If the server cannot bind to the configured port.
+     */
     public void start() throws IOException {
         try (ServerSocket ss = new ServerSocket(config.port())) {
             ss.setSoTimeout(1000); // Allow checking the 'running' flag periodically
@@ -168,6 +183,9 @@ public class Server {
         }
     }
 
+    /**
+     * Stops the server, shuts down executors, and closes the database.
+     */
     public void stop() {
         running = false;
         executor.shutdownNow();

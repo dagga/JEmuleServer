@@ -26,28 +26,60 @@ import java.util.List;
 /**
  * Represents an ed2k tag.
  */
+/**
+ * Represents an ed2k tag (TLV - Type Length Value).
+ * Used for exchanging metadata in packets.
+ *
+ * @param type  The data type of the tag value.
+ * @param name  The name of the tag (can be a special 1-byte code).
+ * @param value The actual data of the tag.
+ */
 public record Tag(byte type, String name, Object value) {
+    /** MD4 Hash type (16 bytes). */
     public static final byte TYPE_HASH = (byte) 0x01;
+    /** UTF-8 String type. */
     public static final byte TYPE_STRING = (byte) 0x02;
-    public static final byte TYPE_INTEGER = (byte) 0x03; // DWORD (4 bytes)
+    /** 32-bit Integer type (DWORD). */
+    public static final byte TYPE_INTEGER = (byte) 0x03;
+    /** 32-bit Float type. */
     public static final byte TYPE_FLOAT = (byte) 0x04;
+    /** Boolean type (1 byte). */
     public static final byte TYPE_BOOL = (byte) 0x05;
+    /** Alternative Boolean type (1 byte). */
     public static final byte TYPE_BOOL_ALT = (byte) 0x06;
+    /** Arbitrary Blob type (4 bytes length prefix). */
     public static final byte TYPE_BLOB = (byte) 0x07;
+    /** 16-bit Integer type (short). */
     public static final byte TYPE_INT16 = (byte) 0x08;
+    /** 8-bit Integer type (byte). */
     public static final byte TYPE_INT8 = (byte) 0x09;
 
+    /** Special tag name for server/client version. */
     public static final String NAME_VERSION = "\u0011";
+    /** Special tag name for server/client port. */
     public static final String NAME_PORT = "\u000F";
+    /** Special tag name for client nickname. */
     public static final String NAME_NICK = "\u0001";
+    /** Special tag name for server name. */
     public static final String NAME_NAME = "\u0001";
+    /** Special tag name for server description. */
     public static final String NAME_DESCRIPTION = "\u000B";
+    /** Special tag name for TCP capabilities/flags. */
     public static final String NAME_TCP_FLAGS = "\u0090";
+    /** Special tag name for auxiliary port. */
     public static final String NAME_AUX_PORT = "\u0091";
+    /** Special tag name for maximum user limit. */
     public static final String NAME_MAX_USERS = "\u0092";
+    /** Special tag name for maximum file limit. */
     public static final String NAME_MAX_FILES = "\u0093";
+    /** Special tag name for eMule-specific version reporting (Lugdunum). */
     public static final String NAME_EMULE_VERSION = "\u00FB";
 
+    /**
+     * Serializes this tag into a {@link ByteBuffer}.
+     *
+     * @param buf The buffer to write into.
+     */
     public void write(ByteBuffer buf) {
         buf.put(type);
         
@@ -87,6 +119,12 @@ public record Tag(byte type, String name, Object value) {
         }
     }
 
+    /**
+     * Reads a single tag from a {@link ByteBuffer}.
+     *
+     * @param buf The buffer to read from.
+     * @return A new {@link Tag} instance.
+     */
     public static Tag read(ByteBuffer buf) {
         byte type = buf.get();
         int nameLen = Short.toUnsignedInt(buf.getShort());
@@ -128,6 +166,12 @@ public record Tag(byte type, String name, Object value) {
         return new Tag(type, name, value);
     }
 
+    /**
+     * Reads a list of tags from a {@link ByteBuffer} (prefixed by a 4-byte count).
+     *
+     * @param buf The buffer to read from.
+     * @return A list of tags.
+     */
     public static List<Tag> readList(ByteBuffer buf) {
         int count = buf.getInt();
         List<Tag> tags = new ArrayList<>(count);
@@ -137,6 +181,12 @@ public record Tag(byte type, String name, Object value) {
         return tags;
     }
 
+    /**
+     * Writes a list of tags into a {@link ByteBuffer} (prefixed by a 4-byte count).
+     *
+     * @param buf  The buffer to write into.
+     * @param tags The list of tags to serialize.
+     */
     public static void writeList(ByteBuffer buf, List<Tag> tags) {
         buf.putInt(tags.size());
         for (Tag tag : tags) {
