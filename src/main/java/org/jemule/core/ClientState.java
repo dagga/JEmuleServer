@@ -1,6 +1,6 @@
 /*
  * JEmuleServer - An experimental eMule server.
- * Copyright (C) 2026 Nicolas Hernandez (herniatgmail.com)
+ * Copyright (C) 2026 Nicolas Hernandez (hernicatgmail.com)
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Lesser General Public License as published by

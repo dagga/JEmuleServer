@@ -92,7 +92,7 @@ This project is distributed under the **GNU Lesser General Public License v3.0 (
 
 ## Author
 
-**Nicolas Hernandez** (herniatgmail.com)
+**Nicolas Hernandez** (hernicatgmail.com)
 
 ## Documentation
 
