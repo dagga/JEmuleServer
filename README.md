@@ -41,6 +41,24 @@ java -Djava.net.preferIPv4Stack=true -jar build/libs/JEmuleServer-0.1.0.jar [por
   use of IPv4).
 - `[port]`: Optional, defaults to 4661.
 
+## Firewall Configuration (Fedora)
+
+To allow clients to connect to your server, you must open the TCP and UDP ports (default 4661) in your firewall. On Fedora, use the following commands:
+
+```bash
+sudo firewall-cmd --add-port=4661/tcp --permanent
+sudo firewall-cmd --add-port=4661/udp --permanent
+sudo firewall-cmd --reload
+```
+
+You can verify that the ports are open with:
+
+```bash
+sudo firewall-cmd --list-ports
+```
+
+*Note: Don't forget to also configure Port Forwarding on your router/internet box if necessary.*
+
 ## License
 
 This project is distributed under the **GNU Lesser General Public License v3.0 (LGPLv3)**. See the `LICENSE.LGPL` and
