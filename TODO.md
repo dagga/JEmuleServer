@@ -19,7 +19,7 @@ servers (Lugdunum type).
 - [ ] **Advanced Search**: Support boolean operators (AND, OR, NOT) and filters (size, type, availability) in search
   queries.
 - [x] **Index Limitation**: Add per-user quotas for the number of published files.
-- [ ] **Source Management**: Improve the source return algorithm to favor diversity and proximity.
+- [x] **Source Management**: Improve the source return algorithm to favor diversity and proximity.
 
 ## 3. Security & Stability
 

@@ -58,9 +58,40 @@ public class FileIndex {
         }
     }
 
-    public Set<ClientState> getSources(String hash) {
+    public List<ClientState> getSources(String hash, ClientState requester, int limit) {
         FileMetadata m = byHash.get(hash);
-        return m != null ? Set.copyOf(m.sources().values()) : Set.of();
+        if (m == null) return Collections.emptyList();
+        
+        List<ClientState> all = new ArrayList<>(m.sources().values());
+        if (all.size() <= limit) {
+            Collections.shuffle(all);
+            return all;
+        }
+
+        // Diversité : on commence par mélanger
+        Collections.shuffle(all);
+
+        if (requester != null) {
+            byte[] reqIp = requester.address().getAddress();
+            // On trie pour mettre en avant la proximité IP (même /16 ou /24)
+            all.sort((a, b) -> {
+                int scoreA = calculateProximity(a.address().getAddress(), reqIp);
+                int scoreB = calculateProximity(b.address().getAddress(), reqIp);
+                return Integer.compare(scoreB, scoreA); // Plus haut score d'abord
+            });
+        }
+
+        return all.subList(0, limit);
+    }
+
+    private int calculateProximity(byte[] ipA, byte[] ipB) {
+        if (ipA.length != ipB.length) return 0;
+        int score = 0;
+        for (int i = 0; i < ipA.length; i++) {
+            if (ipA[i] == ipB[i]) score++;
+            else break;
+        }
+        return score;
     }
 
     public List<FileMetadata> search(String query, int limit) {

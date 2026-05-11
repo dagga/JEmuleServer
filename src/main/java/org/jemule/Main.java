@@ -42,6 +42,7 @@ public class Main {
                                 ServerConfig.DEFAULT.maxUsers(),
                                 ServerConfig.DEFAULT.maxFiles(),
                                 ServerConfig.DEFAULT.maxFilesPerUser(),
+                                ServerConfig.DEFAULT.maxSourcesPerFile(),
                                 ServerConfig.DEFAULT.databasePath()
                         );
             } catch (NumberFormatException e) {

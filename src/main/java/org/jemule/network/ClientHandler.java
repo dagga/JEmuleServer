@@ -394,13 +394,13 @@ public class ClientHandler implements Runnable {
 
     private void handleGetSources(byte[] data, OutputStream out) throws IOException {
         String hash = new String(data, StandardCharsets.UTF_8).trim();
-        var sources = fileIndex.getSources(hash);
+        var sources = fileIndex.getSources(hash, state, config.maxSourcesPerFile());
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         DataOutputStream dos = new DataOutputStream(baos);
         for (var s : sources) {
             dos.writeInt(s.clientId());
             dos.writeInt(ClientState.ipToInt(s.address()));
-            dos.writeShort(s.port());
+            dos.writeShort((short) s.port());
         }
         new Packet(Packet.PROTOCOL_ED2K, OpCode.SOURCES_RESULT.value, baos.toByteArray()).write(out, state.isZlibSupported());
     }
