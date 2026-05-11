@@ -20,6 +20,7 @@
 package org.jemule.network;
 
 import org.jemule.config.ServerConfig;
+import org.jemule.core.ClientFactory;
 import org.jemule.core.ClientRegistry;
 import org.jemule.core.DatabaseManager;
 import org.jemule.core.FileIndex;
@@ -48,10 +49,12 @@ public class Server {
     private final ExecutorService executor;
     private final DatabaseManager db;
     private final EventManager eventManager;
+    private final ClientFactory clientFactory;
     private volatile boolean running = true;
 
-    public Server(ServerConfig config) {
+    public Server(ServerConfig config, ClientFactory clientFactory) {
         this.config = config;
+        this.clientFactory = clientFactory;
         this.eventManager = new EventManager();
         setupDefaultListeners();
         this.floodProtector = new FloodProtector(config.floodMaxRequestsPerSecond());
@@ -95,7 +98,7 @@ public class Server {
                 try {
                     Socket c = ss.accept();
                     c.setTcpNoDelay(true);
-                    executor.submit(new ClientHandler(c, config, registry, fileIndex, floodProtector, eventManager));
+                    executor.submit(new ClientHandler(c, config, registry, fileIndex, floodProtector, eventManager, clientFactory));
                 } catch (IOException e) {
                     if (running) log.error("Accept error: {}", e.getMessage());
                 }

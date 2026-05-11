@@ -37,6 +37,7 @@ servers (Lugdunum type).
   bans.
 - [x] **Detailed Statistics**: Log transfer statistics, number of searches per minute, and client version distribution.
 - [x] **Observer/Pub-Sub Event System**: Implement an event system for better monitoring and decoupled hooks.
+- [x] **Factory Pattern**: Centralize `ClientState` creation via `ClientFactory` for validation.
 
 ## 5. Miscellaneous
 

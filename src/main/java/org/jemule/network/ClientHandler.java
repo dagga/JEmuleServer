@@ -53,18 +53,20 @@ public class ClientHandler implements Runnable {
     private final FileIndex fileIndex;
     private final FloodProtector floodProtector;
     private final EventManager eventManager;
+    private final ClientFactory clientFactory;
     private ClientState state;
     private Obfuscation.RC4 sendRC4;
     private Obfuscation.RC4 receiveRC4;
     private boolean obfuscated = false;
 
-    public ClientHandler(Socket socket, ServerConfig config, ClientRegistry registry, FileIndex fileIndex, FloodProtector floodProtector, EventManager eventManager) {
+    public ClientHandler(Socket socket, ServerConfig config, ClientRegistry registry, FileIndex fileIndex, FloodProtector floodProtector, EventManager eventManager, ClientFactory clientFactory) {
         this.socket = socket;
         this.config = config;
         this.registry = registry;
         this.fileIndex = fileIndex;
         this.floodProtector = floodProtector;
         this.eventManager = eventManager;
+        this.clientFactory = clientFactory;
     }
 
     @Override
@@ -261,7 +263,7 @@ public class ClientHandler implements Runnable {
         // ... truncated logic for ID assignment ...
         int clientId = 0x01020304;
 
-        state = new ClientState(socket.getInetAddress(), socket.getPort(), clientId, System.currentTimeMillis(), new java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis()));
+        state = clientFactory.createClient(socket.getInetAddress(), socket.getPort(), clientId);
         
         if (eventManager != null) {
             eventManager.broadcast(new ClientEvent(ClientEvent.LOGIN, socket.getInetAddress().getHostAddress(), "ID:" + clientId, "Client logged in with ID " + clientId));

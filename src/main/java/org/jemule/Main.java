@@ -20,6 +20,7 @@
 package org.jemule;
 
 import org.jemule.config.ServerConfig;
+import org.jemule.core.ClientFactory;
 import org.jemule.network.Server;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -53,8 +54,9 @@ public class Main {
                 return;
             }
         }
-
-        Server server = new Server(cfg);
+        
+        ClientFactory factory = new ClientFactory();
+        Server server = new Server(cfg, factory);
         Runtime.getRuntime().addShutdownHook(new Thread(server::stop));
 
         try {
