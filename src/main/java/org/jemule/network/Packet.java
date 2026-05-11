@@ -74,7 +74,7 @@ public record Packet(byte protocol, byte opcode, byte[] data) {
         out.flush();
     }
 
-    private static byte[] compress(byte[] input) throws IOException {
+    private static byte[] compress(byte[] input) {
         Deflater d = new Deflater(Deflater.BEST_SPEED);
         d.setInput(input);
         d.finish();
