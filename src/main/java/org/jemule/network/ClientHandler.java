@@ -143,6 +143,12 @@ public class ClientHandler implements Runnable {
         DataInputStream dis = new DataInputStream(in);
         byte[] clientRandom = new byte[4];
         dis.readFully(clientRandom);
+        
+        // Anti-replay check
+        if (Obfuscation.isReplay(clientRandom)) {
+            throw new IOException("Replay attack detected from " + socket.getRemoteSocketAddress());
+        }
+
         int marker = dis.readUnsignedByte();
         if (marker != 0x97) {
             throw new IOException("Invalid obfuscation marker: 0x" + Integer.toHexString(marker));

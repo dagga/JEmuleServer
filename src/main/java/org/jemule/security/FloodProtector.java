@@ -21,6 +21,7 @@ package org.jemule.security;
 
 import java.net.InetAddress;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class FloodProtector {
     private final int maxPerSec;
@@ -31,30 +32,49 @@ public class FloodProtector {
     }
 
     public boolean allow(InetAddress ip) {
+        // Nettoyage opportuniste : si la map devient trop grande, on pourrait la vider
+        // Mais pour l'instant, on se concentre sur la performance du bucket.
+        if (buckets.size() > 10000) {
+            buckets.entrySet().removeIf(entry -> entry.getValue().isExpired());
+        }
         return buckets.computeIfAbsent(ip, k -> new TokenBucket(maxPerSec)).tryConsume();
     }
 
     private static class TokenBucket {
         private final long maxTokens;
-        private long tokens;
-        private long lastRefill = System.nanoTime();
+        private final AtomicLong tokens;
+        private final AtomicLong lastRefill;
 
         TokenBucket(long max) {
-            tokens = max;
             this.maxTokens = max;
+            this.tokens = new AtomicLong(max);
+            this.lastRefill = new AtomicLong(System.nanoTime());
         }
 
-        synchronized boolean tryConsume() {
-            long now = System.nanoTime();
-            if (now - lastRefill >= 1_000_000_000L) {
-                tokens = maxTokens;
-                lastRefill = now;
-            }
-            if (tokens > 0) {
-                tokens--;
-                return true;
+        boolean tryConsume() {
+            refill();
+            long current = tokens.get();
+            while (current > 0) {
+                if (tokens.compareAndSet(current, current - 1)) {
+                    return true;
+                }
+                current = tokens.get();
             }
             return false;
+        }
+
+        private void refill() {
+            long now = System.nanoTime();
+            long last = lastRefill.get();
+            if (now - last >= 1_000_000_000L) {
+                if (lastRefill.compareAndSet(last, now)) {
+                    tokens.set(maxTokens);
+                }
+            }
+        }
+
+        boolean isExpired() {
+            return System.nanoTime() - lastRefill.get() > 60_000_000_000L; // 1 minute
         }
     }
 }

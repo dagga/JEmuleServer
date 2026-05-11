@@ -64,4 +64,27 @@ public class Obfuscation {
             throw new RuntimeException(e);
         }
     }
+
+    /**
+     * Cache for client nonces to prevent replay attacks.
+     * Stores the client-provided random bytes.
+     * Uses a synchronized LinkedHashMap to implement LRU eviction.
+     */
+    private static final int MAX_NONCES = 10000;
+    private static final java.util.Map<java.nio.ByteBuffer, Boolean> seenNonces = 
+        java.util.Collections.synchronizedMap(new java.util.LinkedHashMap<java.nio.ByteBuffer, Boolean>(MAX_NONCES, 0.75f, true) {
+            @Override
+            protected boolean removeEldestEntry(java.util.Map.Entry<java.nio.ByteBuffer, Boolean> eldest) {
+                return size() > MAX_NONCES;
+            }
+        });
+
+    public static boolean isReplay(byte[] nonce) {
+        java.nio.ByteBuffer wrapper = java.nio.ByteBuffer.wrap(nonce);
+        if (seenNonces.containsKey(wrapper)) {
+            return true;
+        }
+        seenNonces.put(wrapper, Boolean.TRUE);
+        return false;
+    }
 }

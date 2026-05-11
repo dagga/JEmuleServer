@@ -175,4 +175,14 @@ class PacketTest {
         assertEquals(OpCode.SOURCES_RESULT_OBFU, OpCode.fromByte(Packet.PROTOCOL_EMULE, (byte) 0x24));
         assertEquals(OpCode.COMPRESSED_PART, OpCode.fromByte(Packet.PROTOCOL_EMULE, (byte) 0x28));
     }
+
+    @Test
+    void testAntiReplay() {
+        byte[] nonce = {0x01, 0x02, 0x03, 0x04};
+        assertFalse(Obfuscation.isReplay(nonce), "First time should not be a replay");
+        assertTrue(Obfuscation.isReplay(nonce), "Second time should be a replay");
+        
+        byte[] differentNonce = {0x01, 0x02, 0x03, 0x05};
+        assertFalse(Obfuscation.isReplay(differentNonce), "Different nonce should not be a replay");
+    }
 }

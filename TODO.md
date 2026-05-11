@@ -7,7 +7,7 @@ servers (Lugdunum type).
 
 - [x] **Full ZLIB Compression**: Compression is currently supported for writing but must be validated for all types of
   incoming/outgoing packets.
-- [x] **Protocol Obfuscation**: Implement the RC4 encryption layer to support obfuscated connections.
+- [x] **Protocol Obfuscation**: Implement the RC4 encryption layer to support obfuscated connections. Added Anti-Replay protection.
 - [x] **Full Tags Support**: Extend the tag reading/writing system to support all types (String, Integer, Float, Bool,
   Blob).
 - [x] **eMule Packets Support (0xC5)**: Add support for specific eMule messages (e.g., extended source requests).
@@ -26,7 +26,7 @@ servers (Lugdunum type).
 
 - [ ] **IP Filtering (IPFilter)**: Support loading `ipfilter.dat` files to block undesirable IP ranges.
 - [ ] **Fake File Detection**: Implement heuristics to detect and ban corrupted or malicious files (spam).
-- [x] **Advanced Anti-Flood Protection**: Refine limits per opcode and per IP to prevent DoS attacks.
+- [x] **Advanced Anti-Flood Protection**: Refine limits per opcode and per IP to prevent DoS attacks. Optimized with Lock-Free Token Bucket.
 - [x] **Circuit Breaker**: Implement the Circuit Breaker pattern (Resilience4j) to prevent error propagation.
 - [ ] **LowID Management**: Improve support for clients behind a firewall (callback mechanism).
 
