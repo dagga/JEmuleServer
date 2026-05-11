@@ -1,0 +1,36 @@
+@startuml
+actor Client
+participant "ClientHandler" as CH
+participant "Obfuscation" as OB
+participant "Packet" as PK
+database "ClientRegistry" as CR
+
+== Phase 1: Obfuscation Handshake (optional) ==
+Client -> CH: Random bytes + 0x97
+CH -> OB: md5(magic + random)
+CH -> CH: Init RC4 keys
+CH -> Client: Server Random + Padding + Method
+
+== Phase 2: eDonkey2000 Login ==
+Client -> CH: Packet(LOGIN_REQUEST)
+CH -> PK: read()
+CH -> CR: add(ClientState)
+CH -> CH: Assign ClientID (HighID)
+
+== Phase 3: Server Handshake ==
+CH -> Client: Packet(SERVER_IDENT)
+CH -> Client: Packet(SERVER_MESSAGE)
+CH -> Client: Packet(LOGIN_ACCEPTED / ID_CHANGE)
+CH -> Client: Packet(SERVER_STATUS)
+
+== Phase 4: Main Loop ==
+loop until disconnected
+    Client -> CH: Packet(Any OpCode)
+    CH -> CH: processPacket()
+    alt Search
+        CH -> Client: Packet(SEARCH_RESULT)
+    else Publish
+        CH -> Client: Packet(PUBLISH_ACK)
+    end
+end
+@enduml

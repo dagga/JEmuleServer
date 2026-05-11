@@ -26,6 +26,8 @@ public enum OpCode {
     SERVER_IDENT((byte) 0x41),
     CLIENT_LOGIN((byte) 0x1A), // This might be an old/alternative login? Usually 0x01 is used.
     LOGIN_ACCEPTED((byte) 0x1B),
+    ID_CHANGE((byte) 0x40),         // Lugdunum extension: ID Change (confirm HighID)
+    SERVER_LIST((byte) 0x42),       // Lugdunum extension: Server List
     SEARCH_REQUEST((byte) 0x16),
     SEARCH_RESULT((byte) 0x64),
     GET_SOURCES((byte) 0x15),

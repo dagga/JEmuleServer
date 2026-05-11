@@ -73,3 +73,10 @@ This project is distributed under the **GNU Lesser General Public License v3.0 (
 ## Author
 
 **Nicolas Hernandez** (herniatgmail.com)
+
+## Documentation
+
+More information can be found in the `doc/` directory:
+- [Protocols Description](doc/protocols.md)
+- [Class Diagram](doc/class_diagram.puml)
+- [Connection Sequence Diagram](doc/sequence_diagram.puml)

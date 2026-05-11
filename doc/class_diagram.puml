@@ -1,0 +1,128 @@
+@startuml
+package "org.jemule" {
+    class Main {
+        +main(String[] args)
+    }
+
+    package "org.jemule.config" {
+        class ServerConfig <<record>> {
+            +port: int
+            +maxPacketSize: int
+            +maxSearchResults: int
+            +floodMaxRequestsPerSecond: int
+            +{static} DEFAULT: ServerConfig
+        }
+    }
+
+    package "org.jemule.network" {
+        class Server {
+            -config: ServerConfig
+            -registry: ClientRegistry
+            -fileIndex: FileIndex
+            -floodProtector: FloodProtector
+            -executor: ExecutorService
+            +start()
+            +stop()
+            -startUdpResponder()
+            -handleUdp(DatagramSocket, DatagramPacket)
+        }
+
+        class ClientHandler {
+            -socket: Socket
+            -config: ServerConfig
+            -registry: ClientRegistry
+            -fileIndex: FileIndex
+            -floodProtector: FloodProtector
+            -state: ClientState
+            +run()
+            -negotiateObfuscation()
+            -handleLogin()
+            -processPacket()
+        }
+
+        class Packet <<record>> {
+            +protocol: byte
+            +opcode: byte
+            +data: byte[]
+            +{static} read(InputStream, int): Packet
+            +write(OutputStream, boolean)
+        }
+    }
+
+    package "org.jemule.core" {
+        class ClientRegistry {
+            -clients: Map<Integer, ClientState>
+            +add(ClientState)
+            +remove(ClientState)
+            +size(): int
+        }
+
+        class ClientState {
+            -address: InetAddress
+            -port: int
+            -clientId: int
+            -zlibSupported: boolean
+            +isHighId(): boolean
+        }
+
+        class FileIndex {
+            -files: Map<String, FileMetadata>
+            +addFile(FileMetadata)
+            +search(String, int): List<FileMetadata>
+        }
+
+        class FileMetadata <<record>> {
+            +hash: String
+            +name: String
+            +size: long
+            +type: String
+            +tags: List<Tag>
+            +sources: ConcurrentHashMap
+        }
+    }
+
+    package "org.jemule.protocol" {
+        enum OpCode {
+            LOGIN_REQUEST
+            SERVER_STATUS
+            SERVER_IDENT
+            ...
+            +{static} fromByte(byte, byte): OpCode
+        }
+
+        class Tag <<record>> {
+            +type: byte
+            +name: String
+            +value: Object
+            +{static} readList(ByteBuffer): List<Tag>
+            +{static} writeList(ByteBuffer, List<Tag>)
+        }
+    }
+
+    package "org.jemule.security" {
+        class Obfuscation {
+            +{static} md5(byte[]...): byte[]
+        }
+        class RC4 {
+            +crypt(byte[])
+        }
+        class FloodProtector {
+            +allow(InetAddress): boolean
+        }
+    }
+}
+
+Server --> ServerConfig
+Server --> ClientRegistry
+Server --> FileIndex
+Server --> FloodProtector
+Server ..> ClientHandler : creates
+ClientHandler --> ServerConfig
+ClientHandler --> ClientRegistry
+ClientHandler --> FileIndex
+ClientHandler --> ClientState
+ClientHandler ..> Packet : uses
+ClientHandler ..> OpCode : uses
+FileIndex --> FileMetadata
+FileMetadata --> Tag
+@enduml

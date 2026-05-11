@@ -270,7 +270,7 @@ public class ClientHandler implements Runnable {
         // OpCode 0x40 is often used by servers to finalize the ID assignment.
         ByteBuffer resp = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN);
         resp.putInt(clientId);
-        new Packet(Packet.PROTOCOL_ED2K, (byte) 0x40, resp.array()).write(out, state.isZlibSupported());
+        new Packet(Packet.PROTOCOL_ED2K, OpCode.ID_CHANGE.value, resp.array()).write(out, state.isZlibSupported());
 
         // Also send the old 0x1B for compatibility
         new Packet(Packet.PROTOCOL_ED2K, OpCode.LOGIN_ACCEPTED.value, resp.array()).write(out, state.isZlibSupported());
@@ -301,6 +301,7 @@ public class ClientHandler implements Runnable {
         tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_NAME, name));
         tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_DESCRIPTION, desc));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_VERSION, 60));
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_EMULE_VERSION, 0x3C)); // 0x3C = 60, typical for eMule 0.4x/0.5x compatible
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_TCP_FLAGS, 0x01 | 0x08)); // ZLIB + OBFUSCATION support bits
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_AUX_PORT, (int) port));
 
