@@ -20,6 +20,7 @@ package org.jemule.network;
 
 import org.jemule.protocol.OpCode;
 import org.jemule.protocol.Tag;
+import org.jemule.security.Obfuscation;
 import org.junit.jupiter.api.Test;
 
 import java.io.ByteArrayInputStream;
@@ -27,11 +28,28 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.Arrays;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class PacketTest {
+
+    @Test
+    void testRC4() {
+        byte[] key = "testkey".getBytes();
+        byte[] data = "Hello, Obfuscation!".getBytes();
+        byte[] original = data.clone();
+
+        Obfuscation.RC4 rc4Send = new Obfuscation.RC4(key);
+        Obfuscation.RC4 rc4Receive = new Obfuscation.RC4(key);
+
+        rc4Send.crypt(data);
+        assertFalse(Arrays.equals(original, data));
+
+        rc4Receive.crypt(data);
+        assertArrayEquals(original, data);
+    }
 
     @Test
     void testReadWrite() throws IOException {

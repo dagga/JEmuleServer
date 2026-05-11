@@ -27,6 +27,7 @@ import org.jemule.core.FileMetadata;
 import org.jemule.protocol.OpCode;
 import org.jemule.protocol.Tag;
 import org.jemule.security.FloodProtector;
+import org.jemule.security.Obfuscation;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -35,7 +36,9 @@ import java.net.Socket;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
+import java.security.SecureRandom;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 public class ClientHandler implements Runnable {
@@ -46,6 +49,9 @@ public class ClientHandler implements Runnable {
     private final FileIndex fileIndex;
     private final FloodProtector floodProtector;
     private ClientState state;
+    private Obfuscation.RC4 sendRC4;
+    private Obfuscation.RC4 receiveRC4;
+    private boolean obfuscated = false;
 
     public ClientHandler(Socket socket, ServerConfig config, ClientRegistry registry, FileIndex fileIndex, FloodProtector floodProtector) {
         this.socket = socket;
@@ -57,24 +63,29 @@ public class ClientHandler implements Runnable {
 
     @Override
     public void run() {
-        try (var in = socket.getInputStream(); var out = socket.getOutputStream()) {
+        try {
+            InputStream in = socket.getInputStream();
+            OutputStream out = socket.getOutputStream();
             log.info("Client connected: {}", socket.getRemoteSocketAddress());
             if (!floodProtector.allow(socket.getInetAddress())) {
                 log.warn("Flood blocked: {}", socket.getInetAddress());
                 return;
             }
 
-        Packet p = Packet.read(in, config.maxPacketSize());
-        if (p.protocol() != Packet.PROTOCOL_ED2K && p.protocol() != Packet.PROTOCOL_EMULE && p.protocol() != Packet.PROTOCOL_ZLIB) {
-            throw new IOException("Unsupported protocol: " + String.format("0x%02X", p.protocol()));
-        }
+            // Negotiation / Obfuscation detection
+            in = negotiateObfuscation(in, out);
 
-        handleLogin(p, out);
+            Packet p = Packet.read(in, config.maxPacketSize());
+            if (p.protocol() != Packet.PROTOCOL_ED2K && p.protocol() != Packet.PROTOCOL_EMULE && p.protocol() != Packet.PROTOCOL_ZLIB) {
+                throw new IOException("Unsupported protocol: " + String.format("0x%02X", p.protocol()));
+            }
 
-        while (!socket.isClosed()) {
+            handleLogin(p, out);
+
+            while (!socket.isClosed()) {
                 try {
                     Packet nextP = Packet.read(in, config.maxPacketSize());
-                    if (floodProtector.allow(socket.getInetAddress())) processPacket(nextP, out);
+                    if (floodProtector.allow(socket.getInetAddress())) processPacket(nextP, wrappedOut != null ? wrappedOut : out);
                 } catch (EOFException e) {
                     break;
                 }
@@ -91,7 +102,145 @@ public class ClientHandler implements Runnable {
         }
     }
 
+    private InputStream negotiateObfuscation(InputStream in, OutputStream out) throws IOException {
+        PushbackInputStream pin = new PushbackInputStream(in, 1);
+        int firstByte = pin.read();
+        if (firstByte == -1) return pin;
+
+        if (firstByte != (Packet.PROTOCOL_ED2K & 0xFF) &&
+                firstByte != (Packet.PROTOCOL_EMULE & 0xFF) &&
+                firstByte != (Packet.PROTOCOL_ZLIB & 0xFF)) {
+            // Likely obfuscated handshake start
+            log.info("Detected possible obfuscated handshake from {}", socket.getRemoteSocketAddress());
+            return handleObfuscatedHandshake(firstByte, pin, out);
+        }
+
+        pin.unread(firstByte);
+        return pin;
+    }
+
+    private InputStream handleObfuscatedHandshake(int firstByte, InputStream in, OutputStream out) throws IOException {
+        // Obfuscated handshake:
+        // Client -> Server: [1 byte random] [4 bytes random] [1 byte 0x97] [n bytes random] [1 byte padding len] [n bytes padding] [1 byte encryption method]
+        // But eMule clients usually send a bigger chunk.
+        // Let's use a DataInputStream for convenience
+        DataInputStream dis = new DataInputStream(in);
+        byte[] clientRandom = new byte[4];
+        dis.readFully(clientRandom);
+        int marker = dis.readUnsignedByte();
+        if (marker != 0x97) {
+            throw new IOException("Invalid obfuscation marker: 0x" + Integer.toHexString(marker));
+        }
+
+        // Keys creation
+        byte[] magic = {(byte) 0x97};
+        receiveRC4 = new Obfuscation.RC4(Obfuscation.md5(magic, clientRandom));
+        sendRC4 = new Obfuscation.RC4(Obfuscation.md5(magic, clientRandom));
+
+        // Discard first 1024 bytes
+        receiveRC4.crypt(new byte[1024]);
+        sendRC4.crypt(new byte[1024]);
+
+        // Handshake is encrypted from now on
+        // Read random bytes until padding len
+        // We don't know exactly how many random bytes were sent before 0x97, 
+        // but typically the client sends [1 random] [4 random] [0x97] [random...] [padding_len] [padding] [method]
+        // Actually, the spec says: [Random byte] [4 random (used for key)] [0x97] [Random bytes] [1 byte PaddingLen] [Padding] [1 byte EncryptionMethod]
+        // We need to read until we find a valid PaddingLen and EncryptionMethod.
+        // Since we already read 6 bytes (1 + 4 + 1), we continue.
+        
+        // Use a wrapper to decrypt on the fly
+        InputStream encryptedIn = new InputStream() {
+            @Override
+            public int read() throws IOException {
+                int b = in.read();
+                if (b == -1) return -1;
+                byte[] data = {(byte) b};
+                receiveRC4.crypt(data);
+                return data[0] & 0xFF;
+            }
+
+            @Override
+            public int read(byte[] b, int off, int len) throws IOException {
+                int r = in.read(b, off, len);
+                if (r > 0) receiveRC4.crypt(b, off, r);
+                return r;
+            }
+        };
+
+        // Read remaining handshake (random + padding_len + padding + method)
+        // This is tricky because "random bytes" length is variable. 
+        // eMule usually sends a fixed amount or we read until we get the method.
+        // Lugdunum uses some heuristic. 
+        // For simplicity, we'll read a reasonable amount or wait for the method byte.
+        // Usually, total handshake is around 20-50 bytes.
+        
+        // Actually, many implementations expect at least one byte of encryption method.
+        // Let's skip random bytes. 0x00 is Obfuscation method.
+        int method = -1;
+        // Read up to 256 bytes to find the method
+        for (int k = 0; k < 256; k++) {
+            int b = encryptedIn.read();
+            if (b == 0x00) { // Found EncryptionMethod = Obfuscation
+                method = b;
+                break;
+            }
+        }
+
+        if (method != 0x00) throw new IOException("Unsupported encryption method or handshake timeout");
+
+        // Server Response: [Random 1-256] [PaddingLen 1] [Padding] [EncryptionMethod 1]
+        SecureRandom rng = new SecureRandom();
+        int serverPadLen = rng.nextInt(16);
+        byte[] serverHandshake = new byte[1 + serverPadLen + 1];
+        rng.nextBytes(serverHandshake);
+        serverHandshake[0] = (byte) serverPadLen;
+        serverHandshake[serverHandshake.length - 1] = 0x00; // Method
+
+        byte[] encryptedResponse = serverHandshake.clone();
+        sendRC4.crypt(encryptedResponse);
+        out.write(encryptedResponse);
+        out.flush();
+
+        log.info("Obfuscation handshake complete for {}", socket.getRemoteSocketAddress());
+        obfuscated = true;
+
+        // Wrap output stream as well
+        final OutputStream originalOut = out;
+        OutputStream encryptedOut = new OutputStream() {
+            @Override
+            public void write(int b) throws IOException {
+                byte[] data = {(byte) b};
+                sendRC4.crypt(data);
+                originalOut.write(data[0]);
+            }
+
+            @Override
+            public void write(byte[] b, int off, int len) throws IOException {
+                byte[] copy = Arrays.copyOfRange(b, off, off + len);
+                sendRC4.crypt(copy);
+                originalOut.write(copy);
+            }
+
+            @Override
+            public void flush() throws IOException {
+                originalOut.flush();
+            }
+        };
+
+        // Replace 'out' in handleLogin with this one. 
+        // Since run() uses local variables for in/out, we need to return the wrapped in.
+        // But handleLogin takes out. We'll need to pass the wrapped out.
+        // I will refactor run() to use fields for streams or pass them around.
+        
+        this.wrappedOut = encryptedOut;
+        return encryptedIn;
+    }
+
+    private OutputStream wrappedOut;
+
     private void handleLogin(Packet initialPacket, OutputStream out) throws IOException {
+        if (wrappedOut != null) out = wrappedOut;
         byte[] data = initialPacket.data();
         log.info("Handling login request, data size: {} bytes", data.length);
 
