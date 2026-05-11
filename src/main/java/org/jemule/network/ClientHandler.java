@@ -262,7 +262,7 @@ public class ClientHandler implements Runnable {
         sendServerIdent(out);
 
         // 2. Server Message (0x38) - MotD (Mandatory before ID Change for some)
-        sendServerMessage(out, "Welcome to 0.1.3 (JEmuleServer)\n" +
+        sendServerMessage(out, "Welcome to 0.2.0 (JEmuleServer)\n" +
                 "Your HighID is: " + Integer.toUnsignedString(clientId) + "\n" +
                 "Enjoy the extended protocol support!");
 
@@ -293,7 +293,7 @@ public class ClientHandler implements Runnable {
         byte[] hash = new byte[16]; // Empty hash
         short port = (short) config.port();
 
-        String version = "0.1.3";
+        String version = "0.2.0";
         String name = version + " (JEmuleServer)";
         String desc = "Experimental eMule Server";
 
