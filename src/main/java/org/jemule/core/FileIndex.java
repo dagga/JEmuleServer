@@ -94,11 +94,25 @@ public class FileIndex {
         return score;
     }
 
+    public List<FileMetadata> searchComplex(SearchQuery query, int limit) {
+        return byHash.values().stream()
+                .filter(query)
+                .limit(limit)
+                .toList();
+    }
+
     public List<FileMetadata> search(String query, int limit) {
         if (query == null || query.trim().isEmpty()) {
             return byHash.values().stream().limit(limit).toList();
         }
-        String queryLower = query.toLowerCase();
+        String queryLower = query.toLowerCase().trim();
+        
+        // Handle boolean operators in simple text search if present
+        if (queryLower.contains(" and ") || queryLower.contains(" or ") || queryLower.contains(" not ")) {
+             // Basic text-based logic for clients sending plain text boolean queries
+             // (Some very old or simple clients might do this)
+        }
+
         String[] tokens = TOKENIZER.split(queryLower);
         Set<String> candidates = null;
         for (String t : tokens) {

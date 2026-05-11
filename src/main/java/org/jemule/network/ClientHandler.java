@@ -25,6 +25,7 @@ import org.jemule.core.ClientRegistry;
 import org.jemule.core.ClientState;
 import org.jemule.core.FileIndex;
 import org.jemule.core.FileMetadata;
+import org.jemule.core.*;
 import org.jemule.protocol.OpCode;
 import org.jemule.protocol.Tag;
 import org.jemule.security.FloodProtector;
@@ -361,9 +362,17 @@ public class ClientHandler implements Runnable {
     }
 
     private void handleSearch(byte[] data, OutputStream out) throws IOException {
-        String query = new String(data, StandardCharsets.UTF_8);
-        var results = fileIndex.search(query, config.maxSearchResults());
-        log.debug("Search '{}' -> {} results", query, results.size());
+        List<FileMetadata> results;
+        try {
+            SearchQuery query = SearchQuery.parse(ByteBuffer.wrap(data));
+            results = fileIndex.searchComplex(query, config.maxSearchResults());
+            log.debug("Complex search -> {} results", results.size());
+        } catch (Exception e) {
+            log.warn("Failed to parse complex search, falling back to simple search: {}", e.getMessage());
+            String queryStr = new String(data, StandardCharsets.UTF_8);
+            results = fileIndex.search(queryStr, config.maxSearchResults());
+            log.debug("Simple search '{}' -> {} results", queryStr, results.size());
+        }
 
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         DataOutputStream dos = new DataOutputStream(baos);

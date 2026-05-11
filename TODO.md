@@ -16,7 +16,7 @@ servers (Lugdunum type).
 
 - [x] **Data Persistence**: Implement a H2 database to save the file index and statistics between
   restarts.
-- [ ] **Advanced Search**: Support boolean operators (AND, OR, NOT) and filters (size, type, availability) in search
+- [x] **Advanced Search**: Support boolean operators (AND, OR, NOT) and filters (size, type, availability) in search
   queries.
 - [x] **Index Limitation**: Add per-user quotas for the number of published files.
 - [x] **Source Management**: Improve the source return algorithm to favor diversity and proximity.

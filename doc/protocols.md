@@ -51,6 +51,7 @@ The "Lugdunum" (eServer) series was the most popular ed2k server implementation 
 - **OpCode 0x42 (SERVER_LIST)**: Used by the server to send a list of other trusted servers to the client, allowing the client to update its `server.met` file.
 - **Tag 0xFB (CT_EMULE_VERSION)**: Introduced by Lugdunum to allow the server to advertise its eMule-compatible version directly in the `SERVER_IDENT` packet. This optimization prevents the client from sending an extra `EMULE_INFO` packet, speeding up the connection process.
 - **Tag Extensions**: Support for new tag types (Float, Bool, Blob) and optimized 1-byte tag names for common metadata (Version, Compression, etc.).
+- **Advanced Search**: Support for complex Boolean searches using a binary tree structure (Pre-order traversal). Nodes use operators AND (0x00), OR (0x01), and NOT (0x02). Leaves use Tag2 filters (Size, Type, Format).
 
 ## 4. Protocol Obfuscation (RC4)
 
