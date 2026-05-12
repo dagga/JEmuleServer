@@ -31,6 +31,8 @@ package org.jemule.config;
  * @param maxFilesPerUser            Quota of files a single user can publish.
  * @param maxSourcesPerFile          Maximum sources returned per file request.
  * @param databasePath               Path to the H2 database file.
+ * @param ipFilterPath               Path to the ipfilter.dat file.
+ * @param fakeFileDetectionEnabled   Whether to enable heuristics for fake files.
  * @param cbFailureRateThreshold     Circuit Breaker: threshold percentage for opening.
  * @param cbMinimumNumberOfCalls     Circuit Breaker: min calls before calculating rate.
  * @param cbWaitDurationInSeconds    Circuit Breaker: how long to stay open.
@@ -46,6 +48,7 @@ public record ServerConfig(
         int maxSourcesPerFile,
         String databasePath,
         String ipFilterPath,
+        boolean fakeFileDetectionEnabled,
         
         // Circuit Breaker settings
         float cbFailureRateThreshold,
@@ -76,6 +79,7 @@ public record ServerConfig(
             200,
             "./jemule_db",
             null,
+            true,
             50.0f,
             10,
             60

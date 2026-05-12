@@ -24,6 +24,7 @@ import org.jemule.config.ServerConfig;
 import org.jemule.core.*;
 import org.jemule.protocol.OpCode;
 import org.jemule.protocol.Tag;
+import org.jemule.security.FakeFileDetector;
 import org.jemule.security.FloodProtector;
 import org.jemule.security.Obfuscation;
 import org.jemule.core.event.ClientEvent;
@@ -48,6 +49,7 @@ public class ClientHandler implements Runnable {
     private final ClientRegistry registry;
     private final FileIndex fileIndex;
     private final FloodProtector floodProtector;
+    private final FakeFileDetector fakeFileDetector;
     private final EventManager eventManager;
     private final ClientFactory clientFactory;
     private ClientState state;
@@ -55,12 +57,13 @@ public class ClientHandler implements Runnable {
     private Obfuscation.RC4 receiveRC4;
     private boolean obfuscated = false;
 
-    public ClientHandler(Socket socket, ServerConfig config, ClientRegistry registry, FileIndex fileIndex, FloodProtector floodProtector, EventManager eventManager, ClientFactory clientFactory) {
+    public ClientHandler(Socket socket, ServerConfig config, ClientRegistry registry, FileIndex fileIndex, FloodProtector floodProtector, FakeFileDetector fakeFileDetector, EventManager eventManager, ClientFactory clientFactory) {
         this.socket = socket;
         this.config = config;
         this.registry = registry;
         this.fileIndex = fileIndex;
         this.floodProtector = floodProtector;
+        this.fakeFileDetector = fakeFileDetector;
         this.eventManager = eventManager;
         this.clientFactory = clientFactory;
     }
@@ -560,6 +563,11 @@ public class ClientHandler implements Runnable {
                     }
 
                     if (isValidHash(hash) && isValidFilename(name) && state.publishedFilesCount().get() < config.maxFilesPerUser()) {
+                        if (fakeFileDetector.isFake(hash, name, size)) {
+                            log.warn("Fake file detected and rejected (binary): {} (hash={})", sanitize(name), hash);
+                            sendServerMessage(out, "Fichier refusé (spam/malveillant détecté) : " + sanitize(name));
+                            continue;
+                        }
                         if (size < 0 || size > 100_000_000_000L) { // 100 GB limit
                             log.warn("Invalid file size for PUBLISH (binary): {}", size);
                             continue;
@@ -587,6 +595,11 @@ public class ClientHandler implements Runnable {
                     if (isValidHash(hash) && isValidFilename(name) && state.publishedFilesCount().get() < config.maxFilesPerUser()) {
                         try {
                             long size = Long.parseLong(sizeStr);
+                            if (fakeFileDetector.isFake(hash, name, size)) {
+                                log.warn("Fake file detected and rejected (text): {} (hash={})", sanitize(name), hash);
+                                sendServerMessage(out, "Fichier refusé (spam/malveillant détecté) : " + sanitize(name));
+                                return;
+                            }
                             if (size >= 0 && size <= 100_000_000_000L) {
                                 FileMetadata meta = new FileMetadata(hash, name, size, type);
                                 meta.sources().put(String.valueOf(state.clientId()), state);

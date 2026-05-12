@@ -3,6 +3,7 @@ package org.jemule.network;
 import org.jemule.config.ServerConfig;
 import org.jemule.core.*;
 import org.jemule.core.event.EventManager;
+import org.jemule.security.FakeFileDetector;
 import org.jemule.security.FloodProtector;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -33,13 +34,14 @@ class PublishValidationTest {
     @BeforeEach
     void setup() throws IOException {
         ServerConfig config = new ServerConfig(
-                4661, 2*1024*1024, 300, 50, 100, 1000, 5, 200, tempDir.resolve("db").toString(), null,
+                4661, 2*1024*1024, 300, 50, 100, 1000, 5, 200, tempDir.resolve("db").toString(), null, true,
                 50.0f, 10, 60
         );
 
         index = new FileIndex(null);
         ClientRegistry registry = new ClientRegistry();
         FloodProtector flood = new FloodProtector(config.floodMaxRequestsPerSecond());
+        FakeFileDetector fakes = new FakeFileDetector();
         EventManager events = new EventManager();
         ClientFactory factory = new ClientFactory();
         
@@ -47,7 +49,7 @@ class PublishValidationTest {
         when(socket.getInetAddress()).thenReturn(InetAddress.getLoopbackAddress());
         when(socket.getRemoteSocketAddress()).thenReturn(new java.net.InetSocketAddress(InetAddress.getLoopbackAddress(), 1234));
         
-        handler = new ClientHandler(socket, config, registry, index, flood, events, factory);
+        handler = new ClientHandler(socket, config, registry, index, flood, fakes, events, factory);
         
         state = new ClientState(InetAddress.getLoopbackAddress(), 1234, 123, System.currentTimeMillis(), new AtomicLong(System.currentTimeMillis()));
         
@@ -113,5 +115,18 @@ class PublishValidationTest {
         invokeHandlePublish(invalidData);
         assertEquals(0, index.fileCount());
         assertEquals(0, state.publishedFilesCount().get());
+    }
+
+    @Test
+    void testFakeFileDetection() throws Exception {
+        // Suspect keyword
+        String fakeData = "12345678901234567890123456789012|movie_crack.exe|1024|Video";
+        invokeHandlePublish(fakeData);
+        assertEquals(0, index.fileCount(), "File with 'crack' keyword should be rejected");
+        
+        // Double extension
+        String fakeData2 = "ABCDEF1234567890ABCDEF1234567890|document.pdf.exe|1024|Document";
+        invokeHandlePublish(fakeData2);
+        assertEquals(0, index.fileCount(), "File with double extension should be rejected");
     }
 }

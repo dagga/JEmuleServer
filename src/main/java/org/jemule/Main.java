@@ -46,6 +46,7 @@ public class Main {
                                 ServerConfig.DEFAULT.maxSourcesPerFile(),
                                 ServerConfig.DEFAULT.databasePath(),
                                 ServerConfig.DEFAULT.ipFilterPath(),
+                                ServerConfig.DEFAULT.fakeFileDetectionEnabled(),
                                 ServerConfig.DEFAULT.cbFailureRateThreshold(),
                                 ServerConfig.DEFAULT.cbMinimumNumberOfCalls(),
                                 ServerConfig.DEFAULT.cbWaitDurationInSeconds()

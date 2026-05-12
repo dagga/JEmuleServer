@@ -82,7 +82,56 @@ public class DatabaseManager implements AutoCloseable {
                     stat_value BIGINT
                 )
                 """);
+
+            // Table for banned hashes
+            stmt.execute("""
+                CREATE TABLE IF NOT EXISTS banned_hashes (
+                    hash VARCHAR(32) PRIMARY KEY,
+                    reason VARCHAR(255),
+                    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """);
         }
+    }
+
+    public void addBannedHash(String hash, String reason) {
+        try {
+            circuitBreaker.executeCheckedSupplier(() -> {
+                addBannedHashInternal(hash, reason);
+                return null;
+            });
+        } catch (Throwable e) {
+            logger.error("Circuit breaker prevented or caught error during addBannedHash: {}", e.getMessage());
+        }
+    }
+
+    private void addBannedHashInternal(String hash, String reason) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "MERGE INTO banned_hashes (hash, reason) KEY (hash) VALUES (?, ?)")) {
+            ps.setString(1, hash.toUpperCase());
+            ps.setString(2, reason);
+            ps.executeUpdate();
+        }
+    }
+
+    public List<String> loadBannedHashes() {
+        try {
+            return circuitBreaker.executeCheckedSupplier(this::loadBannedHashesInternal);
+        } catch (Throwable e) {
+            logger.error("Circuit breaker prevented or caught error during loadBannedHashes: {}", e.getMessage());
+            return new ArrayList<>();
+        }
+    }
+
+    private List<String> loadBannedHashesInternal() throws SQLException {
+        List<String> hashes = new ArrayList<>();
+        try (Statement stmt = connection.createStatement();
+             ResultSet rs = stmt.executeQuery("SELECT hash FROM banned_hashes")) {
+            while (rs.next()) {
+                hashes.add(rs.getString("hash"));
+            }
+        }
+        return hashes;
     }
 
     public void saveFile(FileMetadata meta) {

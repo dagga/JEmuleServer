@@ -28,6 +28,7 @@ import org.jemule.core.FileIndex;
 import org.jemule.core.event.ClientEvent;
 import org.jemule.core.event.EventManager;
 import org.jemule.core.event.FileEvent;
+import org.jemule.security.FakeFileDetector;
 import org.jemule.security.FloodProtector;
 import org.jemule.security.IPFilter;
 import org.slf4j.Logger;
@@ -39,6 +40,7 @@ import java.net.Socket;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.sql.SQLException;
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -53,6 +55,7 @@ public class Server {
     private final FileIndex fileIndex;
     private final FloodProtector floodProtector;
     private final IPFilter ipFilter;
+    private final FakeFileDetector fakeFileDetector;
     private final ExecutorService executor;
     private final DatabaseManager db;
     private final EventManager eventManager;
@@ -75,6 +78,8 @@ public class Server {
         if (config.ipFilterPath() != null) {
             this.ipFilter.loadFromFile(config.ipFilterPath());
         }
+        this.fakeFileDetector = new FakeFileDetector();
+        this.fakeFileDetector.setEnabled(config.fakeFileDetectionEnabled());
         this.executor = Executors.newVirtualThreadPerTaskExecutor();
         
         DatabaseManager dbMgr = null;
@@ -85,6 +90,11 @@ public class Server {
                     config.cbMinimumNumberOfCalls(),
                     config.cbWaitDurationInSeconds()
             );
+            if (config.fakeFileDetectionEnabled()) {
+                List<String> banned = dbMgr.loadBannedHashes();
+                banned.forEach(this.fakeFileDetector::addBannedHash);
+                log.info("Loaded {} banned hashes from database", banned.size());
+            }
         } catch (SQLException e) {
             log.error("Failed to initialize database: {}", e.getMessage());
         }
@@ -127,7 +137,7 @@ public class Server {
                         continue;
                     }
                     c.setTcpNoDelay(true);
-                    executor.submit(new ClientHandler(c, config, registry, fileIndex, floodProtector, eventManager, clientFactory));
+                    executor.submit(new ClientHandler(c, config, registry, fileIndex, floodProtector, fakeFileDetector, eventManager, clientFactory));
                 } catch (java.net.SocketTimeoutException e) {
                     // Just a timeout, go back to loop start and check 'running'
                 } catch (IOException e) {
