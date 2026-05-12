@@ -29,7 +29,7 @@ servers (Lugdunum type).
 - [x] **Fake File Detection**: Implement heuristics to detect and ban corrupted or malicious files (spam).
 - [x] **Advanced Anti-Flood Protection**: Refine limits per opcode and per IP to prevent DoS attacks. Optimized with Lock-Free Token Bucket.
 - [x] **Circuit Breaker**: Implement the Circuit Breaker pattern (Resilience4j) to prevent error propagation.
-- [ ] **LowID Management**: Improve support for clients behind a firewall (callback mechanism).
+- [x] **LowID Management**: Improve support for clients behind a firewall (callback mechanism).
 
 ## 4. Administration & Monitoring
 

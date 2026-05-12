@@ -20,20 +20,32 @@
 package org.jemule.core;
 
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Consumer;
+import org.jemule.network.Packet;
 
 public class ClientRegistry {
     private final ConcurrentHashMap<Integer, ClientState> clients = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Integer, Consumer<Packet>> messengers = new ConcurrentHashMap<>();
 
-    public void add(ClientState s) {
+    public void add(ClientState s, Consumer<Packet> messenger) {
         clients.put(s.clientId(), s);
+        if (messenger != null) messengers.put(s.clientId(), messenger);
     }
 
     public void remove(ClientState s) {
         clients.remove(s.clientId());
+        messengers.remove(s.clientId());
     }
 
     public ClientState get(int id) {
         return clients.get(id);
+    }
+
+    public void sendTo(int targetId, Packet p) {
+        Consumer<Packet> messenger = messengers.get(targetId);
+        if (messenger != null) {
+            messenger.accept(p);
+        }
     }
 
     public int size() {

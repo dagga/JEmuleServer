@@ -34,6 +34,7 @@ public enum OpCode {
     SOURCES_RESULT((byte) 0x14),
     PUBLISH_FILES((byte) 0x20),
     PUBLISH_ACK((byte) 0x21),
+    CALLBACK((byte) 0x1C),
 
     // eMule Protocol (0xC5) Extensions
     GET_SOURCES_OBFU((byte) 0x23), // Used for obfuscated/extended source requests

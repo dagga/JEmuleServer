@@ -317,7 +317,14 @@ public class ClientHandler implements Runnable {
             log.info("Client supports ZLIB (detected from initial packet)");
         }
 
-        registry.add(state);
+        OutputStream finalOut = out;
+        registry.add(state, (p) -> {
+            try {
+                p.write(finalOut, state.isZlibSupported());
+            } catch (IOException e) {
+                log.error("Failed to send relayed packet to {}: {}", state.clientId(), e.getMessage());
+            }
+        });
 
         // Standard eMule Handshake order (Strict Lugdunum/aMule style):
         // 1. Server Ident (0x41)
@@ -440,6 +447,7 @@ public class ClientHandler implements Runnable {
             case PUBLISH_FILES -> handlePublish(p.data(), out);
             case GET_SOURCES, GET_SOURCES_OBFU -> handleGetSources(p.data(), out);
             case EMULE_INFO -> handleEmuleInfo(p.data(), out);
+            case CALLBACK -> handleCallback(p.data(), out);
             default -> log.debug("Unhandled: {} (Proto: 0x{:02X})", op, p.protocol());
         }
     }
@@ -698,6 +706,46 @@ public class ClientHandler implements Runnable {
             dos.writeShort((short) s.port());
         }
         new Packet(Packet.PROTOCOL_ED2K, OpCode.SOURCES_RESULT.value, baos.toByteArray()).write(out, state.isZlibSupported());
+    }
+
+    /**
+     * Handles callback requests (OpCode 0x1C).
+     * Used when a LowID client wants to connect to another client.
+     *
+     * @param data The target client ID.
+     * @param out  The output stream (ignored for CALLBACK as it's relayed).
+     * @throws IOException If relay fails.
+     */
+    private void handleCallback(byte[] data, OutputStream out) throws IOException {
+        if (data == null || data.length < 4) {
+            log.warn("Invalid CALLBACK request: data too short");
+            return;
+        }
+
+        int targetId = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN).getInt();
+        log.info("Client {} requested callback to ID: {}", state.clientId(), targetId);
+
+        ClientState targetClient = registry.get(targetId);
+        if (targetClient == null) {
+            log.warn("CALLBACK target not found: {}", targetId);
+            return;
+        }
+
+        // The CALLBACK packet sent to the target should contain the requester's IP and Port.
+        // Format: [IP (4 bytes)][Port (2 bytes)]
+        ByteBuffer relayData = ByteBuffer.allocate(6).order(ByteOrder.LITTLE_ENDIAN);
+        relayData.putInt(ClientState.ipToInt(state.address()));
+        relayData.putShort(Short.reverseBytes((short) state.port())); // Little-endian
+
+        Packet callbackPacket = new Packet(Packet.PROTOCOL_ED2K, OpCode.CALLBACK.value, relayData.array());
+        registry.sendTo(targetId, callbackPacket);
+        
+        if (eventManager != null) {
+            eventManager.broadcast(new ClientEvent("CALLBACK_RELAY", 
+                String.valueOf(targetId), 
+                String.valueOf(state.clientId()), 
+                "Relaying callback request"));
+        }
     }
 
     /**
