@@ -645,22 +645,47 @@ public class ClientHandler implements Runnable {
      * @throws IOException If sending results fails.
      */
     private void handleGetSources(byte[] data, OutputStream out) throws IOException {
-        String hash;
-        byte[] hashBytes;
+        String hash = null;
+        byte[] hashBytes = null;
+
         if (data.length == 16) {
             hashBytes = data;
             StringBuilder sb = new StringBuilder();
             for (byte b : data) sb.append(String.format("%02x", b));
             hash = sb.toString();
-        } else {
+        } else if (data.length == 32) {
             hash = new String(data, StandardCharsets.UTF_8).trim();
-            if (hash.length() != 32) {
-                log.warn("Invalid hash length for GET_SOURCES: {}", hash.length());
-                return;
+            if (isValidHash(hash)) {
+                hashBytes = hashToBytes(hash);
             }
-            log.info("Client requested sources for hash: {}", sanitize(hash));
-            hashBytes = hashToBytes(hash);
         }
+
+        // If not found in simple formats, try to parse as tags (typical for extended GET_SOURCES)
+        if (hash == null && data.length > 16) {
+            try {
+                ByteBuffer buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN);
+                // In extended GET_SOURCES, the hash is often the first 16 bytes, followed by tags
+                // OR it's a list of tags.
+                // Let's try the "hash + tags" approach first as it's common.
+                byte[] potentialHash = new byte[16];
+                buf.get(potentialHash);
+                hashBytes = potentialHash;
+                StringBuilder sb = new StringBuilder();
+                for (byte b : potentialHash) sb.append(String.format("%02x", b));
+                hash = sb.toString();
+                
+                log.debug("Extracted hash from extended GET_SOURCES: {}", sanitize(hash));
+            } catch (Exception e) {
+                log.warn("Failed to extract hash from extended GET_SOURCES: {}", sanitize(e.getMessage()));
+            }
+        }
+
+        if (hash == null || !isValidHash(hash)) {
+            log.warn("Invalid hash format/length for GET_SOURCES: {}", data.length);
+            return;
+        }
+
+        log.info("Client requested sources for hash: {}", sanitize(hash));
 
         var sources = fileIndex.getSources(hash, state, config.maxSourcesPerFile());
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
