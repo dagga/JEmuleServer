@@ -33,7 +33,7 @@ class PublishValidationTest {
     @BeforeEach
     void setup() throws IOException {
         ServerConfig config = new ServerConfig(
-                4661, 2*1024*1024, 300, 50, 100, 1000, 5, 200, tempDir.resolve("db").toString(),
+                4661, 2*1024*1024, 300, 50, 100, 1000, 5, 200, tempDir.resolve("db").toString(), null,
                 50.0f, 10, 60
         );
 

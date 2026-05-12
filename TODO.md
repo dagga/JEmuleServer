@@ -24,7 +24,7 @@ servers (Lugdunum type).
 
 ## 3. Security & Stability
 
-- [ ] **IP Filtering (IPFilter)**: Support loading `ipfilter.dat` files to block undesirable IP ranges.
+- [x] **IP Filtering (IPFilter)**: Support loading `ipfilter.dat` files to block undesirable IP ranges.
 - [x] **Input Validation & GDPR**: Added strict input validation, socket timeouts (30s) and IP masking for GDPR compliance.
 - [ ] **Fake File Detection**: Implement heuristics to detect and ban corrupted or malicious files (spam).
 - [x] **Advanced Anti-Flood Protection**: Refine limits per opcode and per IP to prevent DoS attacks. Optimized with Lock-Free Token Bucket.

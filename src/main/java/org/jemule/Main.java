@@ -45,6 +45,7 @@ public class Main {
                                 ServerConfig.DEFAULT.maxFilesPerUser(),
                                 ServerConfig.DEFAULT.maxSourcesPerFile(),
                                 ServerConfig.DEFAULT.databasePath(),
+                                ServerConfig.DEFAULT.ipFilterPath(),
                                 ServerConfig.DEFAULT.cbFailureRateThreshold(),
                                 ServerConfig.DEFAULT.cbMinimumNumberOfCalls(),
                                 ServerConfig.DEFAULT.cbWaitDurationInSeconds()

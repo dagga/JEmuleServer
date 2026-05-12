@@ -45,6 +45,7 @@ public record ServerConfig(
         int maxFilesPerUser,
         int maxSourcesPerFile,
         String databasePath,
+        String ipFilterPath,
         
         // Circuit Breaker settings
         float cbFailureRateThreshold,
@@ -74,6 +75,7 @@ public record ServerConfig(
             5000,
             200,
             "./jemule_db",
+            null,
             50.0f,
             10,
             60

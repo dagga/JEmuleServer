@@ -29,6 +29,7 @@ import org.jemule.core.event.ClientEvent;
 import org.jemule.core.event.EventManager;
 import org.jemule.core.event.FileEvent;
 import org.jemule.security.FloodProtector;
+import org.jemule.security.IPFilter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -51,6 +52,7 @@ public class Server {
     private final ClientRegistry registry = new ClientRegistry();
     private final FileIndex fileIndex;
     private final FloodProtector floodProtector;
+    private final IPFilter ipFilter;
     private final ExecutorService executor;
     private final DatabaseManager db;
     private final EventManager eventManager;
@@ -69,6 +71,10 @@ public class Server {
         this.eventManager = new EventManager();
         setupDefaultListeners();
         this.floodProtector = new FloodProtector(config.floodMaxRequestsPerSecond());
+        this.ipFilter = new IPFilter();
+        if (config.ipFilterPath() != null) {
+            this.ipFilter.loadFromFile(config.ipFilterPath());
+        }
         this.executor = Executors.newVirtualThreadPerTaskExecutor();
         
         DatabaseManager dbMgr = null;
@@ -114,6 +120,12 @@ public class Server {
             while (running && !ss.isClosed()) {
                 try {
                     Socket c = ss.accept();
+                    String clientIp = c.getInetAddress().getHostAddress();
+                    if (ipFilter.isBlocked(clientIp)) {
+                        log.warn("[SECURITY] Blocked TCP connection from {}", clientIp);
+                        c.close();
+                        continue;
+                    }
                     c.setTcpNoDelay(true);
                     executor.submit(new ClientHandler(c, config, registry, fileIndex, floodProtector, eventManager, clientFactory));
                 } catch (java.net.SocketTimeoutException e) {
@@ -157,6 +169,11 @@ public class Server {
     }
 
     private void handleUdp(java.net.DatagramSocket ds, java.net.DatagramPacket p) throws IOException {
+        String clientIp = p.getAddress().getHostAddress();
+        if (ipFilter.isBlocked(clientIp)) {
+            log.warn("[SECURITY] Blocked UDP packet from {}", clientIp);
+            return;
+        }
         if (p.getLength() < 2) return;
         byte[] data = p.getData();
         if ((data[0] & 0xFF) != (Packet.PROTOCOL_ED2K & 0xFF)) return;
