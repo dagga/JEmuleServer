@@ -22,6 +22,7 @@ package org.jemule.network;
 import org.jemule.config.ServerConfig;
 import org.jemule.core.ClientFactory;
 import org.jemule.core.ClientRegistry;
+import org.jemule.core.ClientState;
 import org.jemule.core.DatabaseManager;
 import org.jemule.core.FileIndex;
 import org.jemule.core.event.ClientEvent;
@@ -179,7 +180,31 @@ public class Server {
             resp.putInt(config.maxUsers());
             resp.putInt(config.maxFiles());
 
-            ds.send(new java.net.DatagramPacket(resp.array(), resp.capacity(), p.getAddress(), p.getPort()));
+            ds.send(new java.net.DatagramPacket(resp.array(), resp.position(), p.getAddress(), p.getPort()));
+        } else if (opcode == (byte) 0x9A) { // OP_GLOBGETSOURCES
+            if (p.getLength() < 18) return;
+            log.debug("UDP Source Request from {}", p.getAddress());
+
+            byte[] hashBytes = new byte[16];
+            System.arraycopy(data, 2, hashBytes, 0, 16);
+            StringBuilder sb = new StringBuilder();
+            for (byte b : hashBytes) sb.append(String.format("%02x", b));
+            String hash = sb.toString();
+
+            var sources = fileIndex.getSources(hash, null, config.maxSourcesPerFile());
+            if (sources.isEmpty()) return;
+
+            ByteBuffer resp = ByteBuffer.allocate(2 + 16 + 1 + sources.size() * 6).order(ByteOrder.LITTLE_ENDIAN);
+            resp.put(Packet.PROTOCOL_ED2K);
+            resp.put((byte) 0x9B); // OP_GLOBFOUNDSOURCES
+            resp.put(hashBytes);
+            resp.put((byte) Math.min(sources.size(), 255));
+            for (var s : sources) {
+                resp.putInt(ClientState.ipToInt(s.address()));
+                resp.putShort((short) s.port());
+            }
+
+            ds.send(new java.net.DatagramPacket(resp.array(), resp.position(), p.getAddress(), p.getPort()));
         }
     }
 
