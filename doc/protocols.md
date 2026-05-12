@@ -27,6 +27,7 @@ The eMule protocol adds extended features on top of the original ed2k protocol.
     - `EMULE_INFO` (0x01) / `EMULE_INFO_ACK` (0x02): Information exchange on eMule-specific capabilities.
     - `GET_SOURCES_OBFU` (0x23): Extended source request supporting obfuscation.
     - `SOURCES_RESULT_OBFU` (0x24): Extended source answer.
+    - `CALLBACK` (0x1C): Relay connection request from a HighID client to a LowID client.
     - `COMPRESSED_PART` (0x28): Used for transferring compressed data parts.
 
 ### Tag Support
@@ -80,6 +81,8 @@ JEmuleServer follows modern Java 21+ practices and several software design patte
 - **Observer (Pub-Sub)**: An asynchronous `EventManager` allows decoupling core logic (Login, Search, Publish) from monitoring and logging systems.
 - **Circuit Breaker (Resilience4j)**: Protects the server from cascading failures if the H2 database becomes slow or unresponsive.
 - **Non-blocking Anti-Flood**: Implements a lock-free Token Bucket algorithm using `AtomicLong` for high-performance rate limiting per IP.
+- **IP Filtering (IPFilter)**: High-performance IP blocking using binary search on pre-sorted `ipfilter.dat` ranges (O(log N)).
+- **Fake File Detection**: Heuristic-based detection of malicious files (multiple extensions, suspicious keywords) with automatic persistence of banned hashes in H2 database.
 
 ## 7. Security Features
 
@@ -88,6 +91,7 @@ JEmuleServer follows modern Java 21+ practices and several software design patte
 - **Flood Protection**: Rate limiting per IP to mitigate DoS/Flood attacks.
 - **Resource Quotas**: Per-user limits on the number of published files to prevent index exhaustion.
 - **Port Validation**: Strict validation of server and client ports to prevent binding to privileged ranges or invalid values.
+- **LowID Management**: Supports the `CALLBACK` mechanism (0x1C) to allow connections to clients behind firewalls/NAT.
 
 ## Sources and References
 

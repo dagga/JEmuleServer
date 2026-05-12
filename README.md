@@ -17,7 +17,7 @@ To compile the project and generate the executable JAR file (Fat JAR):
 ./gradlew build
 ```
 
-The JAR file will be generated in `build/libs/JEmuleServer-0.3.2.jar`.
+The JAR file will be generated in `build/libs/JEmuleServer-0.4.jar`.
 
 ## Running
 
@@ -34,7 +34,7 @@ You can start the server directly via Gradle:
 Once the project is compiled, you can start the server with the following command:
 
 ```bash
-java -Djava.net.preferIPv4Stack=true -jar build/libs/JEmuleServer-0.3.2.jar [port]
+java -Djava.net.preferIPv4Stack=true -jar build/libs/JEmuleServer-0.4.jar [port]
 ```
 
 - `-Djava.net.preferIPv4Stack=true`: Recommended to avoid connectivity issues with some eMule/aMule clients (forces the
@@ -80,10 +80,11 @@ Here is a comparison between JEmuleServer and the historical **eServer (Lugdunum
 | **Embedded Database**               |     ✅ Supported (H2)      | ❌ No (Memory/Files) |
 | **User Quotas**                     |        ✅ Supported        |     ✅ Supported     |
 | **Event-Driven Monitoring**         |        ✅ Supported        |        ❌ No         |
-| **IP Filtering (ipfilter.dat)**     |      🚧 In Progress       |     ✅ Supported     |
-| **LowID Management (Callback)**     |      🚧 In Progress       |     ✅ Supported     |
+| **IP Filtering (ipfilter.dat)**     |        ✅ Supported        |     ✅ Supported     |
+| **LowID Management (Callback)**     |        ✅ Supported        |     ✅ Supported     |
+| **Fake File Detection**             |        ✅ Supported        |     ✅ Supported     |
 | **External Config File**            |      🚧 In Progress       |     ✅ Supported     |
-| **Web Admin Interface**             |         ❌ Planned         |     ✅ Supported     |
+| **Admin Interface**                 |         ❌ Planned         |     ✅ Supported     |
 | **IPv6 Support**                    |         ❌ Planned         |        ❌ No         |
 
 ## License

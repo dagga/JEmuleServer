@@ -29,7 +29,7 @@ import java.io.IOException;
 
 public class Main {
     private static final Logger log = LoggerFactory.getLogger(Main.class);
-    public static final String VERSION = "0.3.2";
+    public static final String VERSION = "0.4";
 
     public static void main(String[] args) {
         ServerConfig cfg = ServerConfig.DEFAULT;

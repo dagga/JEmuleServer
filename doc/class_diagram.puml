@@ -10,6 +10,8 @@ package "org.jemule" {
             +maxPacketSize: int
             +maxSearchResults: int
             +floodMaxRequestsPerSecond: int
+            +ipFilterPath: String
+            +fakeFileDetectionEnabled: boolean
             +{static} DEFAULT: ServerConfig
         }
     }
@@ -70,6 +72,7 @@ package "org.jemule" {
             -clientId: int
             -zlibSupported: boolean
             -publishedFilesCount: AtomicInteger
+            -messenger: Consumer<Packet>
             +isHighId(): boolean
         }
 
@@ -146,6 +149,12 @@ package "org.jemule" {
         class FloodProtector {
             +allow(InetAddress): boolean
         }
+        class IPFilter {
+            +isBlocked(InetAddress): boolean
+        }
+        class FakeFileDetector {
+            +isFake(FileMetadata): boolean
+        }
     }
 }
 
@@ -156,6 +165,7 @@ Server --> FloodProtector
 Server --> EventManager
 Server --> ClientFactory
 Server --> DatabaseManager
+Server --> IPFilter
 Server ..> ClientHandler : creates
 ClientHandler --> ServerConfig
 ClientHandler --> ClientRegistry
@@ -163,6 +173,7 @@ ClientHandler --> FileIndex
 ClientHandler --> ClientState
 ClientHandler --> EventManager
 ClientHandler --> ClientFactory
+ClientHandler --> FakeFileDetector
 ClientHandler ..> Packet : uses
 ClientHandler ..> OpCode : uses
 FileIndex --> FileMetadata
