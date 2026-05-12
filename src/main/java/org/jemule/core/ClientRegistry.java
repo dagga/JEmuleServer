@@ -51,4 +51,8 @@ public class ClientRegistry {
     public int size() {
         return clients.size();
     }
+
+    public Iterable<ClientState> getAllClients() {
+        return clients.values();
+    }
 }

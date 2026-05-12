@@ -33,9 +33,8 @@ servers (Lugdunum type).
 
 ## 4. Administration & Monitoring
 
-- [x] **External Configuration File**: Move all parameters (port, limits, names) to a `server.properties` or
-  `config.yml` file.
-- [ ] **Administration Interface**: Add an interface (command line) to monitor performance and manage
+- [x] **External Configuration File**: Move all parameters (port, limits, names) to a `server.properties`.
+- [x] **Administration Interface**: Add an interface (command line) to monitor performance and manage
   bans.
 - [x] **Detailed Statistics**: Log transfer statistics, number of searches per minute, and client version distribution.
 - [x] **Observer/Pub-Sub Event System**: Implement an event system for better monitoring and decoupled hooks.

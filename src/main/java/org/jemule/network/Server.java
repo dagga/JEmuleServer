@@ -60,6 +60,7 @@ public class Server {
     private final DatabaseManager db;
     private final EventManager eventManager;
     private final ClientFactory clientFactory;
+    private final AdminInterface admin;
     private volatile boolean running = true;
 
     /**
@@ -101,6 +102,7 @@ public class Server {
         }
         this.db = dbMgr;
         this.fileIndex = new FileIndex(db, eventManager);
+        this.admin = new AdminInterface(this, registry, fileIndex, ipFilter, fakeFileDetector);
     }
 
     private void setupDefaultListeners() {
@@ -127,6 +129,7 @@ public class Server {
             log.info("Virtual Threads ready for 50k+ concurrent clients");
 
             startUdpResponder();
+            startAdminInterface();
 
             while (running && !ss.isClosed()) {
                 try {
@@ -177,6 +180,12 @@ public class Server {
                 }
             }
         });
+    }
+
+    private void startAdminInterface() {
+        Thread adminThread = new Thread(admin, "AdminInterface");
+        adminThread.setDaemon(true);
+        adminThread.start();
     }
 
     private void handleUdp(java.net.DatagramSocket ds, java.net.DatagramPacket p) throws IOException {

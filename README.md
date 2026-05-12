@@ -57,6 +57,18 @@ fakeFileDetectionEnabled=true
 
 All parameters can be tuned in this file, including quotas, flood protection thresholds, and circuit breaker settings.
 
+## Administration Interface
+
+JEmuleServer includes a command-line interface (CLI) for administration. When running the server, you can type commands directly into the terminal.
+
+Available commands:
+- `status`: Displays server performance, uptime, and core statistics.
+- `clients`: Lists connected clients with their IP, ID, type (HighID/LowID), and published files count.
+- `files`: Shows file indexing statistics and fake file detection status.
+- `ban <hash> [reason]`: Manually adds a file hash (32-char hex) to the blacklist.
+- `help`: Shows the list of available commands.
+- `stop` / `exit` / `quit`: Safely shuts down the server.
+
 ## Firewall Configuration (Fedora)
 
 To allow clients to connect to your server, you must ensure your firewall is running and open the TCP and UDP ports (default 4661). On Fedora, use the following commands:
@@ -100,7 +112,7 @@ Here is a comparison between JEmuleServer and the historical **eServer (Lugdunum
 | **LowID Management (Callback)**     |        ✅ Supported        |     ✅ Supported     |
 | **Fake File Detection**             |        ✅ Supported        |     ✅ Supported     |
 | **External Config File**            |        ✅ Supported        |     ✅ Supported     |
-| **Admin Interface**                 |         ❌ Planned         |     ✅ Supported     |
+| **Admin Interface**                 |        ✅ Supported        |     ✅ Supported     |
 | **IPv6 Support**                    |         ❌ Planned         |        ❌ No         |
 
 ## License
