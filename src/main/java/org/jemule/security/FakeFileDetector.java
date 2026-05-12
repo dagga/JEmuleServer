@@ -1,5 +1,6 @@
 package org.jemule.security;
 
+import org.jemule.core.DatabaseManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -16,11 +17,17 @@ public class FakeFileDetector {
     // Common patterns for fake files in eMule networks
     private static final Pattern MULTIPLE_EXTENSIONS = Pattern.compile("\\.[a-z0-9]+\\.(exe|vbs|scr|bat|cmd|js|pif)$", Pattern.CASE_INSENSITIVE);
     private static final String[] SUSPICIOUS_KEYWORDS = {
-            "virus", "worm", "trojan", "crack", "keygen", "serial", "freeporn", "spam"
+            "virus", "worm", "trojan", "crack", "keygen", "serial", "freeporn", "spam",
+            "password_list", "account_hacker", "credit_card", "cheat_engine", "private_video"
     };
 
     private final Set<String> bannedHashes = new HashSet<>();
+    private DatabaseManager db;
     private boolean enabled = true;
+
+    public void setDatabaseManager(DatabaseManager db) {
+        this.db = db;
+    }
 
     public boolean isEnabled() {
         return enabled;
@@ -41,8 +48,10 @@ public class FakeFileDetector {
     public boolean isFake(String hash, String name, long size) {
         if (!enabled) return false;
 
+        String upperHash = hash.toUpperCase();
+
         // 1. Check Blacklist
-        if (bannedHashes.contains(hash.toUpperCase())) {
+        if (bannedHashes.contains(upperHash)) {
             log.debug("File rejected: Hash {} is blacklisted", hash);
             return true;
         }
@@ -50,31 +59,41 @@ public class FakeFileDetector {
         if (name == null || name.isEmpty()) return false;
         String lowerName = name.toLowerCase();
 
+        boolean suspicious = false;
+        String reason = "";
+
         // 2. Multiple Extensions (e.g., Movie.mp4.exe)
         if (MULTIPLE_EXTENSIONS.matcher(lowerName).find()) {
-            log.info("File rejected: Multiple extensions in '{}'", name);
-            return true;
+            suspicious = true;
+            reason = "Multiple extensions";
         }
 
         // 3. Suspicious Keywords
-        for (String keyword : SUSPICIOUS_KEYWORDS) {
-            if (lowerName.contains(keyword)) {
-                log.info("File rejected: Suspicious keyword '{}' in '{}'", keyword, name);
-                return true;
+        if (!suspicious) {
+            for (String keyword : SUSPICIOUS_KEYWORDS) {
+                if (lowerName.contains(keyword)) {
+                    suspicious = true;
+                    reason = "Suspicious keyword: " + keyword;
+                    break;
+                }
             }
         }
 
-        // 4. Heuristic: Large file with executable extension
-        if (size > 50 * 1024 * 1024 && (lowerName.endsWith(".exe") || lowerName.endsWith(".scr"))) {
-             // Most legitimate eMule executables aren't huge, but this is a soft heuristic
-             // Lugdunum often limited this. Let's be cautious but it's a common sign of a "wrapped" malware.
-             // We'll stick to a higher limit for now or just skip it if too risky.
+        // 4. Short names with many special characters (spam)
+        if (!suspicious && name.length() < 10 && countSpecialChars(name) > 4) {
+            suspicious = true;
+            reason = "Abnormal character density";
         }
-        
-        // 5. Short names with many special characters (spam)
-        if (name.length() < 10 && countSpecialChars(name) > 4) {
-             log.info("File rejected: Abnormal character density in '{}'", name);
-             return true;
+
+        if (suspicious) {
+            log.info("File rejected: {} in '{}' (hash={})", reason, name, hash);
+            // Don't auto-ban in-memory if we're just checking
+            // addBannedHash(upperHash); 
+            if (db != null) {
+                db.addBannedHash(upperHash, "Auto-banned: " + reason + " (Name: " + name + ")");
+                addBannedHash(upperHash); // Now add it to memory if DB persist succeeded (or at least was called)
+            }
+            return true;
         }
 
         return false;

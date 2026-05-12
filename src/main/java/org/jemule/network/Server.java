@@ -90,6 +90,7 @@ public class Server {
                     config.cbMinimumNumberOfCalls(),
                     config.cbWaitDurationInSeconds()
             );
+            this.fakeFileDetector.setDatabaseManager(dbMgr);
             if (config.fakeFileDetectionEnabled()) {
                 List<String> banned = dbMgr.loadBannedHashes();
                 banned.forEach(this.fakeFileDetector::addBannedHash);

@@ -19,6 +19,7 @@ public class FakeFileDetectorTest {
         FakeFileDetector detector = new FakeFileDetector();
         assertTrue(detector.isFake("12345678901234567890123456789012", "cool_virus_remover.exe", 1000));
         assertTrue(detector.isFake("12345678901234567890123456789012", "winrar_crack_keygen.zip", 1000));
+        assertTrue(detector.isFake("12345678901234567890123456789012", "bank_account_hacker.exe", 1000));
         assertFalse(detector.isFake("12345678901234567890123456789012", "my_vacation_photos.zip", 1000));
     }
 
