@@ -33,7 +33,7 @@ servers (Lugdunum type).
 
 ## 4. Administration & Monitoring
 
-- [ ] **External Configuration File**: Move all parameters (port, limits, names) to a `server.properties` or
+- [x] **External Configuration File**: Move all parameters (port, limits, names) to a `server.properties` or
   `config.yml` file.
 - [ ] **Administration Interface**: Add an interface (command line) to monitor performance and manage
   bans.

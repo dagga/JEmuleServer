@@ -25,36 +25,47 @@ import org.jemule.network.Server;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.FileInputStream;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.Properties;
 
 public class Main {
     private static final Logger log = LoggerFactory.getLogger(Main.class);
     public static final String VERSION = "0.4";
 
     public static void main(String[] args) {
-        ServerConfig cfg = ServerConfig.DEFAULT;
-        if (args.length > 0) {
+        String configPath = "server.properties";
+        if (args.length > 0 && !args[0].chars().allMatch(Character::isDigit)) {
+            configPath = args[0];
+        }
+
+        ServerConfig cfg = loadConfig(configPath);
+        
+        // Override port from CLI if provided as first or second argument
+        for (String arg : args) {
             try {
-                        cfg = new ServerConfig(
-                                Integer.parseInt(args[0]),
-                                2 * 1024 * 1024,
-                                300,
-                                50,
-                                ServerConfig.DEFAULT.maxUsers(),
-                                ServerConfig.DEFAULT.maxFiles(),
-                                ServerConfig.DEFAULT.maxFilesPerUser(),
-                                ServerConfig.DEFAULT.maxSourcesPerFile(),
-                                ServerConfig.DEFAULT.databasePath(),
-                                ServerConfig.DEFAULT.ipFilterPath(),
-                                ServerConfig.DEFAULT.fakeFileDetectionEnabled(),
-                                ServerConfig.DEFAULT.cbFailureRateThreshold(),
-                                ServerConfig.DEFAULT.cbMinimumNumberOfCalls(),
-                                ServerConfig.DEFAULT.cbWaitDurationInSeconds()
-                        );
-            } catch (NumberFormatException e) {
-                log.error("Usage: java -jar JEmuleServer.jar [port]");
-                return;
-            }
+                int port = Integer.parseInt(arg);
+                cfg = new ServerConfig(
+                        port,
+                        cfg.maxPacketSize(),
+                        cfg.maxSearchResults(),
+                        cfg.floodMaxRequestsPerSecond(),
+                        cfg.maxUsers(),
+                        cfg.maxFiles(),
+                        cfg.maxFilesPerUser(),
+                        cfg.maxSourcesPerFile(),
+                        cfg.databasePath(),
+                        cfg.ipFilterPath(),
+                        cfg.fakeFileDetectionEnabled(),
+                        cfg.cbFailureRateThreshold(),
+                        cfg.cbMinimumNumberOfCalls(),
+                        cfg.cbWaitDurationInSeconds()
+                );
+                break; // Use the first integer found as port
+            } catch (NumberFormatException ignored) {}
         }
         
         ClientFactory factory = new ClientFactory();
@@ -66,5 +77,26 @@ public class Main {
         } catch (IOException e) {
             log.error("Startup failed: {}", e.getMessage(), e);
         }
+    }
+
+    private static ServerConfig loadConfig(String pathStr) {
+        Path path = Paths.get(pathStr);
+        if (Files.exists(path)) {
+            log.info("Loading configuration from {}", path.toAbsolutePath());
+            Properties props = new Properties();
+            try (FileInputStream fis = new FileInputStream(path.toFile())) {
+                props.load(fis);
+                return ServerConfig.fromProperties(props);
+            } catch (IOException | IllegalArgumentException e) {
+                log.error("Failed to load config from {}: {}. Using defaults.", pathStr, e.getMessage());
+            }
+        } else {
+            if (!"server.properties".equals(pathStr)) {
+                log.warn("Configuration file {} not found. Using defaults.", pathStr);
+            } else {
+                log.info("No server.properties found. Using default configuration.");
+            }
+        }
+        return ServerConfig.DEFAULT;
     }
 }

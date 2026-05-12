@@ -34,12 +34,28 @@ You can start the server directly via Gradle:
 Once the project is compiled, you can start the server with the following command:
 
 ```bash
-java -Djava.net.preferIPv4Stack=true -jar build/libs/JEmuleServer-0.4.jar [port]
+java -Djava.net.preferIPv4Stack=true -jar build/libs/JEmuleServer-0.4.jar [config_file] [port]
 ```
 
 - `-Djava.net.preferIPv4Stack=true`: Recommended to avoid connectivity issues with some eMule/aMule clients (forces the
   use of IPv4).
-- `[port]`: Optional, defaults to 4661.
+- `[config_file]`: Optional, path to a custom configuration file (defaults to `server.properties` if present).
+- `[port]`: Optional, overrides the port defined in the configuration.
+
+## Configuration
+
+JEmuleServer uses a `server.properties` file for its configuration. If the file is not found, the server uses its internal default values.
+
+Example `server.properties`:
+```properties
+port=4661
+maxUsers=100000
+databasePath=./jemule_db
+fakeFileDetectionEnabled=true
+# ipFilterPath=ipfilter.dat
+```
+
+All parameters can be tuned in this file, including quotas, flood protection thresholds, and circuit breaker settings.
 
 ## Firewall Configuration (Fedora)
 
@@ -83,7 +99,7 @@ Here is a comparison between JEmuleServer and the historical **eServer (Lugdunum
 | **IP Filtering (ipfilter.dat)**     |        ✅ Supported        |     ✅ Supported     |
 | **LowID Management (Callback)**     |        ✅ Supported        |     ✅ Supported     |
 | **Fake File Detection**             |        ✅ Supported        |     ✅ Supported     |
-| **External Config File**            |      🚧 In Progress       |     ✅ Supported     |
+| **External Config File**            |        ✅ Supported        |     ✅ Supported     |
 | **Admin Interface**                 |         ❌ Planned         |     ✅ Supported     |
 | **IPv6 Support**                    |         ❌ Planned         |        ❌ No         |
 

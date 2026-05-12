@@ -19,9 +19,39 @@
 package org.jemule.config;
 
 import org.junit.jupiter.api.Test;
+import java.util.Properties;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ServerConfigTest {
+
+    @Test
+    void testFromProperties() {
+        Properties props = new Properties();
+        props.setProperty("port", "1234");
+        props.setProperty("maxUsers", "500");
+        props.setProperty("databasePath", "/tmp/testdb");
+        props.setProperty("fakeFileDetectionEnabled", "false");
+
+        ServerConfig cfg = ServerConfig.fromProperties(props);
+
+        assertEquals(1234, cfg.port());
+        assertEquals(500, cfg.maxUsers());
+        assertEquals("/tmp/testdb", cfg.databasePath());
+        assertFalse(cfg.fakeFileDetectionEnabled());
+        
+        // Defaults
+        assertEquals(ServerConfig.DEFAULT.maxPacketSize(), cfg.maxPacketSize());
+        assertEquals(ServerConfig.DEFAULT.cbFailureRateThreshold(), cfg.cbFailureRateThreshold());
+    }
+
+    @Test
+    void testFromEmptyProperties() {
+        Properties props = new Properties();
+        ServerConfig cfg = ServerConfig.fromProperties(props);
+        
+        assertEquals(ServerConfig.DEFAULT.port(), cfg.port());
+        assertEquals(ServerConfig.DEFAULT.maxFiles(), cfg.maxFiles());
+    }
 
     @Test
     void testValidPort() {

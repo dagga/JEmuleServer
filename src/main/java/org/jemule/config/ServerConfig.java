@@ -19,6 +19,8 @@
 
 package org.jemule.config;
 
+import java.util.Properties;
+
 /**
  * Configuration parameters for the JEmuleServer.
  *
@@ -84,4 +86,26 @@ public record ServerConfig(
             10,
             60
     );
+
+    /**
+     * Creates a ServerConfig from a Properties object, using DEFAULT values for missing keys.
+     */
+    public static ServerConfig fromProperties(Properties props) {
+        return new ServerConfig(
+                Integer.parseInt(props.getProperty("port", String.valueOf(DEFAULT.port()))),
+                Integer.parseInt(props.getProperty("maxPacketSize", String.valueOf(DEFAULT.maxPacketSize()))),
+                Integer.parseInt(props.getProperty("maxSearchResults", String.valueOf(DEFAULT.maxSearchResults()))),
+                Integer.parseInt(props.getProperty("floodMaxRequestsPerSecond", String.valueOf(DEFAULT.floodMaxRequestsPerSecond()))),
+                Integer.parseInt(props.getProperty("maxUsers", String.valueOf(DEFAULT.maxUsers()))),
+                Integer.parseInt(props.getProperty("maxFiles", String.valueOf(DEFAULT.maxFiles()))),
+                Integer.parseInt(props.getProperty("maxFilesPerUser", String.valueOf(DEFAULT.maxFilesPerUser()))),
+                Integer.parseInt(props.getProperty("maxSourcesPerFile", String.valueOf(DEFAULT.maxSourcesPerFile()))),
+                props.getProperty("databasePath", DEFAULT.databasePath()),
+                props.getProperty("ipFilterPath", DEFAULT.ipFilterPath()),
+                Boolean.parseBoolean(props.getProperty("fakeFileDetectionEnabled", String.valueOf(DEFAULT.fakeFileDetectionEnabled()))),
+                Float.parseFloat(props.getProperty("cbFailureRateThreshold", String.valueOf(DEFAULT.cbFailureRateThreshold()))),
+                Integer.parseInt(props.getProperty("cbMinimumNumberOfCalls", String.valueOf(DEFAULT.cbMinimumNumberOfCalls()))),
+                Integer.parseInt(props.getProperty("cbWaitDurationInSeconds", String.valueOf(DEFAULT.cbWaitDurationInSeconds())))
+        );
+    }
 }
