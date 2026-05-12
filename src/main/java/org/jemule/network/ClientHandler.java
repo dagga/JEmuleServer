@@ -548,6 +548,18 @@ public class ClientHandler implements Runnable {
     }
 
     /**
+     * Converts a 32-character hex string hash to 16 bytes.
+     */
+    private byte[] hashToBytes(String hex) {
+        if (hex == null || hex.length() != 32) return new byte[16];
+        byte[] b = new byte[16];
+        for (int i = 0; i < 16; i++) {
+            b[i] = (byte) Integer.parseInt(hex.substring(i * 2, i * 2 + 2), 16);
+        }
+        return b;
+    }
+
+    /**
      * Handles requests for file sources (OpCode 0x15 or 0xC5:0x23).
      *
      * @param data The file hash.
@@ -555,16 +567,29 @@ public class ClientHandler implements Runnable {
      * @throws IOException If sending results fails.
      */
     private void handleGetSources(byte[] data, OutputStream out) throws IOException {
-        String hash = new String(data, StandardCharsets.UTF_8).trim();
-        if (hash.length() != 32) {
-            log.warn("Invalid hash length for GET_SOURCES: {}", hash.length());
-            return;
+        String hash;
+        byte[] hashBytes;
+        if (data.length == 16) {
+            hashBytes = data;
+            StringBuilder sb = new StringBuilder();
+            for (byte b : data) sb.append(String.format("%02x", b));
+            hash = sb.toString();
+        } else {
+            hash = new String(data, StandardCharsets.UTF_8).trim();
+            if (hash.length() != 32) {
+                log.warn("Invalid hash length for GET_SOURCES: {}", hash.length());
+                return;
+            }
+            hashBytes = hashToBytes(hash);
         }
+
         var sources = fileIndex.getSources(hash, state, config.maxSourcesPerFile());
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         DataOutputStream dos = new DataOutputStream(baos);
+
+        dos.write(hashBytes);
+        dos.writeByte((byte) Math.min(sources.size(), 255));
         for (var s : sources) {
-            dos.writeInt(s.clientId());
             dos.writeInt(ClientState.ipToInt(s.address()));
             dos.writeShort((short) s.port());
         }
