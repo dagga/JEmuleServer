@@ -34,7 +34,7 @@ import java.util.Properties;
 
 public class Main {
     private static final Logger log = LoggerFactory.getLogger(Main.class);
-    public static final String VERSION = "0.4";
+    public static final String VERSION = "0.5";
 
     public static void main(String[] args) {
         String configPath = "server.properties";
