@@ -157,7 +157,7 @@ public class FileIndex {
      */
     public List<FileMetadata> searchComplex(SearchQuery query, int limit) {
         if (eventManager != null) {
-            eventManager.broadcast(new FileEvent(FileEvent.SEARCHED, "ComplexQuery", "", "Complex search executed"));
+            eventManager.broadcast(new FileEvent(FileEvent.SEARCHED, query.toString(), "", "Complex search executed"));
         }
         return byHash.values().stream()
                 .filter(query)

@@ -30,6 +30,10 @@ public interface SearchQuery extends Predicate<FileMetadata> {
         public boolean test(FileMetadata meta) {
             return left.test(meta) && right.test(meta);
         }
+        @Override
+        public String toString() {
+            return "(" + left + " AND " + right + ")";
+        }
     }
 
     record OrQuery(SearchQuery left, SearchQuery right) implements SearchQuery {
@@ -37,12 +41,20 @@ public interface SearchQuery extends Predicate<FileMetadata> {
         public boolean test(FileMetadata meta) {
             return left.test(meta) || right.test(meta);
         }
+        @Override
+        public String toString() {
+            return "(" + left + " OR " + right + ")";
+        }
     }
 
     record NotQuery(SearchQuery left, SearchQuery right) implements SearchQuery {
         @Override
         public boolean test(FileMetadata meta) {
             return left.test(meta) && !right.test(meta);
+        }
+        @Override
+        public String toString() {
+            return "(" + left + " NOT " + right + ")";
         }
     }
 
@@ -65,6 +77,16 @@ public interface SearchQuery extends Predicate<FileMetadata> {
                 default -> true;
             };
         }
+        @Override
+        public String toString() {
+            String type = switch (id) {
+                case ID_FILENAME -> "Name";
+                case ID_FILETYPE -> "Type";
+                case ID_FORMAT -> "Format";
+                default -> "Unknown(" + id + ")";
+            };
+            return type + ":" + term;
+        }
     }
 
     record SizeQuery(long value, byte mode) implements SearchQuery {
@@ -75,6 +97,11 @@ public interface SearchQuery extends Predicate<FileMetadata> {
                 case MODE_MAX -> meta.size() <= value;
                 default -> true;
             };
+        }
+        @Override
+        public String toString() {
+            String m = (mode == MODE_MIN) ? ">=" : (mode == MODE_MAX) ? "<=" : "?";
+            return "Size" + m + value;
         }
     }
 
@@ -104,6 +131,7 @@ public interface SearchQuery extends Predicate<FileMetadata> {
             return switch (type) {
                 case 0x01 -> { // String tag, no ID (Filename)
                     int len = Short.toUnsignedInt(buf.getShort());
+                    if (len == 0) yield builder.term("", ID_FILENAME);
                     byte[] b = new byte[len];
                     buf.get(b);
                     String term = new String(b, StandardCharsets.UTF_8);
@@ -111,9 +139,14 @@ public interface SearchQuery extends Predicate<FileMetadata> {
                 }
                 case 0x02 -> { // String tag with numeric ID
                     int len = Short.toUnsignedInt(buf.getShort());
-                    byte[] b = new byte[len];
-                    buf.get(b);
-                    String term = new String(b, StandardCharsets.UTF_8);
+                    String term;
+                    if (len == 0) {
+                        term = "";
+                    } else {
+                        byte[] b = new byte[len];
+                        buf.get(b);
+                        term = new String(b, StandardCharsets.UTF_8);
+                    }
                     buf.getShort(); // name length (1)
                     byte id = buf.get();
                     yield builder.term(term, id);

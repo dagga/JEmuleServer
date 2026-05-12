@@ -499,11 +499,39 @@ public class ClientHandler implements Runnable {
 
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         DataOutputStream dos = new DataOutputStream(baos);
+        dos.writeInt(results.size());
         for (var m : results) {
-            dos.writeUTF(m.hash());
-            dos.writeUTF(m.name());
-            dos.writeLong(m.size());
-            dos.writeUTF(m.type());
+            byte[] hashBytes = hashToBytes(m.hash());
+            
+            // Port and ID are usually added via Tag list
+            // For now, let's keep it simple or follow Lugdunum style
+            // Standard ed2k SEARCH_RESULT: Hash(16), ClientID(4), Port(2), TagList
+            // Use BIG_ENDIAN for legacy ed2k fields if not specified, but Packet uses LITTLE_ENDIAN generally.
+            // Actually, ClientID and Port in SEARCH_RESULT are usually BIG_ENDIAN in some docs, but LITTLE in others.
+            // Let's stick to what eMule expects (usually LITTLE for tags, but IP/Port can be BIG).
+            // Actually, the Packet class uses the default ByteOrder of the buffer/stream.
+            // Let's use ByteBuffer to be sure.
+            
+            ByteBuffer itemBuf = ByteBuffer.allocate(2048).order(ByteOrder.LITTLE_ENDIAN);
+            itemBuf.put(hashBytes);
+            itemBuf.putInt(0); // ID
+            itemBuf.putShort((short) 0); // Port
+            
+            List<Tag> tags = new ArrayList<>();
+            tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_NAME, m.name()));
+            if (m.size() > Integer.MAX_VALUE) {
+                tags.add(new Tag(Tag.TYPE_INTEGER, "\u0002", (int) (m.size() & 0xFFFFFFFFL))); // Low 32 bits
+                tags.add(new Tag(Tag.TYPE_INTEGER, "\u003A", (int) (m.size() >> 32))); // ID_FILESIZE_HIGH
+            } else {
+                tags.add(new Tag(Tag.TYPE_INTEGER, "\u0002", (int) m.size())); // ID_FILESIZE
+            }
+            tags.add(new Tag(Tag.TYPE_STRING, "\u0003", m.type())); // ID_FILETYPE
+            
+            Tag.writeList(itemBuf, tags);
+            itemBuf.flip();
+            byte[] itemData = new byte[itemBuf.remaining()];
+            itemBuf.get(itemData);
+            dos.write(itemData);
         }
         new Packet(Packet.PROTOCOL_ED2K, OpCode.SEARCH_RESULT.value, baos.toByteArray()).write(out, state.isZlibSupported());
     }
