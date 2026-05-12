@@ -75,7 +75,7 @@ public class ClientHandler implements Runnable {
     @Override
     public void run() {
         try {
-            socket.setSoTimeout(30000);
+            socket.setSoTimeout(config.tcpKeepAliveTimeoutInSeconds() * 1000);
             String remoteAddr = maskIp(socket.getRemoteSocketAddress().toString());
             log.info("Client connected: {}", remoteAddr);
             broadcastEvent(ClientEvent.CONNECTED, remoteAddr, "anonymous", "Client connected");

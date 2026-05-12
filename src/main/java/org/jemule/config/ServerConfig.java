@@ -55,7 +55,10 @@ public record ServerConfig(
         // Circuit Breaker settings
         float cbFailureRateThreshold,
         int cbMinimumNumberOfCalls,
-        int cbWaitDurationInSeconds
+        int cbWaitDurationInSeconds,
+        
+        // Timeout settings
+        int tcpKeepAliveTimeoutInSeconds
 ) {
     public ServerConfig {
         if (port < 1 || port > 65535) {
@@ -84,7 +87,8 @@ public record ServerConfig(
             true,
             50.0f,
             10,
-            60
+            60,
+            300
     );
 
     /**
@@ -105,7 +109,8 @@ public record ServerConfig(
                 Boolean.parseBoolean(props.getProperty("fakeFileDetectionEnabled", String.valueOf(DEFAULT.fakeFileDetectionEnabled()))),
                 Float.parseFloat(props.getProperty("cbFailureRateThreshold", String.valueOf(DEFAULT.cbFailureRateThreshold()))),
                 Integer.parseInt(props.getProperty("cbMinimumNumberOfCalls", String.valueOf(DEFAULT.cbMinimumNumberOfCalls()))),
-                Integer.parseInt(props.getProperty("cbWaitDurationInSeconds", String.valueOf(DEFAULT.cbWaitDurationInSeconds())))
+                Integer.parseInt(props.getProperty("cbWaitDurationInSeconds", String.valueOf(DEFAULT.cbWaitDurationInSeconds()))),
+                Integer.parseInt(props.getProperty("tcpKeepAliveTimeoutInSeconds", String.valueOf(DEFAULT.tcpKeepAliveTimeoutInSeconds())))
         );
     }
 }

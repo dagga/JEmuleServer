@@ -62,7 +62,8 @@ public class Main {
                         cfg.fakeFileDetectionEnabled(),
                         cfg.cbFailureRateThreshold(),
                         cfg.cbMinimumNumberOfCalls(),
-                        cfg.cbWaitDurationInSeconds()
+                        cfg.cbWaitDurationInSeconds(),
+                        cfg.tcpKeepAliveTimeoutInSeconds()
                 );
                 break; // Use the first integer found as port
             } catch (NumberFormatException ignored) {}
