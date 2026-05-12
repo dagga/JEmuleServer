@@ -146,7 +146,7 @@ public class ClientHandler implements Runnable {
                 firstByte != (Packet.PROTOCOL_EMULE & 0xFF) &&
                 firstByte != (Packet.PROTOCOL_ZLIB & 0xFF)) {
             // Likely obfuscated handshake start
-            log.info("Detected possible obfuscated handshake from {}", socket.getRemoteSocketAddress());
+            log.info("Detected possible obfuscated handshake from {}", sanitize(socket.getRemoteSocketAddress().toString()));
             return handleObfuscatedHandshake(firstByte, pin, out);
         }
 
@@ -172,7 +172,7 @@ public class ClientHandler implements Runnable {
 
         // Anti-replay check
         if (Obfuscation.isReplay(clientRandom)) {
-            throw new IOException("Replay attack detected from " + socket.getRemoteSocketAddress());
+            throw new IOException("Replay attack detected from " + sanitize(socket.getRemoteSocketAddress().toString()));
         }
 
         int marker = dis.readUnsignedByte();
@@ -217,7 +217,7 @@ public class ClientHandler implements Runnable {
         out.write(encryptedResponse);
         out.flush();
 
-        log.info("Obfuscation handshake complete for {}", socket.getRemoteSocketAddress());
+        log.info("Obfuscation handshake complete for {}", sanitize(socket.getRemoteSocketAddress().toString()));
         obfuscated = true;
         this.wrappedOut = new ObfuscatedOutputStream(out, sendRC4);
         return encryptedIn;
@@ -449,7 +449,7 @@ public class ClientHandler implements Runnable {
      * @throws IOException If sending fails.
      */
     private void handleEmuleInfo(byte[] data, OutputStream out) throws IOException {
-        log.debug("Received EMULE_INFO from {}", socket.getRemoteSocketAddress());
+        log.debug("Received EMULE_INFO from {}", sanitize(socket.getRemoteSocketAddress().toString()));
         // For now, just ACK it with basic server info or empty EMULE_INFO_ACK
         // eMule Info usually contains client capabilities.
         new Packet(Packet.PROTOCOL_EMULE, OpCode.EMULE_INFO_ACK.value, new byte[0]).write(out, state.isZlibSupported());
@@ -475,10 +475,10 @@ public class ClientHandler implements Runnable {
             results = fileIndex.searchComplex(query, config.maxSearchResults());
             log.debug("Complex search -> {} results", results.size());
         } catch (Exception e) {
-            log.warn("Failed to parse complex search, falling back to simple search: {}", e.getMessage());
+            log.warn("Failed to parse complex search, falling back to simple search: {}", sanitize(e.getMessage()));
             String queryStr = new String(data, StandardCharsets.UTF_8).trim();
             if (queryStr.length() < 3) {
-                log.warn("Simple search query too short: '{}'", queryStr);
+                log.warn("Simple search query too short: '{}'", sanitize(queryStr));
                 results = List.of();
             } else {
                 results = fileIndex.search(queryStr, config.maxSearchResults());
@@ -495,6 +495,25 @@ public class ClientHandler implements Runnable {
             dos.writeUTF(m.type());
         }
         new Packet(Packet.PROTOCOL_ED2K, OpCode.SEARCH_RESULT.value, baos.toByteArray()).write(out, state.isZlibSupported());
+    }
+
+    private static String sanitize(String input) {
+        if (input == null) return "";
+        return input.replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t");
+    }
+
+    private boolean isValidHash(String hash) {
+        if (hash == null || hash.length() != 32) return false;
+        return hash.matches("^[0-9a-fA-F]{32}$");
+    }
+
+    private boolean isValidFilename(String name) {
+        if (name == null || name.isBlank()) return false;
+        if (name.length() > 255) return false;
+        for (char c : name.toCharArray()) {
+            if (c < 32) return false;
+        }
+        return true;
     }
 
     /**
@@ -540,12 +559,19 @@ public class ClientHandler implements Runnable {
                         }
                     }
 
-                    if (!name.isEmpty() && state.publishedFilesCount().get() < config.maxFilesPerUser()) {
+                    if (isValidHash(hash) && isValidFilename(name) && state.publishedFilesCount().get() < config.maxFilesPerUser()) {
+                        if (size < 0 || size > 100_000_000_000L) { // 100 GB limit
+                            log.warn("Invalid file size for PUBLISH (binary): {}", size);
+                            continue;
+                        }
                         FileMetadata meta = new FileMetadata(hash, name, size, type, tags);
                         meta.sources().put(String.valueOf(state.clientId()), state);
                         fileIndex.addFile(meta);
                         state.publishedFilesCount().incrementAndGet();
-                        log.info("Published (binary): {}", name);
+                        log.info("Published (binary): {}", sanitize(name));
+                    } else {
+                        log.warn("Invalid publish data (binary): hash={}, name={}, quota={}/{}",
+                                hash, sanitize(name), state.publishedFilesCount().get(), config.maxFilesPerUser());
                     }
                 }
             } else {
@@ -558,20 +584,29 @@ public class ClientHandler implements Runnable {
                     String sizeStr = p[2].trim();
                     String type = p[3].trim();
 
-                    if (hash.length() == 32 && !name.isEmpty() && state.publishedFilesCount().get() < config.maxFilesPerUser()) {
-                        long size = Long.parseLong(sizeStr);
-                        if (size >= 0) {
-                            FileMetadata meta = new FileMetadata(hash, name, size, type);
-                            meta.sources().put(String.valueOf(state.clientId()), state);
-                            fileIndex.addFile(meta);
-                            state.publishedFilesCount().incrementAndGet();
-                            log.info("Published (text): {}", name);
+                    if (isValidHash(hash) && isValidFilename(name) && state.publishedFilesCount().get() < config.maxFilesPerUser()) {
+                        try {
+                            long size = Long.parseLong(sizeStr);
+                            if (size >= 0 && size <= 100_000_000_000L) {
+                                FileMetadata meta = new FileMetadata(hash, name, size, type);
+                                meta.sources().put(String.valueOf(state.clientId()), state);
+                                fileIndex.addFile(meta);
+                                state.publishedFilesCount().incrementAndGet();
+                                log.info("Published (text): {}", sanitize(name));
+                            } else {
+                                log.warn("Invalid file size for PUBLISH (text): {}", size);
+                            }
+                        } catch (NumberFormatException e) {
+                            log.warn("Invalid size format for PUBLISH (text): {}", sanitize(sizeStr));
                         }
+                    } else {
+                        log.warn("Invalid publish data (text): hash={}, name={}, quota={}/{}",
+                                hash, sanitize(name), state.publishedFilesCount().get(), config.maxFilesPerUser());
                     }
                 }
             }
         } catch (Exception e) {
-            log.warn("Failed to parse PUBLISH_FILES: {}", e.getMessage());
+            log.warn("Failed to parse PUBLISH_FILES: {}", sanitize(e.getMessage()));
         }
 
         new Packet(Packet.PROTOCOL_ED2K, OpCode.PUBLISH_ACK.value, new byte[0]).write(out, state.isZlibSupported());
@@ -610,6 +645,7 @@ public class ClientHandler implements Runnable {
                 log.warn("Invalid hash length for GET_SOURCES: {}", hash.length());
                 return;
             }
+            log.info("Client requested sources for hash: {}", sanitize(hash));
             hashBytes = hashToBytes(hash);
         }
 
