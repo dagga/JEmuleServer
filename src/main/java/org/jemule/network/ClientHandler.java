@@ -499,9 +499,9 @@ public class ClientHandler implements Runnable {
 
     /**
      * Handles file publication requests (OpCode 0x20).
-     * Validates quotas and metadata before adding to the index.
+     * Supports both the standard ed2k binary format (with Tags) and a simple pipe-separated fallback.
      *
-     * @param data The publication data string.
+     * @param data The publication data.
      * @param out  The output stream for ACK.
      * @throws IOException If sending ACK fails.
      */
@@ -511,39 +511,69 @@ public class ClientHandler implements Runnable {
             return;
         }
 
-        String raw = new String(data, StandardCharsets.UTF_8);
-        String[] p = raw.split("\\|");
-        if (p.length >= 4) {
-            String hash = p[0].trim();
-            String name = p[1].trim();
-            String sizeStr = p[2].trim();
-            String type = p[3].trim();
+        try {
+            ByteBuffer buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN);
+            // In ed2k protocol, PUBLISH_FILES usually starts with the number of files (4 bytes)
+            // But some simplified versions might send just one or use a different format.
+            // Let's try to detect if it's binary or text.
+            if (data[0] < 32) { // Likely binary (count or first byte of hash/type)
+                int count = buf.getInt();
+                log.debug("Standard binary publish: {} files", count);
+                for (int i = 0; i < count; i++) {
+                    byte[] hashBytes = new byte[16];
+                    buf.get(hashBytes);
+                    StringBuilder sb = new StringBuilder();
+                    for (byte b : hashBytes) sb.append(String.format("%02x", b));
+                    String hash = sb.toString();
 
-            if (hash.length() != 32) {
-                log.warn("Invalid hash length for PUBLISH: {}", hash.length());
-            } else if (name.isEmpty()) {
-                log.warn("Empty filename for PUBLISH from {}", socket.getRemoteSocketAddress());
-            } else if (state.publishedFilesCount().get() >= config.maxFilesPerUser()) {
-                log.warn("Client {} reached max files quota ({})", socket.getRemoteSocketAddress(), config.maxFilesPerUser());
-            } else {
-                try {
-                    long size = Long.parseLong(sizeStr);
-                    if (size < 0) {
-                        log.warn("Invalid negative file size for PUBLISH: {}", size);
-                    } else {
-                        FileMetadata meta = new FileMetadata(hash, name, size, type);
+                    List<Tag> tags = Tag.readList(buf);
+                    String name = "";
+                    long size = 0;
+                    String type = "";
+
+                    for (Tag t : tags) {
+                        switch (t.name()) {
+                            case Tag.NAME_NAME -> name = (String) t.value();
+                            case "\u0002" -> size = ((Number) t.value()).longValue(); // ID_FILESIZE
+                            case "\u0003" -> type = (String) t.value(); // ID_FILETYPE
+                            // Additional tags like format, bitrate, etc. can be ignored or added to meta
+                        }
+                    }
+
+                    if (!name.isEmpty() && state.publishedFilesCount().get() < config.maxFilesPerUser()) {
+                        FileMetadata meta = new FileMetadata(hash, name, size, type, tags);
                         meta.sources().put(String.valueOf(state.clientId()), state);
                         fileIndex.addFile(meta);
                         state.publishedFilesCount().incrementAndGet();
-                        log.info("Published: {}", name);
+                        log.info("Published (binary): {}", name);
                     }
-                } catch (NumberFormatException e) {
-                    log.warn("Invalid size format for PUBLISH: {}", sizeStr);
+                }
+            } else {
+                // Fallback to simple pipe-separated format
+                String raw = new String(data, StandardCharsets.UTF_8);
+                String[] p = raw.split("\\|");
+                if (p.length >= 4) {
+                    String hash = p[0].trim();
+                    String name = p[1].trim();
+                    String sizeStr = p[2].trim();
+                    String type = p[3].trim();
+
+                    if (hash.length() == 32 && !name.isEmpty() && state.publishedFilesCount().get() < config.maxFilesPerUser()) {
+                        long size = Long.parseLong(sizeStr);
+                        if (size >= 0) {
+                            FileMetadata meta = new FileMetadata(hash, name, size, type);
+                            meta.sources().put(String.valueOf(state.clientId()), state);
+                            fileIndex.addFile(meta);
+                            state.publishedFilesCount().incrementAndGet();
+                            log.info("Published (text): {}", name);
+                        }
+                    }
                 }
             }
-        } else {
-            log.warn("Invalid publish format (expected 4+ fields, got {}): {}", p.length, raw);
+        } catch (Exception e) {
+            log.warn("Failed to parse PUBLISH_FILES: {}", e.getMessage());
         }
+
         new Packet(Packet.PROTOCOL_ED2K, OpCode.PUBLISH_ACK.value, new byte[0]).write(out, state.isZlibSupported());
     }
 
