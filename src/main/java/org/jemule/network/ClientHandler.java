@@ -372,6 +372,16 @@ public class ClientHandler implements Runnable {
 
         // 4. Server Status (0x34) - Finalizes the state in aMule
         sendServerStatus(out);
+
+        // 5. Send additional status updates to encourage file publishing
+        // Some clients wait for multiple status updates before publishing
+        try {
+            Thread.sleep(100); // Small delay
+            sendServerStatus(out);
+            log.debug("Sent additional SERVER_STATUS to encourage file publishing");
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     /**
@@ -464,7 +474,12 @@ public class ClientHandler implements Runnable {
     private void processPacket(Packet p, OutputStream out) throws IOException {
         state.lastActivity().set(System.currentTimeMillis());
         OpCode op = OpCode.fromByte(p.protocol(), p.opcode());
-        if (op == null) return;
+        if (op == null) {
+            log.debug("Unknown opcode: 0x{:02X} (Proto: 0x{:02X})", p.opcode(), p.protocol());
+            return;
+        }
+
+        log.debug("Processing packet: {} (Proto: 0x{:02X}, Data length: {})", op, p.protocol(), p.data() != null ? p.data().length : 0);
 
         switch (op) {
             case SEARCH_REQUEST -> handleSearch(p.data(), out);
@@ -593,6 +608,8 @@ public class ClientHandler implements Runnable {
             return;
         }
 
+        log.info("Received PUBLISH_FILES packet with {} bytes of data", data.length);
+
         try {
             ByteBuffer buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN);
             // In ed2k protocol, PUBLISH_FILES usually starts with the number of files (4 bytes)
@@ -600,7 +617,7 @@ public class ClientHandler implements Runnable {
             // Let's try to detect if it's binary or text.
             if (data[0] < 32) { // Likely binary (count or first byte of hash/type)
                 int count = buf.getInt();
-                log.debug("Standard binary publish: {} files", count);
+                log.info("Detected binary PUBLISH format with {} files", count);
                 for (int i = 0; i < count; i++) {
                     byte[] hashBytes = new byte[16];
                     buf.get(hashBytes);
@@ -622,6 +639,8 @@ public class ClientHandler implements Runnable {
                         }
                     }
 
+                    log.debug("Processing file: hash={}, name={}, size={}, type={}", hash, sanitize(name), size, type);
+
                     if (isValidHash(hash) && isValidFilename(name) && state.publishedFilesCount().get() < config.maxFilesPerUser()) {
                         if (fakeFileDetector.isFake(hash, name, size)) {
                             log.warn("Fake file detected and rejected (binary): {} (hash={})", sanitize(name), hash);
@@ -636,7 +655,7 @@ public class ClientHandler implements Runnable {
                         meta.sources().put(String.valueOf(state.clientId()), state);
                         fileIndex.addFile(meta);
                         state.publishedFilesCount().incrementAndGet();
-                        log.info("Published (binary): {}", sanitize(name));
+                        log.info("Published (binary): {} - Total files in index: {}", sanitize(name), fileIndex.fileCount());
                     } else {
                         log.warn("Invalid publish data (binary): hash={}, name={}, quota={}/{}",
                                 hash, sanitize(name), state.publishedFilesCount().get(), config.maxFilesPerUser());
@@ -645,12 +664,15 @@ public class ClientHandler implements Runnable {
             } else {
                 // Fallback to simple pipe-separated format
                 String raw = new String(data, StandardCharsets.UTF_8);
+                log.info("Detected text PUBLISH format: {}", sanitize(raw));
                 String[] p = raw.split("\\|");
                 if (p.length >= 4) {
                     String hash = p[0].trim();
                     String name = p[1].trim();
                     String sizeStr = p[2].trim();
                     String type = p[3].trim();
+
+                    log.debug("Processing text file: hash={}, name={}, size={}, type={}", hash, sanitize(name), sizeStr, type);
 
                     if (isValidHash(hash) && isValidFilename(name) && state.publishedFilesCount().get() < config.maxFilesPerUser()) {
                         try {
@@ -665,7 +687,7 @@ public class ClientHandler implements Runnable {
                                 meta.sources().put(String.valueOf(state.clientId()), state);
                                 fileIndex.addFile(meta);
                                 state.publishedFilesCount().incrementAndGet();
-                                log.info("Published (text): {}", sanitize(name));
+                                log.info("Published (text): {} - Total files in index: {}", sanitize(name), fileIndex.fileCount());
                             } else {
                                 log.warn("Invalid file size for PUBLISH (text): {}", size);
                             }
@@ -676,6 +698,8 @@ public class ClientHandler implements Runnable {
                         log.warn("Invalid publish data (text): hash={}, name={}, quota={}/{}",
                                 hash, sanitize(name), state.publishedFilesCount().get(), config.maxFilesPerUser());
                     }
+                } else {
+                    log.warn("Invalid text format - expected at least 4 pipe-separated fields, got {}", p.length);
                 }
             }
         } catch (Exception e) {

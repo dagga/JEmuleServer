@@ -4,6 +4,7 @@ import org.jemule.config.ServerConfig;
 import org.jemule.core.*;
 import org.jemule.core.event.EventManager;
 import org.jemule.protocol.OpCode;
+import org.jemule.protocol.Tag;
 import org.jemule.security.FakeFileDetector;
 import org.jemule.security.FloodProtector;
 import org.junit.jupiter.api.BeforeEach;
@@ -17,7 +18,10 @@ import java.net.InetAddress;
 import java.net.Socket;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -37,6 +41,7 @@ class HeartbeatTest {
     private ClientState state;
     private ServerConfig config;
     private ByteArrayOutputStream capturedOutput;
+    private FileIndex fileIndex;
 
     @BeforeEach
     void setup() throws IOException {
@@ -69,6 +74,7 @@ class HeartbeatTest {
         registry.add(state, p -> {});
 
         capturedOutput = new ByteArrayOutputStream();
+        fileIndex = index;
     }
 
     private void injectState(ClientHandler handler, ClientState state) {
@@ -191,6 +197,80 @@ class HeartbeatTest {
 
         assertEquals(0, configNoHeartbeat.heartbeatIntervalSeconds(), "Heartbeat should be disabled");
     }
+
+    /**
+     * Test that verifies file publication works correctly with binary format.
+     */
+    @Test
+    void testFilePublicationBinary() throws Exception {
+        // Create a simple binary PUBLISH_FILES packet
+        // Format: [count:4] [hash:16] [tags...]
+        ByteBuffer buf = ByteBuffer.allocate(1024).order(ByteOrder.LITTLE_ENDIAN);
+        buf.putInt(1); // 1 file
+
+        // Hash (16 bytes) - use a simple test hash
+        String testHash = "0123456789abcdef0123456789abcdef";
+        byte[] hashBytes = new byte[16];
+        for (int i = 0; i < 16; i++) {
+            hashBytes[i] = (byte) Integer.parseInt(testHash.substring(i*2, i*2+2), 16);
+        }
+        buf.put(hashBytes);
+
+        // Tags: filename, size, type
+        List<Tag> tags = new ArrayList<>();
+        tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_NAME, "test_file.txt"));
+        tags.add(new Tag(Tag.TYPE_INTEGER, "\u0002", 1024)); // FILESIZE
+        tags.add(new Tag(Tag.TYPE_STRING, "\u0003", "Text")); // FILETYPE
+
+        Tag.writeList(buf, tags);
+        buf.flip();
+
+        byte[] publishData = new byte[buf.remaining()];
+        buf.get(publishData);
+
+        // Verify initial state
+        assertEquals(0, fileIndex.fileCount(), "File index should be empty initially");
+
+        // Process the PUBLISH_FILES packet
+        Method handlePublishMethod = ClientHandler.class.getDeclaredMethod("handlePublish", byte[].class, OutputStream.class);
+        handlePublishMethod.setAccessible(true);
+        handlePublishMethod.invoke(handler, publishData, capturedOutput);
+
+        // Verify file was added
+        assertEquals(1, fileIndex.fileCount(), "File should be added to index");
+
+        // Verify we can search for it
+        List<FileMetadata> results = fileIndex.search("test_file", 10);
+        assertEquals(1, results.size(), "Should find the published file");
+        assertEquals("test_file.txt", results.get(0).name(), "File name should match");
+        assertEquals(1024, results.get(0).size(), "File size should match");
+    }
+
+    /**
+     * Test that verifies file publication works correctly with text format.
+     */
+    @Test
+    void testFilePublicationText() throws Exception {
+        // Create a text PUBLISH_FILES packet
+        // Format: "hash|name|size|type"
+        String publishData = "0123456789abcdef0123456789abcdef|test_file2.txt|2048|Text";
+        byte[] data = publishData.getBytes(StandardCharsets.UTF_8);
+
+        // Verify initial state
+        assertEquals(0, fileIndex.fileCount(), "File index should be empty initially");
+
+        // Process the PUBLISH_FILES packet
+        Method handlePublishMethod = ClientHandler.class.getDeclaredMethod("handlePublish", byte[].class, OutputStream.class);
+        handlePublishMethod.setAccessible(true);
+        handlePublishMethod.invoke(handler, data, capturedOutput);
+
+        // Verify file was added
+        assertEquals(1, fileIndex.fileCount(), "File should be added to index");
+
+        // Verify we can search for it
+        List<FileMetadata> results = fileIndex.search("test_file2", 10);
+        assertEquals(1, results.size(), "Should find the published file");
+        assertEquals("test_file2.txt", results.get(0).name(), "File name should match");
+        assertEquals(2048, results.get(0).size(), "File size should match");
+    }
 }
-
-

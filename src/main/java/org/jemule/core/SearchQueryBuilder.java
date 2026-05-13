@@ -27,6 +27,9 @@ public class SearchQueryBuilder {
 
     public SearchQuery term(String term, byte id) {
         Objects.requireNonNull(term, "Search term cannot be null");
+        if (term.trim().isEmpty()) {
+            throw new IllegalArgumentException("Search term cannot be empty or whitespace-only");
+        }
         return new SearchQuery.TermQuery(term, id);
     }
 
