@@ -379,6 +379,28 @@ public class ClientHandler implements Runnable {
             Thread.sleep(100); // Small delay
             sendServerStatus(out);
             log.debug("Sent additional SERVER_STATUS to encourage file publishing");
+
+            // Start a background thread to send periodic status updates for the first 5 minutes
+            // to encourage clients to publish their files
+            final OutputStream statusOut = out; // Make effectively final for lambda
+            Thread statusThread = new Thread(() -> {
+                try {
+                    for (int i = 0; i < 30 && !socket.isClosed(); i++) { // 30 updates over ~5 minutes
+                        Thread.sleep(10000); // Every 10 seconds
+                        if (!socket.isClosed()) {
+                            sendServerStatus(statusOut);
+                            log.debug("Sent periodic SERVER_STATUS #{} to encourage file publishing", i + 2);
+                        }
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                } catch (IOException e) {
+                    log.debug("Failed to send periodic status update: {}", e.getMessage());
+                }
+            });
+            statusThread.setDaemon(true);
+            statusThread.start();
+            log.info("Started periodic status updates thread for client {}", clientId);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
@@ -475,11 +497,11 @@ public class ClientHandler implements Runnable {
         state.lastActivity().set(System.currentTimeMillis());
         OpCode op = OpCode.fromByte(p.protocol(), p.opcode());
         if (op == null) {
-            log.debug("Unknown opcode: 0x{:02X} (Proto: 0x{:02X})", p.opcode(), p.protocol());
+            log.info("Unknown opcode received: 0x{:02X} (Proto: 0x{:02X}), Data length: {}", p.opcode(), p.protocol(), p.data() != null ? p.data().length : 0);
             return;
         }
 
-        log.debug("Processing packet: {} (Proto: 0x{:02X}, Data length: {})", op, p.protocol(), p.data() != null ? p.data().length : 0);
+        log.info("Processing packet: {} (Proto: 0x{:02X}, Data length: {})", op, p.protocol(), p.data() != null ? p.data().length : 0);
 
         switch (op) {
             case SEARCH_REQUEST -> handleSearch(p.data(), out);
