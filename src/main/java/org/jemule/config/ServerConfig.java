@@ -88,7 +88,7 @@ public record ServerConfig(
             50.0f,
             10,
             60,
-            300
+            1800
     );
 
     /**
