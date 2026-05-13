@@ -92,12 +92,36 @@ public class ClientHandler implements Runnable {
             OutputStream out = wrappedOut != null ? wrappedOut : socket.getOutputStream();
             handleLogin(p, out);
 
+            long lastHeartbeat = System.currentTimeMillis();
+            int heartbeatIntervalMs = config.heartbeatIntervalSeconds() * 1000;
+
             while (!socket.isClosed()) {
                 try {
+                    // Adjust timeout for heartbeat if enabled
+                    if (heartbeatIntervalMs > 0) {
+                        long now = System.currentTimeMillis();
+                        long nextHeartbeat = lastHeartbeat + heartbeatIntervalMs;
+                        long waitTime = nextHeartbeat - now;
+                        
+                        if (waitTime <= 0) {
+                            sendServerStatus(out);
+                            lastHeartbeat = System.currentTimeMillis();
+                            waitTime = heartbeatIntervalMs;
+                        }
+                        // We use a small timeout to read, allowing us to send heartbeat even if no packet received
+                        socket.setSoTimeout((int) Math.min(waitTime, config.tcpKeepAliveTimeoutInSeconds() * 1000L));
+                    }
+
                     Packet nextP = Packet.read(in, config.maxPacketSize());
                     if (floodProtector.allow(socket.getInetAddress())) {
                         processPacket(nextP, out);
                     }
+                } catch (java.net.SocketTimeoutException e) {
+                    if (heartbeatIntervalMs > 0) {
+                        // Just a timeout for heartbeat, loop will send it
+                        continue;
+                    }
+                    throw e; // Real keep-alive timeout
                 } catch (EOFException e) {
                     break;
                 }

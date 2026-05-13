@@ -58,7 +58,10 @@ public record ServerConfig(
         int cbWaitDurationInSeconds,
         
         // Timeout settings
-        int tcpKeepAliveTimeoutInSeconds
+        int tcpKeepAliveTimeoutInSeconds,
+        
+        // Heartbeat settings
+        int heartbeatIntervalSeconds
 ) {
     public ServerConfig {
         if (port < 1 || port > 65535) {
@@ -88,7 +91,8 @@ public record ServerConfig(
             50.0f,
             10,
             60,
-            1800
+            1800,
+            120
     );
 
     /**
@@ -110,7 +114,8 @@ public record ServerConfig(
                 Float.parseFloat(props.getProperty("cbFailureRateThreshold", String.valueOf(DEFAULT.cbFailureRateThreshold()))),
                 Integer.parseInt(props.getProperty("cbMinimumNumberOfCalls", String.valueOf(DEFAULT.cbMinimumNumberOfCalls()))),
                 Integer.parseInt(props.getProperty("cbWaitDurationInSeconds", String.valueOf(DEFAULT.cbWaitDurationInSeconds()))),
-                Integer.parseInt(props.getProperty("tcpKeepAliveTimeoutInSeconds", String.valueOf(DEFAULT.tcpKeepAliveTimeoutInSeconds())))
+                Integer.parseInt(props.getProperty("tcpKeepAliveTimeoutInSeconds", String.valueOf(DEFAULT.tcpKeepAliveTimeoutInSeconds()))),
+                Integer.parseInt(props.getProperty("heartbeatIntervalSeconds", String.valueOf(DEFAULT.heartbeatIntervalSeconds())))
         );
     }
 }

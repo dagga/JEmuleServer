@@ -63,7 +63,8 @@ public class Main {
                         cfg.cbFailureRateThreshold(),
                         cfg.cbMinimumNumberOfCalls(),
                         cfg.cbWaitDurationInSeconds(),
-                        cfg.tcpKeepAliveTimeoutInSeconds()
+                        cfg.tcpKeepAliveTimeoutInSeconds(),
+                        cfg.heartbeatIntervalSeconds()
                 );
                 break; // Use the first integer found as port
             } catch (NumberFormatException ignored) {}
