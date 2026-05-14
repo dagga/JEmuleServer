@@ -373,7 +373,13 @@ public class ClientHandler implements Runnable {
         // 4. Server Status (0x34) - Finalizes the state in aMule
         sendServerStatus(out);
 
-        // 5. Send additional status updates to encourage file publishing
+        // 5. Send Server List (optional but recommended for Lugdunum compatibility)
+        sendServerList(out);
+
+        // 6. Ask client to share their files
+        sendAskSharedFiles(out);
+
+        // 7. Send additional status updates to encourage file publishing
         // Some clients wait for multiple status updates before publishing
         try {
             Thread.sleep(100); // Small delay
@@ -487,6 +493,33 @@ public class ClientHandler implements Runnable {
     }
 
     /**
+     * Sends a list of alternative servers (OpCode 0x42 - SERVER_LIST).
+     * This is a Lugdunum extension that helps clients discover and update their server.met file.
+     *
+     * @param out The output stream.
+     * @throws IOException If sending fails.
+     */
+    private void sendServerList(OutputStream out) throws IOException {
+        // For now, send an empty server list (0 servers)
+        // In a real implementation, this could include the current server or trusted peers
+        ByteBuffer buf = ByteBuffer.allocate(1).order(ByteOrder.LITTLE_ENDIAN);
+        buf.put((byte) 0); // Number of servers in the list
+        new Packet(Packet.PROTOCOL_ED2K, OpCode.SERVER_LIST.value, buf.array()).write(out, state.isZlibSupported());
+        log.debug("Sent SERVER_LIST (empty) to client {}", state.clientId());
+    }
+
+    /**
+     * Sends a request for the client to share their files (OpCode 0xC5:0x4F).
+     *
+     * @param out The output stream.
+     * @throws IOException If sending fails.
+     */
+    private void sendAskSharedFiles(OutputStream out) throws IOException {
+        log.info("Sending ASK_SHARED_FILES to client {}", state.clientId());
+        new Packet(Packet.PROTOCOL_EMULE, OpCode.ASK_SHARED_FILES.value, new byte[0]).write(out, state.isZlibSupported());
+    }
+
+    /**
      * Dispatches the received packet to the appropriate handler method.
      *
      * @param p   The received packet.
@@ -497,20 +530,21 @@ public class ClientHandler implements Runnable {
         state.lastActivity().set(System.currentTimeMillis());
         OpCode op = OpCode.fromByte(p.protocol(), p.opcode());
         if (op == null) {
-            log.info("Unknown opcode received: 0x{:02X} (Proto: 0x{:02X}), Data length: {}", p.opcode(), p.protocol(), p.data() != null ? p.data().length : 0);
+            log.info("Unknown opcode received: 0x" + String.format("%02X", p.opcode()) + " (Proto: 0x" + String.format("%02X", p.protocol()) + "), Data length: " + (p.data() != null ? p.data().length : 0));
             return;
         }
 
-        log.info("Processing packet: {} (Proto: 0x{:02X}, Data length: {})", op, p.protocol(), p.data() != null ? p.data().length : 0);
+        log.info("Processing packet: " + op + " (Proto: 0x" + String.format("%02X", p.protocol()) + ", Data length: " + (p.data() != null ? p.data().length : 0) + ")");
 
-        switch (op) {
-            case SEARCH_REQUEST -> handleSearch(p.data(), out);
-            case PUBLISH_FILES -> handlePublish(p.data(), out);
-            case GET_SOURCES, GET_SOURCES_OBFU -> handleGetSources(p.data(), out);
-            case EMULE_INFO -> handleEmuleInfo(p.data(), out);
-            case CALLBACK -> handleCallback(p.data(), out);
-            default -> log.debug("Unhandled: {} (Proto: 0x{:02X})", op, p.protocol());
-        }
+         switch (op) {
+             case SEARCH_REQUEST -> handleSearch(p.data(), out);
+             case PUBLISH_FILES -> handlePublish(p.data(), out);
+             case GET_SOURCES, GET_SOURCES_OBFU -> handleGetSources(p, out);
+             case EMULE_INFO -> handleEmuleInfo(p.data(), out);
+             case CALLBACK -> handleCallback(p.data(), out);
+             case COMPRESSED_PART -> handleCompressedPart(p.data(), out);
+             default -> log.debug("Unhandled: {} (Proto: 0x{:02X})", op, p.protocol());
+         }
     }
 
     /**
@@ -743,68 +777,84 @@ public class ClientHandler implements Runnable {
         return b;
     }
 
-    /**
-     * Handles requests for file sources (OpCode 0x15 or 0xC5:0x23).
-     *
-     * @param data The file hash.
-     * @param out  The output stream for results.
-     * @throws IOException If sending results fails.
-     */
-    private void handleGetSources(byte[] data, OutputStream out) throws IOException {
-        String hash = null;
-        byte[] hashBytes = null;
+     /**
+      * Handles requests for file sources (OpCode 0x15 or 0xC5:0x23).
+      * Returns the appropriate opcode based on the request protocol.
+      *
+      * @param packet The received packet (contains protocol info).
+      * @param out    The output stream for results.
+      * @throws IOException If sending results fails.
+      */
+     private void handleGetSources(Packet packet, OutputStream out) throws IOException {
+         byte[] data = packet.data();
+         String hash = null;
+         byte[] hashBytes = null;
 
-        if (data.length == 16) {
-            hashBytes = data;
-            StringBuilder sb = new StringBuilder();
-            for (byte b : data) sb.append(String.format("%02x", b));
-            hash = sb.toString();
-        } else if (data.length == 32) {
-            hash = new String(data, StandardCharsets.UTF_8).trim();
-            if (isValidHash(hash)) {
-                hashBytes = hashToBytes(hash);
-            }
-        }
+         if (data.length == 16) {
+             hashBytes = data;
+             StringBuilder sb = new StringBuilder();
+             for (byte b : data) sb.append(String.format("%02x", b));
+             hash = sb.toString();
+         } else if (data.length == 32) {
+             hash = new String(data, StandardCharsets.UTF_8).trim();
+             if (isValidHash(hash)) {
+                 hashBytes = hashToBytes(hash);
+             }
+         }
 
-        // If not found in simple formats, try to parse as tags (typical for extended GET_SOURCES)
-        if (hash == null && data.length > 16) {
-            try {
-                ByteBuffer buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN);
-                // In extended GET_SOURCES, the hash is often the first 16 bytes, followed by tags
-                // OR it's a list of tags.
-                // Let's try the "hash + tags" approach first as it's common.
-                byte[] potentialHash = new byte[16];
-                buf.get(potentialHash);
-                hashBytes = potentialHash;
-                StringBuilder sb = new StringBuilder();
-                for (byte b : potentialHash) sb.append(String.format("%02x", b));
-                hash = sb.toString();
-                
-                log.debug("Extracted hash from extended GET_SOURCES: {}", sanitize(hash));
-            } catch (Exception e) {
-                log.warn("Failed to extract hash from extended GET_SOURCES: {}", sanitize(e.getMessage()));
-            }
-        }
+         // If not found in simple formats, try to parse as tags (typical for extended GET_SOURCES)
+         if (hash == null && data.length > 16) {
+             try {
+                 ByteBuffer buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN);
+                 // In extended GET_SOURCES, the hash is often the first 16 bytes, followed by tags
+                 // OR it's a list of tags.
+                 // Let's try the "hash + tags" approach first as it's common.
+                 byte[] potentialHash = new byte[16];
+                 buf.get(potentialHash);
+                 hashBytes = potentialHash;
+                 StringBuilder sb = new StringBuilder();
+                 for (byte b : potentialHash) sb.append(String.format("%02x", b));
+                 hash = sb.toString();
 
-        if (hash == null || !isValidHash(hash)) {
-            log.warn("Invalid hash format/length for GET_SOURCES: {}", data.length);
-            return;
-        }
+                 log.debug("Extracted hash from extended GET_SOURCES: {}", sanitize(hash));
+             } catch (Exception e) {
+                 log.warn("Failed to extract hash from extended GET_SOURCES: {}", sanitize(e.getMessage()));
+             }
+         }
 
-        log.info("Client requested sources for hash: {}", sanitize(hash));
+         if (hash == null || !isValidHash(hash)) {
+             log.warn("Invalid hash format/length for GET_SOURCES: {}", data.length);
+             return;
+         }
 
-        var sources = fileIndex.getSources(hash, state, config.maxSourcesPerFile());
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        DataOutputStream dos = new DataOutputStream(baos);
+         log.info("Client requested sources for hash: {}", sanitize(hash));
 
-        dos.write(hashBytes);
-        dos.writeByte((byte) Math.min(sources.size(), 255));
-        for (var s : sources) {
-            dos.writeInt(ClientState.ipToInt(s.address()));
-            dos.writeShort((short) s.port());
-        }
-        new Packet(Packet.PROTOCOL_ED2K, OpCode.SOURCES_RESULT.value, baos.toByteArray()).write(out, state.isZlibSupported());
-    }
+         var sources = fileIndex.getSources(hash, state, config.maxSourcesPerFile());
+         ByteArrayOutputStream baos = new ByteArrayOutputStream();
+         DataOutputStream dos = new DataOutputStream(baos);
+
+         dos.write(hashBytes);
+         dos.writeByte((byte) Math.min(sources.size(), 255));
+         for (var s : sources) {
+             dos.writeInt(ClientState.ipToInt(s.address()));
+             dos.writeShort((short) s.port());
+         }
+
+         // Determine the response opcode based on the request protocol
+         byte responseProtocol = Packet.PROTOCOL_ED2K;
+         byte responseOpcode = OpCode.SOURCES_RESULT.value;
+
+         if (packet.protocol() == Packet.PROTOCOL_EMULE) {
+             // Client requested with eMule protocol (obfuscated), respond accordingly
+             responseProtocol = Packet.PROTOCOL_EMULE;
+             responseOpcode = OpCode.SOURCES_RESULT_OBFU.value;
+             log.debug("Responding to GET_SOURCES_OBFU with SOURCES_RESULT_OBFU (0xC5:0x24)");
+         } else {
+             log.debug("Responding to GET_SOURCES with SOURCES_RESULT (0xE3:0x14)");
+         }
+
+         new Packet(responseProtocol, responseOpcode, baos.toByteArray()).write(out, state.isZlibSupported());
+     }
 
     /**
      * Handles callback requests (OpCode 0x1C).
@@ -846,9 +896,28 @@ public class ClientHandler implements Runnable {
         }
     }
 
-    /**
-     * Masks the last part of an IP address for GDPR compliance.
-     */
+     /**
+      * Handles COMPRESSED_PART packets (OpCode 0xC5:0x28).
+      * Used for receiving compressed file parts in P2P transfers.
+      * Server-side implementation just logs this (actual file downloads are P2P).
+      *
+      * @param data The compressed part data.
+      * @param out  The output stream (not used for this packet type).
+      * @throws IOException If handling fails.
+      */
+     private void handleCompressedPart(byte[] data, OutputStream out) throws IOException {
+         if (data == null || data.length < 1) {
+             log.warn("Invalid COMPRESSED_PART request: empty data");
+             return;
+         }
+         log.debug("Received COMPRESSED_PART from client {} (size: {} bytes)", state.clientId(), data.length);
+         // No specific response is needed for COMPRESSED_PART packets at the server level
+         // These are typically P2P transfers relayed through clients
+     }
+
+     /**
+      * Masks the last part of an IP address for GDPR compliance.
+      */
     private String maskIp(String addr) {
         if (addr == null) return "unknown";
         // Handles both "/1.2.3.4:port" and "1.2.3.4"
