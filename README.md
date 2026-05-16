@@ -34,11 +34,11 @@ You can start the server directly via Gradle:
 Once the project is compiled, you can start the server with the following command:
 
 ```bash
-java -Djava.net.preferIPv4Stack=true -jar build/libs/JEmuleServer-0.5-SNAPSHOT-202605122204.jar [config_file] [port]
+java -jar build/libs/JEmuleServer-0.5-SNAPSHOT-202605122204.jar [config_file] [port]
 ```
 
-- `-Djava.net.preferIPv4Stack=true`: Recommended to avoid connectivity issues with some eMule/aMule clients (forces the
-  use of IPv4).
+- Note: The server now supports IPv6 and will prefer binding to the IPv6 wildcard when available. Avoid forcing the JVM
+  to prefer IPv4 (i.e. do not use `-Djava.net.preferIPv4Stack=true`) if you expect IPv6 connectivity.
 - `[config_file]`: Optional, path to a custom configuration file (defaults to `server.properties` if present).
 - `[port]`: Optional, overrides the port defined in the configuration.
 
@@ -113,7 +113,7 @@ Here is a comparison between JEmuleServer and the historical **eServer (Lugdunum
 | **Fake File Detection**             |        ✅ Supported        |     ✅ Supported     |
 | **External Config File**            |        ✅ Supported        |     ✅ Supported     |
 | **Admin Interface**                 |        ✅ Supported        |     ✅ Supported     |
-| **IPv6 Support**                    |         ❌ Planned         |        ❌ No         |
+| **IPv6 Support**                    |        ✅ Supported        |        ❌ No         |
 
 ## License
 

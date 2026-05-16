@@ -53,7 +53,21 @@ public final class ClientState {
 
     public static int ipToInt(InetAddress addr) {
         byte[] b = addr.getAddress();
-        return ((b[3] & 0xFF) << 24) | ((b[2] & 0xFF) << 16) | ((b[1] & 0xFF) << 8) | (b[0] & 0xFF);
+        // If IPv4 (4 bytes) -> convert normally (little-endian expected by protocol)
+        if (b.length == 4) {
+            return ((b[3] & 0xFF) << 24) | ((b[2] & 0xFF) << 16) | ((b[1] & 0xFF) << 8) | (b[0] & 0xFF);
+        }
+        // If IPv6 and IPv4-mapped (::ffff:0:0/96), use the last 4 bytes
+        if (b.length == 16) {
+            boolean isV4Mapped = true;
+            for (int i = 0; i < 10; i++) if (b[i] != 0) isV4Mapped = false;
+            if (isV4Mapped && b[10] == (byte) 0xFF && b[11] == (byte) 0xFF) {
+                int off = 12;
+                return ((b[off + 3] & 0xFF) << 24) | ((b[off + 2] & 0xFF) << 16) | ((b[off + 1] & 0xFF) << 8) | (b[off] & 0xFF);
+            }
+        }
+        // Fallback: return 0 (unspecified) when IPv6 address cannot be encoded in 4 bytes
+        return 0;
     }
 
     public boolean isHighId() {

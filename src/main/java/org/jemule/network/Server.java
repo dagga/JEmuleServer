@@ -123,9 +123,24 @@ public class Server {
      * @throws IOException If the server cannot bind to the configured port.
      */
     public void start() throws IOException {
-        try (ServerSocket ss = new ServerSocket(config.port())) {
-            ss.setSoTimeout(1000); // Allow checking the 'running' flag periodically
-            log.info("JEmuleServer listening on port {}", config.port());
+        // Bind server socket preferring IPv6 wildcard, fall back to IPv4 if not available
+        ServerSocket ss = null;
+        try {
+            ss = new ServerSocket();
+            ss.bind(new java.net.InetSocketAddress(java.net.InetAddress.getByName("::"), config.port()));
+            ss.setSoTimeout(1000);
+            log.info("JEmuleServer listening on port {} (bound to IPv6 wildcard)", config.port());
+        } catch (IOException e) {
+            // Fallback to IPv4 wildcard
+            if (ss != null && !ss.isClosed()) {
+                try { ss.close(); } catch (IOException ignored) {}
+            }
+            ss = new ServerSocket(config.port());
+            ss.setSoTimeout(1000);
+            log.info("JEmuleServer listening on port {} (bound to IPv4 wildcard)", config.port());
+        }
+
+        try {
             log.info("Virtual Threads ready for 50k+ concurrent clients");
 
             startUdpResponder();
@@ -148,15 +163,28 @@ public class Server {
                     if (running) log.error("Accept error: {}", e.getMessage());
                 }
             }
+        } finally {
+            if (ss != null && !ss.isClosed()) try { ss.close(); } catch (IOException ignored) {}
         }
     }
 
     private void startUdpResponder() {
         executor.submit(() -> {
             while (running) {
-                try (java.net.DatagramSocket ds = new java.net.DatagramSocket(config.port())) {
+                java.net.DatagramSocket ds = null;
+                try {
+                    // Prefer IPv6 wildcard; if unavailable, fallback to IPv4
+                    try {
+                        ds = new java.net.DatagramSocket(null);
+                        ds.bind(new java.net.InetSocketAddress(java.net.InetAddress.getByName("::"), config.port()));
+                        log.info("UDP Responder listening on port {} (IPv6 wildcard)", config.port());
+                    } catch (IOException e) {
+                        if (ds != null && !ds.isClosed()) { ds.close(); }
+                        ds = new java.net.DatagramSocket(config.port());
+                        log.info("UDP Responder listening on port {} (IPv4 wildcard)", config.port());
+                    }
+
                     ds.setSoTimeout(1000);
-                    log.info("UDP Responder listening on port {}", config.port());
                     byte[] buf = new byte[1024];
                     while (running) {
                         try {
@@ -177,6 +205,8 @@ public class Server {
                             break;
                         }
                     }
+                } finally {
+                    if (ds != null && !ds.isClosed()) ds.close();
                 }
             }
         });

@@ -24,6 +24,7 @@ public class ServerIntegrationTest {
     private static Server server;
     private static Thread serverThread;
     private static int serverPort;
+    private static String loopbackHost;
 
     @BeforeAll
     public static void startServer() throws Exception {
@@ -66,6 +67,7 @@ public class ServerIntegrationTest {
         // Wait briefly for server to start listening
         Thread.sleep(200);
         serverPort = port;
+        loopbackHost = java.net.InetAddress.getLoopbackAddress().getHostAddress();
     }
 
     @AfterAll
@@ -77,7 +79,7 @@ public class ServerIntegrationTest {
     public void testFullHandshakePublishAndUdp() throws Exception {
         Assertions.assertTimeoutPreemptively(Duration.ofSeconds(20), () -> {
             // connect to server
-            Socket s = new Socket("127.0.0.1", serverPort);
+            Socket s = new Socket(loopbackHost, serverPort);
 
             s.setSoTimeout(5000);
             InputStream in = s.getInputStream();
@@ -177,7 +179,7 @@ public class ServerIntegrationTest {
             statReq[1] = (byte) 0x96;
             // 4 bytes challenge
             statReq[2] = 0x11; statReq[3] = 0x22; statReq[4] = 0x33; statReq[5] = 0x44;
-            ds.send(new java.net.DatagramPacket(statReq, statReq.length, java.net.InetAddress.getByName("127.0.0.1"), serverPort));
+            ds.send(new java.net.DatagramPacket(statReq, statReq.length, java.net.InetAddress.getByName(loopbackHost), serverPort));
             byte[] buf = new byte[1024];
             java.net.DatagramPacket resp = new java.net.DatagramPacket(buf, buf.length);
             ds.receive(resp);
@@ -192,7 +194,7 @@ public class ServerIntegrationTest {
             byte[] hashBytes = new byte[16];
             for (int i = 0; i < 16; i++) hashBytes[i] = (byte) Integer.parseInt(hash.substring(i*2, i*2+2), 16);
             System.arraycopy(hashBytes, 0, udpReq, 2, 16);
-            ds.send(new java.net.DatagramPacket(udpReq, udpReq.length, java.net.InetAddress.getByName("127.0.0.1"), serverPort));
+            ds.send(new java.net.DatagramPacket(udpReq, udpReq.length, java.net.InetAddress.getByName(loopbackHost), serverPort));
             java.net.DatagramPacket udpResp = new java.net.DatagramPacket(new byte[512], 512);
             ds.receive(udpResp);
             byte[] gr = udpResp.getData();
@@ -224,7 +226,7 @@ public class ServerIntegrationTest {
     @Test
     public void testBinaryPublishWithTags() throws Exception {
         Assertions.assertTimeoutPreemptively(Duration.ofSeconds(20), () -> {
-            Socket s = new Socket("127.0.0.1", serverPort);
+            Socket s = new Socket(loopbackHost, serverPort);
             s.setSoTimeout(5000);
             InputStream in = s.getInputStream();
             OutputStream out = s.getOutputStream();
@@ -287,7 +289,7 @@ public class ServerIntegrationTest {
     @Test
     public void testObfuscationHandshake() throws Exception {
         Assertions.assertTimeoutPreemptively(Duration.ofSeconds(20), () -> {
-            Socket s = new Socket("127.0.0.1", serverPort);
+            Socket s = new Socket(loopbackHost, serverPort);
             s.setSoTimeout(5000);
             InputStream in = s.getInputStream();
             OutputStream out = s.getOutputStream();
