@@ -2,6 +2,7 @@ package org.jemule.core.event;
 
 import org.jemule.core.*;
 import org.junit.jupiter.api.Test;
+import java.net.InetAddress;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -17,12 +18,12 @@ public class EventSystemTest {
         
         em.subscribeAll(received::add);
         
-        ClientEvent ce = new ClientEvent(ClientEvent.CONNECTED, "127.0.0.1", "test", "Welcome");
+        ClientEvent ce = new ClientEvent(ClientEvent.CONNECTED, InetAddress.getLoopbackAddress().getHostAddress(), "test", "Welcome");
         em.broadcast(ce);
         
         assertEquals(1, received.size());
         assertEquals(ClientEvent.CONNECTED, received.getFirst().getType());
-        assertEquals("127.0.0.1", ((ClientEvent)received.getFirst()).getClientIp());
+        assertEquals(InetAddress.getLoopbackAddress().getHostAddress(), ((ClientEvent)received.getFirst()).getClientIp());
     }
 
     @Test

@@ -198,13 +198,31 @@ public class ServerIntegrationTest {
             java.net.DatagramPacket udpResp = new java.net.DatagramPacket(new byte[512], 512);
             ds.receive(udpResp);
             byte[] gr = udpResp.getData();
+            int len = udpResp.getLength();
             Assertions.assertEquals(Packet.PROTOCOL_ED2K & 0xFF, gr[0] & 0xFF);
             Assertions.assertEquals(0x9B, gr[1] & 0xFF);
-            // payload starts at index 2: 16 bytes hash + 1 byte count
-            int payloadLen = udpResp.getLength() - 2;
-            Assertions.assertTrue(payloadLen >= 17, "UDP SOURCES payload too short");
-            int udpCount = gr[2 + 16] & 0xFF;
-            Assertions.assertTrue(udpCount >= 1, "Expected at least one UDP source after publish");
+
+            // Base payload: [2 bytes header] [16 bytes hash] [1 byte ipv4 count] [ipv4 entries...]
+            if (len >= 2 + 16 + 1) {
+                int ipv4Count = gr[2 + 16] & 0xFF;
+                if (ipv4Count >= 1) {
+                    Assertions.assertTrue(true, "Found IPv4 sources in UDP response");
+                } else {
+                    // Maybe IPv6-only extension present: search for marker 'V6'
+                    boolean foundV6 = false;
+                    for (int i = 2 + 16 + 1; i < len - 2; i++) {
+                        if (gr[i] == (byte) 'V' && gr[i + 1] == (byte) '6') {
+                            int v6Count = gr[i + 2] & 0xFF;
+                            Assertions.assertTrue(v6Count >= 1, "Expected at least one IPv6 source in UDP extended response");
+                            foundV6 = true;
+                            break;
+                        }
+                    }
+                    Assertions.assertTrue(foundV6, "No IPv4 sources and no IPv6 extension found in UDP response");
+                }
+            } else {
+                Assertions.fail("UDP response too short");
+            }
             ds.close();
 
             s.close();

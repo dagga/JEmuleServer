@@ -7,6 +7,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.net.InetAddress;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -22,13 +23,14 @@ class IPFilterTest {
     @Test
     void testParsingAndFiltering(@TempDir Path tempDir) throws IOException {
         Path filterFile = tempDir.resolve("ipfilter.dat");
+        String loopback = InetAddress.getLoopbackAddress().getHostAddress();
         Files.write(filterFile, List.of(
             "001.002.003.004 - 001.002.003.007 , 000 , Blocked Range 1",
             "192.168.1.1 - 192.168.1.1 , 000 , Single IP",
             "10.0.0.0 - 10.255.255.255 , 000 , Private Network",
             "  # Comment line",
             "",
-            "127.0.0.1 - 127.0.0.1 , 000 , Localhost"
+            loopback + " - " + loopback + " , 000 , Localhost"
         ));
 
         IPFilter filter = new IPFilter();
@@ -57,7 +59,7 @@ class IPFilterTest {
         assertFalse(filter.isBlocked("9.255.255.255"));
 
         // Test Localhost
-        assertTrue(filter.isBlocked("127.0.0.1"));
+        assertTrue(filter.isBlocked(loopback));
     }
 
     @Test

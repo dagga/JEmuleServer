@@ -14,7 +14,7 @@ class FloodProtectorTest {
     @Test
     void testFloodProtection() throws Exception {
         FloodProtector protector = new FloodProtector(10);
-        InetAddress ip = InetAddress.getByName("127.0.0.1");
+        InetAddress ip = InetAddress.getLoopbackAddress();
 
         // Autoriser 10 requêtes
         for (int i = 0; i < 10; i++) {
@@ -28,7 +28,7 @@ class FloodProtectorTest {
     @Test
     void testRefill() throws Exception {
         FloodProtector protector = new FloodProtector(5);
-        InetAddress ip = InetAddress.getByName("127.0.0.1");
+        InetAddress ip = InetAddress.getLoopbackAddress();
 
         for (int i = 0; i < 5; i++) assertTrue(protector.allow(ip));
         assertFalse(protector.allow(ip));

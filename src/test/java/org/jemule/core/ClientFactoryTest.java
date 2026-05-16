@@ -27,7 +27,7 @@ class ClientFactoryTest {
     @Test
     void testCreateClient() throws Exception {
         ClientFactory factory = new ClientFactory();
-        InetAddress addr = InetAddress.getByName("127.0.0.1");
+        InetAddress addr = InetAddress.getLoopbackAddress();
         int port = 4662;
         int clientId = 12345;
 

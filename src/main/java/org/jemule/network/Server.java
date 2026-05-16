@@ -261,17 +261,64 @@ public class Server {
             var sources = fileIndex.getSources(hash, null, config.maxSourcesPerFile());
             if (sources.isEmpty()) return;
 
-            ByteBuffer resp = ByteBuffer.allocate(2 + 16 + 1 + sources.size() * 6).order(ByteOrder.LITTLE_ENDIAN);
-            resp.put(Packet.PROTOCOL_ED2K);
-            resp.put((byte) 0x9B); // OP_GLOBFOUNDSOURCES
-            resp.put(hashBytes);
-            resp.put((byte) Math.min(sources.size(), 255));
+            // Build both IPv4 and IPv6-aware response. Legacy clients expect IPv4-only response.
+            java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+            java.io.DataOutputStream dos = new java.io.DataOutputStream(baos);
+
+            // Protocol + opcode
+            dos.writeByte(Packet.PROTOCOL_ED2K);
+            dos.writeByte(0x9B); // OP_GLOBFOUNDSOURCES
+
+            // Hash
+            dos.write(hashBytes);
+
+            // Separate IPv4-mappable and IPv6-only sources
+            List<org.jemule.core.ClientState> ipv4List = new java.util.ArrayList<>();
+            List<org.jemule.core.ClientState> ipv6List = new java.util.ArrayList<>();
             for (var s : sources) {
-                resp.putInt(ClientState.ipToInt(s.address()));
-                resp.putShort((short) s.port());
+                byte[] addr = s.address().getAddress();
+                if (addr.length == 4) ipv4List.add(s);
+                else if (addr.length == 16) {
+                    boolean isV4Mapped = true;
+                    for (int i = 0; i < 10; i++) if (addr[i] != 0) isV4Mapped = false;
+                    if (isV4Mapped && addr[10] == (byte) 0xFF && addr[11] == (byte) 0xFF) ipv4List.add(s);
+                    else ipv6List.add(s);
+                } else {
+                    ipv6List.add(s);
+                }
             }
 
-            ds.send(new java.net.DatagramPacket(resp.array(), resp.position(), p.getAddress(), p.getPort()));
+            // IPv4 section (legacy)
+            dos.writeByte((byte) Math.min(ipv4List.size(), 255));
+            for (var s : ipv4List) {
+                dos.writeInt(ClientState.ipToInt(s.address()));
+                dos.writeShort((short) s.port());
+            }
+
+            byte[] outBuf = baos.toByteArray();
+            ds.send(new java.net.DatagramPacket(outBuf, outBuf.length, p.getAddress(), p.getPort()));
+
+            // If there are IPv6-only sources, send a separate IPv6 response packet (new opcode 0x9C)
+            if (!ipv6List.isEmpty()) {
+                ByteBuffer v6buf = ByteBuffer.allocate(2 + 16 + 1 + ipv6List.size() * (16 + 2)).order(ByteOrder.LITTLE_ENDIAN);
+                v6buf.put(Packet.PROTOCOL_ED2K);
+                v6buf.put((byte) 0x9C); // OP_GLOBFOUNDSOURCES_V6 (extension)
+                v6buf.put(hashBytes);
+                v6buf.put((byte) Math.min(ipv6List.size(), 255));
+                for (var s : ipv6List) {
+                    byte[] addr = s.address().getAddress();
+                    if (addr.length == 16) {
+                        v6buf.put(addr);
+                    } else if (addr.length == 4) {
+                        // map to IPv4-mapped IPv6
+                        v6buf.put(new byte[]{0,0,0,0,0,0,0,0,0,0,(byte)0xFF,(byte)0xFF, addr[0], addr[1], addr[2], addr[3]});
+                    } else {
+                        v6buf.put(new byte[16]);
+                    }
+                    v6buf.putShort((short) s.port());
+                }
+                ds.send(new java.net.DatagramPacket(v6buf.array(), v6buf.position(), p.getAddress(), p.getPort()));
+            }
         }
     }
 

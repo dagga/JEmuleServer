@@ -61,15 +61,15 @@ class HeartbeatTest {
 
         // Setup mock socket
         Socket socket = mock(Socket.class);
-        when(socket.getInetAddress()).thenReturn(InetAddress.getByName("127.0.0.1"));
+        when(socket.getInetAddress()).thenReturn(InetAddress.getLoopbackAddress());
         when(socket.getRemoteSocketAddress()).thenReturn(
-                new java.net.InetSocketAddress(InetAddress.getByName("127.0.0.1"), 5555)
+                new java.net.InetSocketAddress(InetAddress.getLoopbackAddress(), 5555)
         );
-        when(socket.getLocalAddress()).thenReturn(InetAddress.getByName("127.0.0.1"));
+        when(socket.getLocalAddress()).thenReturn(InetAddress.getLoopbackAddress());
 
         // Create handler with captured output
         handler = new ClientHandler(socket, config, registry, index, flood, fakes, events, factory);
-        state = new ClientState(InetAddress.getByName("127.0.0.1"), 5555, 123, System.currentTimeMillis(), new AtomicLong(System.currentTimeMillis()));
+        state = new ClientState(InetAddress.getLoopbackAddress(), 5555, 123, System.currentTimeMillis(), new AtomicLong(System.currentTimeMillis()));
         injectState(handler, state);
         registry.add(state, p -> {});
 
