@@ -131,3 +131,4 @@ More information can be found in the `doc/` directory:
 - [Technical References](doc/references.md)
 - [Class Diagram](doc/class_diagram.puml)
 - [Connection Sequence Diagram](doc/sequence_diagram.puml)
+- [Credits](doc/credits.md)
