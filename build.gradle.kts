@@ -1,4 +1,3 @@
-
 import org.gradle.api.plugins.JavaPluginExtension
 import org.gradle.api.tasks.testing.Test
 import org.gradle.api.tasks.JavaExec
@@ -14,7 +13,7 @@ plugins {
 }
 
 group = "org.jemule"
-version = "0.5-SNAPSHOT-202605122204"
+version = "1.0beta1"
 
 configure<JavaPluginExtension> {
     toolchain {
