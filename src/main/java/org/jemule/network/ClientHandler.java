@@ -700,7 +700,7 @@ public class ClientHandler implements Runnable {
                     if (isValidHash(hash) && isValidFilename(name) && state.publishedFilesCount().get() < config.maxFilesPerUser()) {
                         if (fakeFileDetector.isFake(hash, name, size)) {
                             log.warn("Fake file detected and rejected (binary): {} (hash={})", sanitize(name), hash);
-                            sendServerMessage(out, "Fichier refusé (spam/malveillant détecté) : " + sanitize(name));
+                            sendServerMessage(out, "File rejected (spam/malicious detected): " + sanitize(name));
                             continue;
                         }
                         if (size < 0 || size > 100_000_000_000L) { // 100 GB limit
@@ -735,7 +735,7 @@ public class ClientHandler implements Runnable {
                             long size = Long.parseLong(sizeStr);
                             if (fakeFileDetector.isFake(hash, name, size)) {
                                 log.warn("Fake file detected and rejected (text): {} (hash={})", sanitize(name), hash);
-                                sendServerMessage(out, "Fichier refusé (spam/malveillant détecté) : " + sanitize(name));
+                                sendServerMessage(out, "File rejected (spam/malicious detected): " + sanitize(name));
                                 return;
                             }
                             if (size >= 0 && size <= 100_000_000_000L) {

@@ -14,7 +14,7 @@ class SearchPerformanceTest {
         index.addFile(new FileMetadata("H3", "Marcel.txt", 100, "Text"));
         index.addFile(new FileMetadata("H4", "Apple.txt", 100, "Text"));
 
-        // Recherche par préfixe "Marc" devrait trouver H1, H2, H3
+        // Prefix search for "Marc" should find H1, H2, H3
         List<FileMetadata> results = index.search("Marc", 10);
         assertEquals(3, results.size());
         assertTrue(results.stream().anyMatch(f -> f.hash().equals("H1")));
@@ -27,18 +27,18 @@ class SearchPerformanceTest {
         FileIndex index = new FileIndex(null);
         index.addFile(new FileMetadata("H1", "test_file.txt", 100, "Text"));
 
-        // Première recherche (remplit le cache)
+        // First search (fills cache)
         long start1 = System.nanoTime();
         List<FileMetadata> res1 = index.search("test", 10);
         long end1 = System.nanoTime();
 
-        // Deuxième recherche (devrait être plus rapide grâce au cache)
+        // Second search (should be faster thanks to cache)
         long start2 = System.nanoTime();
         List<FileMetadata> res2 = index.search("test", 10);
         long end2 = System.nanoTime();
 
         assertEquals(res1, res2);
-        // Note: sur un petit index la différence peut être minime, mais on vérifie au moins la cohérence
+        // Note: on a small index the difference may be minimal, but we verify consistency at least
     }
 
     @Test
@@ -49,7 +49,7 @@ class SearchPerformanceTest {
         List<FileMetadata> res1 = index.search("test", 10);
         assertEquals(1, res1.size());
 
-        // Ajouter un fichier invalide le cache
+        // Adding a file invalidates the cache
         index.addFile(new FileMetadata("H2", "test2.txt", 100, "Text"));
         
         List<FileMetadata> res2 = index.search("test", 10);

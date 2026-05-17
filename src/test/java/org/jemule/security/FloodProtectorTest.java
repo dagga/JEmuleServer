@@ -16,12 +16,12 @@ class FloodProtectorTest {
         FloodProtector protector = new FloodProtector(10);
         InetAddress ip = InetAddress.getLoopbackAddress();
 
-        // Autoriser 10 requêtes
+        // Allow 10 requests
         for (int i = 0; i < 10; i++) {
             assertTrue(protector.allow(ip), "Request " + i + " should be allowed");
         }
 
-        // La 11ème doit être refusée
+        // The 11th must be denied
         assertFalse(protector.allow(ip), "Request 11 should be denied");
     }
 
@@ -33,7 +33,7 @@ class FloodProtectorTest {
         for (int i = 0; i < 5; i++) assertTrue(protector.allow(ip));
         assertFalse(protector.allow(ip));
 
-        // Attendre 1.1 seconde pour le refill
+        // Wait 1.1 seconds for refill
         Thread.sleep(1100);
 
         assertTrue(protector.allow(ip), "Should be allowed after refill");
