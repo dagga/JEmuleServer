@@ -165,20 +165,89 @@ public class ClientHandler implements Runnable {
      * @throws IOException If a network error occurs.
      */
     private InputStream negotiateObfuscation(InputStream in, OutputStream out) throws IOException {
-        PushbackInputStream pin = new PushbackInputStream(in, 1);
-        int firstByte = pin.read();
-        if (firstByte == -1) return pin;
-
-        if (firstByte != (Packet.PROTOCOL_ED2K & 0xFF) &&
-                firstByte != (Packet.PROTOCOL_EMULE & 0xFF) &&
-                firstByte != (Packet.PROTOCOL_ZLIB & 0xFF)) {
-            // Likely obfuscated handshake start
-            log.info("Detected possible obfuscated handshake from {}", sanitize(socket.getRemoteSocketAddress().toString()));
-            return handleObfuscatedHandshake(firstByte, pin, out);
+        // Use a larger pushback buffer so we can safely peek several bytes
+        PushbackInputStream pin = new PushbackInputStream(in, 1024);
+        byte[] probe = new byte[6];
+        int read = 0;
+        while (read < probe.length) {
+            int r = pin.read(probe, read, probe.length - read);
+            if (r == -1) break;
+            read += r;
         }
 
-        pin.unread(firstByte);
-        return pin;
+        if (read == 0) return pin;
+
+        int firstByte = probe[0] & 0xFF;
+        // If the first byte is a normal protocol byte, push everything back and continue normally
+        if (firstByte == (Packet.PROTOCOL_ED2K & 0xFF) || firstByte == (Packet.PROTOCOL_EMULE & 0xFF) || firstByte == (Packet.PROTOCOL_ZLIB & 0xFF)) {
+            pin.unread(probe, 0, read);
+            return pin;
+        }
+
+        // If we couldn't read the full probe, push back and treat as normal
+        if (read < probe.length) {
+            pin.unread(probe, 0, read);
+            return pin;
+        }
+
+        // Check for obfuscation marker at expected position (6th byte == 0x97)
+        if ((probe[5] & 0xFF) != 0x97) {
+            pin.unread(probe, 0, read);
+            return pin;
+        }
+
+        // Looks like an obfuscation handshake. Process it using the already-read bytes.
+        log.info("Detected obfuscated handshake from {}", sanitize(socket.getRemoteSocketAddress().toString()));
+
+        // clientRandom is bytes 1..4
+        byte[] clientRandom = new byte[4];
+        System.arraycopy(probe, 1, clientRandom, 0, 4);
+
+        byte[] magic = {(byte) 0x97};
+        receiveRC4 = new Obfuscation.RC4(Obfuscation.md5(magic, clientRandom));
+        sendRC4 = new Obfuscation.RC4(Obfuscation.md5(magic, clientRandom));
+
+        // Discard first 1024 bytes of keystream
+        receiveRC4.crypt(new byte[1024]);
+        sendRC4.crypt(new byte[1024]);
+
+        // Wrap the remaining stream for decryption; note we already consumed the probe bytes
+        InputStream encryptedIn = new ObfuscatedInputStream(pin, receiveRC4);
+
+        // Read until EncryptionMethod = Obfuscation (0x00)
+        int method = -1;
+        for (int k = 0; k < 256; k++) {
+            int b = encryptedIn.read();
+            if (b == 0x00) {
+                method = b;
+                break;
+            }
+            if (b == -1) break;
+        }
+
+        if (method != 0x00) {
+            // Handshake failed; push back probe bytes so caller can re-interpret stream
+            try { pin.unread(probe, 0, read); } catch (IOException ignored) {}
+            throw new IOException("Unsupported encryption method or handshake timeout");
+        }
+
+        // Server Response: [Random 1-256] [PaddingLen 1] [Padding] [EncryptionMethod 1]
+        java.security.SecureRandom rng = new java.security.SecureRandom();
+        int serverPadLen = rng.nextInt(16);
+        byte[] serverHandshake = new byte[1 + serverPadLen + 1];
+        rng.nextBytes(serverHandshake);
+        serverHandshake[0] = (byte) serverPadLen;
+        serverHandshake[serverHandshake.length - 1] = 0x00; // Method
+
+        byte[] encryptedResponse = serverHandshake.clone();
+        sendRC4.crypt(encryptedResponse);
+        out.write(encryptedResponse);
+        out.flush();
+
+        log.info("Obfuscation handshake complete for {}", sanitize(socket.getRemoteSocketAddress().toString()));
+        obfuscated = true;
+        this.wrappedOut = new ObfuscatedOutputStream(out, sendRC4);
+        return encryptedIn;
     }
 
     /**
