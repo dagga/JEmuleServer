@@ -433,42 +433,45 @@ public class ClientHandler implements Runnable {
      * @param out The output stream.
      * @throws IOException If sending fails.
      */
-    private void sendServerIdent(OutputStream out) throws IOException {
-        byte[] hash = new byte[16]; // Empty hash
-        short port = (short) config.port();
+     private void sendServerIdent(OutputStream out) throws IOException {
+         byte[] hash = new byte[16]; // Empty hash
+         int portInt = config.port(); // Keep as int to avoid sign issues
 
-        String serverName = "JEmuleServer (https://github.com/dagga/JEmuleServer/)";
-        String serverVersion = Main.VERSION + " (JEmuleServer)";
-        String desc = "Experimental eMule Server";
+         String serverName = "JEmuleServer (https://github.com/dagga/JEmuleServer/)";
+         String serverVersion = Main.VERSION + " (JEmuleServer)";
+         String desc = "Experimental eMule Server";
 
-        List<Tag> tags = new ArrayList<>();
-        tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_NAME, serverName));
-        tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_DESCRIPTION, desc));
-        tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_VERSION, serverVersion));
-        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_EMULE_VERSION, 0x3C)); // 0x3C = 60, typical for eMule 0.4x/0.5x compatible
-        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_TCP_FLAGS, 0x01 | 0x08 | 0x10)); // ZLIB + OBFUSCATION + NEWTAGS support bits
-        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_AUX_PORT, (int) port));
-        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_MAX_USERS, config.maxUsers()));
-        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_MAX_FILES, config.maxFiles()));
+         List<Tag> tags = new ArrayList<>();
+         tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_NAME, serverName));
+         tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_DESCRIPTION, desc));
+         tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_VERSION, serverVersion));
+         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_EMULE_VERSION, 0x3C)); // 0x3C = 60, typical for eMule 0.4x/0.5x compatible
+         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_TCP_FLAGS, 0x01 | 0x08 | 0x10)); // ZLIB + OBFUSCATION + NEWTAGS support bits
+         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_AUX_PORT, portInt));
+         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_MAX_USERS, config.maxUsers()));
+         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_MAX_FILES, config.maxFiles()));
 
-        // Use a dynamic buffer to avoid manual size calculation errors
-        ByteBuffer buf = ByteBuffer.allocate(4096).order(ByteOrder.LITTLE_ENDIAN);
-        buf.put(hash);
+         // Use a dynamic buffer to avoid manual size calculation errors
+         ByteBuffer buf = ByteBuffer.allocate(4096).order(ByteOrder.LITTLE_ENDIAN);
+         buf.put(hash);
 
-        // Write IP and Port in BIG_ENDIAN specifically for this part of the packet
-        byte[] addr = socket.getLocalAddress().getAddress();
-        if (addr.length == 4) {
-            buf.put(addr);
-        } else {
-            // Fallback to localhost if not IPv4
-            buf.put((byte) 0x7F);
-            buf.put((byte) 0x00);
-            buf.put((byte) 0x00);
-            buf.put((byte) 0x01);
-        }
-        buf.putShort(Short.reverseBytes(port)); // reverse since LE buffer
+         // Write IP and Port in BIG_ENDIAN (network byte order) for SERVER_IDENT
+         byte[] addr = socket.getLocalAddress().getAddress();
+         if (addr.length == 4) {
+             buf.put(addr);
+         } else {
+             // Fallback to localhost if not IPv4
+             buf.put((byte) 0x7F);
+             buf.put((byte) 0x00);
+             buf.put((byte) 0x00);
+             buf.put((byte) 0x01);
+         }
+         // Port must be in network byte order (big-endian)
+         // Write as 2 bytes: high byte first, then low byte
+         buf.put((byte) ((portInt >> 8) & 0xFF));
+         buf.put((byte) (portInt & 0xFF));
 
-        Tag.writeList(buf, tags);
+         Tag.writeList(buf, tags);
 
         buf.flip();
         byte[] response = new byte[buf.remaining()];
