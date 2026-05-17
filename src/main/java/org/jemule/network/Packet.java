@@ -75,7 +75,15 @@ public record Packet(byte protocol, byte opcode, byte[] data) {
 
         int payloadLength = length - 1;
         byte[] payload = in.readNBytes(payloadLength);
-        if (payload.length < payloadLength) throw new EOFException("Incomplete payload");
+        if (payload.length < payloadLength) {
+            // Build a short hex preview of what we did receive for diagnostics
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < Math.min(payload.length, 64); i++) {
+                sb.append(String.format("%02X", payload[i]));
+                if (i < Math.min(payload.length, 64) - 1) sb.append(' ');
+            }
+            throw new EOFException("Incomplete payload: expected=" + payloadLength + " received=" + payload.length + " preview=[" + sb.toString() + "]");
+        }
 
         byte[] data = (protocol == PROTOCOL_ZLIB) ? decompress(payload) : payload;
         return new Packet(protocol, opcode, data);

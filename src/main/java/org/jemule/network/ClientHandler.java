@@ -123,6 +123,9 @@ public class ClientHandler implements Runnable {
                     }
                     throw e; // Real keep-alive timeout
                 } catch (EOFException e) {
+                    // Log EOF with more context so we can diagnose client-side SafeIO::EOF reports
+                    String remoteAddr2 = maskIp(socket.getRemoteSocketAddress().toString());
+                    log.warn("EOF from client {}: {}", remoteAddr2, e.getMessage());
                     break;
                 }
             }
