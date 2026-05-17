@@ -4,6 +4,10 @@
             <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
         </encoder>
     </appender>
+
+    <logger name="org.jemule.network.Packet" level="DEBUG"/>
+    <logger name="org.jemule.network.ClientHandler" level="DEBUG"/>
+
     <root level="INFO">
         <appender-ref ref="STDOUT"/>
     </root>
