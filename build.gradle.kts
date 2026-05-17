@@ -1,5 +1,5 @@
 import org.gradle.api.plugins.JavaPluginExtension
-import org.gradle.api.tasks.ProcessResources
+// ...existing code...
 import org.gradle.api.tasks.testing.Test
 import org.gradle.api.tasks.JavaExec
 import org.gradle.api.tasks.SourceSetContainer
@@ -57,9 +57,12 @@ tasks.withType<JavaCompile>().configureEach {
 }
 
 // Ensure server.properties (project root) is included in the jar resources
-tasks.named<ProcessResources>("processResources") {
-    from(rootProject.file("server.properties")) {
-        into("")
+tasks.named("processResources") {
+    doLast {
+        copy {
+            from(rootProject.file("server.properties"))
+            into("$buildDir/resources/main")
+        }
     }
 }
 
