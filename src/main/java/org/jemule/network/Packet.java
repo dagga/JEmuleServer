@@ -113,6 +113,17 @@ public record Packet(byte protocol, byte opcode, byte[] data) {
             log.debug("Sent packet proto=0x{} opcode=0x{} len={} bytes={}{}",
                     String.format("%02X", proto & 0xFF), String.format("%02X", opcode & 0xFF), payload.length + 1,
                     sb.toString(), bytes.length > 256 ? " ..." : "");
+
+            // Also append to a debug file for easier collection (non-fatal on error)
+            try {
+                String line = java.time.Instant.now().toString() + " " +
+                        String.format("proto=0x%02X opcode=0x%02X len=%d ", proto & 0xFF, opcode & 0xFF, payload.length + 1) + sb.toString() + System.lineSeparator();
+                java.nio.file.Path p = java.nio.file.Path.of("build/packet-debug.log");
+                java.nio.file.Files.createDirectories(p.getParent() != null ? p.getParent() : java.nio.file.Path.of("build"));
+                java.nio.file.Files.writeString(p, line, java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.APPEND);
+            } catch (Exception e) {
+                // ignore file write errors
+            }
         }
     }
 
