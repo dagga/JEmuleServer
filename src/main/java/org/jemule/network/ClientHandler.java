@@ -807,6 +807,9 @@ public class ClientHandler implements Runnable {
                         }
                     }
 
+                    // Verbose logging: announce file publication attempt with filename so we can confirm client-side publishing
+                    log.info("PUBLISH attempt from client {}: name='{}' hash={} size={} type={}", state != null ? state.clientId() : -1, sanitize(name), hash, size, type);
+
                     log.debug("Processing file: hash={}, name={}, size={}, type={}", hash, sanitize(name), size, type);
 
                     if (isValidHash(hash) && isValidFilename(name) && state.publishedFilesCount().get() < config.maxFilesPerUser()) {
@@ -839,6 +842,9 @@ public class ClientHandler implements Runnable {
                     String name = p[1].trim();
                     String sizeStr = p[2].trim();
                     String type = p[3].trim();
+
+                    // Verbose logging for text publish as well
+                    log.info("PUBLISH attempt from client {}: name='{}' hash={} size={} type={}", state != null ? state.clientId() : -1, sanitize(name), hash, sizeStr, type);
 
                     log.debug("Processing text file: hash={}, name={}, size={}, type={}", hash, sanitize(name), sizeStr, type);
 
