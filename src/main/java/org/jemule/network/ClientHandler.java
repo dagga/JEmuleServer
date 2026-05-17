@@ -598,7 +598,16 @@ public class ClientHandler implements Runnable {
      */
     private void sendAskSharedFiles(OutputStream out) throws IOException {
         log.info("Sending ASK_SHARED_FILES to client {}", state.clientId());
+        // Send ASK_SHARED_FILES using eMule protocol (0xC5) which is the canonical form
         new Packet(Packet.PROTOCOL_EMULE, OpCode.ASK_SHARED_FILES.value, new byte[0]).write(out, state.isZlibSupported());
+        // Some clients expect or will respond better to the same request on the ED2K protocol (0xE3).
+        // Send a second ASK_SHARED_FILES using ED2K to increase compatibility.
+        try {
+            new Packet(Packet.PROTOCOL_ED2K, OpCode.ASK_SHARED_FILES.value, new byte[0]).write(out, state.isZlibSupported());
+            log.debug("Also sent ASK_SHARED_FILES as ED2K for compatibility");
+        } catch (Exception e) {
+            log.debug("Failed to send fallback ED2K ASK_SHARED_FILES: {}", e.getMessage());
+        }
     }
 
     /**
@@ -625,9 +634,30 @@ public class ClientHandler implements Runnable {
              case EMULE_INFO -> handleEmuleInfo(p.data(), out);
              case CALLBACK -> handleCallback(p.data(), out);
              case COMPRESSED_PART -> handleCompressedPart(p.data(), out);
-             default -> log.debug("Unhandled: {} (Proto: 0x{:02X})", op, p.protocol());
+                case SOURCES_RESULT, SOURCES_RESULT_OBFU -> handleSourcesResult(p, out);
+                default -> log.debug("Unhandled: {} (Proto: 0x{})", op, String.format("%02X", p.protocol()));
          }
     }
+
+          /**
+           * Handle incoming SOURCES_RESULT (clients sometimes send empty/keepalive or unexpected responses).
+           */
+          private void handleSourcesResult(Packet p, OutputStream out) throws IOException {
+              byte[] data = p.data();
+              int len = data == null ? 0 : data.length;
+              log.info("Received SOURCES_RESULT (Proto: 0x{}), length={}", String.format("%02X", p.protocol()), len);
+              if (len > 0) {
+                  // Log a short hex preview for debugging
+                  StringBuilder sb = new StringBuilder();
+                  for (int i = 0; i < Math.min(64, data.length); i++) {
+                      sb.append(String.format("%02X", data[i])).append(' ');
+                  }
+                  log.debug("SOURCES_RESULT payload (first {} bytes): {}", Math.min(64, data.length), sb.toString().trim());
+              } else {
+                  log.debug("SOURCES_RESULT payload is empty (client may be indicating no sources or using it as keepalive)");
+              }
+              // No further action required on server side for SOURCES_RESULT from clients.
+          }
 
     /**
      * Handles eMule capability information packets (OpCode 0xC5:0x01).
