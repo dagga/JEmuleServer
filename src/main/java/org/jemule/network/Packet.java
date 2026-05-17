@@ -19,6 +19,9 @@
 
 package org.jemule.network;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.io.*;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -36,6 +39,7 @@ import java.util.zip.Inflater;
  * @param data     The payload data of the packet.
  */
 public record Packet(byte protocol, byte opcode, byte[] data) {
+    private static final Logger log = LoggerFactory.getLogger(Packet.class);
     /** Protocol ID for standard eDonkey2000 (ed2k) packets. */
     public static final byte PROTOCOL_ED2K = (byte) 0xE3;
     /** Protocol ID for eMule extended packets. */
@@ -99,6 +103,17 @@ public record Packet(byte protocol, byte opcode, byte[] data) {
         buf.put(payload);
         out.write(buf.array());
         out.flush();
+        if (log.isDebugEnabled()) {
+            byte[] bytes = buf.array();
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < Math.min(bytes.length, 256); i++) {
+                sb.append(String.format("%02X", bytes[i]));
+                if (i < bytes.length - 1) sb.append(' ');
+            }
+            log.debug("Sent packet proto=0x{} opcode=0x{} len={} bytes={}{}",
+                    String.format("%02X", proto & 0xFF), String.format("%02X", opcode & 0xFF), payload.length + 1,
+                    sb.toString(), bytes.length > 256 ? " ..." : "");
+        }
     }
 
     private static byte[] compress(byte[] input) {

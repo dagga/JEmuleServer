@@ -186,12 +186,22 @@ public class ClientHandler implements Runnable {
 
         // If we couldn't read the full probe, push back and treat as normal
         if (read < probe.length) {
+            if (log.isDebugEnabled()) {
+                StringBuilder sb = new StringBuilder();
+                for (int i = 0; i < read; i++) sb.append(String.format("%02X", probe[i])).append(' ');
+                log.debug("Peeked {} bytes (incomplete probe), will push back: {}", read, sb.toString().trim());
+            }
             pin.unread(probe, 0, read);
             return pin;
         }
 
         // Check for obfuscation marker at expected position (6th byte == 0x97)
         if ((probe[5] & 0xFF) != 0x97) {
+            if (log.isDebugEnabled()) {
+                StringBuilder sb = new StringBuilder();
+                for (int i = 0; i < probe.length; i++) sb.append(String.format("%02X", probe[i])).append(' ');
+                log.debug("Probe does not match obfuscation marker, pushing back probe bytes: {}", sb.toString().trim());
+            }
             pin.unread(probe, 0, read);
             return pin;
         }
