@@ -93,10 +93,24 @@ public class Main {
                 log.error("Failed to load config from {}: {}. Using defaults.", pathStr, e.getMessage());
             }
         } else {
+            // If a custom path was requested, do not try to load embedded resource
             if (!"server.properties".equals(pathStr)) {
                 log.warn("Configuration file {} not found. Using defaults.", pathStr);
-            } else {
-                log.info("No server.properties found. Using default configuration.");
+                return ServerConfig.DEFAULT;
+            }
+
+            // Try to load embedded server.properties from the classpath (inside the JAR)
+            try (var is = Main.class.getClassLoader().getResourceAsStream("server.properties")) {
+                if (is != null) {
+                    Properties props = new Properties();
+                    props.load(is);
+                    log.info("Loaded embedded server.properties from application resources.");
+                    return ServerConfig.fromProperties(props);
+                } else {
+                    log.info("No server.properties found on filesystem or in application resources. Using default configuration.");
+                }
+            } catch (IOException | IllegalArgumentException e) {
+                log.error("Failed to load embedded server.properties: {}. Using defaults.", e.getMessage());
             }
         }
         return ServerConfig.DEFAULT;
