@@ -44,5 +44,5 @@ servers (Lugdunum type).
 ## 5. Miscellaneous
 
 - [ ] **Internationalization (I18N)**: Allow translation of system messages sent to clients.
-- [ ] **IPv6 Support**: Ensure full compatibility with the IPv6 stack.
+- [x] **IPv6 Support**: Ensure full compatibility with the IPv6 stack.
 - [ ] **File Filtering**: Implementation of a blacklist to reject certain files.
