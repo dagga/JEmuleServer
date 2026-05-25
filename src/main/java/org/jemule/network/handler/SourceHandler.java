@@ -51,7 +51,7 @@ public class SourceHandler {
             }
         }
 
-        if (hash == null || !HandlerUtils.isValidHash(hash)) {
+        if (!HandlerUtils.isValidHash(hash)) {
             log.warn("Invalid hash format/length for GET_SOURCES: {}", data.length);
             return;
         }

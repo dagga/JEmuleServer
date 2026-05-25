@@ -38,7 +38,7 @@ class CallbackTest {
     private ClientState state1;
     private ClientHandler handler2;
     private ClientState state2;
-    private AtomicReference<Packet> receivedPacket2 = new AtomicReference<>();
+    private final AtomicReference<Packet> receivedPacket2 = new AtomicReference<>();
 
     @BeforeEach
     void setup() throws IOException {

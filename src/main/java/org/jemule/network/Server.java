@@ -280,7 +280,11 @@ public class Server {
                 if (addr.length == 4) ipv4List.add(s);
                 else if (addr.length == 16) {
                     boolean isV4Mapped = true;
-                    for (int i = 0; i < 10; i++) if (addr[i] != 0) isV4Mapped = false;
+                    for (int i = 0; i < 10; i++)
+                        if (addr[i] != 0) {
+                            isV4Mapped = false;
+                            break;
+                        }
                     if (isV4Mapped && addr[10] == (byte) 0xFF && addr[11] == (byte) 0xFF) ipv4List.add(s);
                     else ipv6List.add(s);
                 } else {

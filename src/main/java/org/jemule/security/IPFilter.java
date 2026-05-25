@@ -121,9 +121,7 @@ public class IPFilter {
         // The IP might be in the range that starts before the insertion point
         if (insertionPoint > 0) {
             IPRange candidate = blockedRanges.get(insertionPoint - 1);
-            if (ipLong >= candidate.start && ipLong <= candidate.end) {
-                return true;
-            }
+            return ipLong >= candidate.start && ipLong <= candidate.end;
         }
 
         return false;

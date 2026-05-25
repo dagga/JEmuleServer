@@ -65,7 +65,11 @@ public final class ClientState {
         // If IPv6 and IPv4-mapped (::ffff:0:0/96), use the last 4 bytes
         if (b.length == 16) {
             boolean isV4Mapped = true;
-            for (int i = 0; i < 10; i++) if (b[i] != 0) isV4Mapped = false;
+            for (int i = 0; i < 10; i++)
+                if (b[i] != 0) {
+                    isV4Mapped = false;
+                    break;
+                }
             if (isV4Mapped && b[10] == (byte) 0xFF && b[11] == (byte) 0xFF) {
                 int off = 12;
                 return ((b[off + 3] & 0xFF) << 24) | ((b[off + 2] & 0xFF) << 16) | ((b[off + 1] & 0xFF) << 8) | (b[off] & 0xFF);

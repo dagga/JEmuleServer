@@ -55,7 +55,7 @@ public class ServerIdentDumper {
             if (i < payload.length - 1) sb.append(' ');
             if ((i + 1) % 16 == 0) sb.append('\n');
         }
-        System.out.println(sb.toString());
+        System.out.println(sb);
 
         // Now parse back tags from payload
         ByteBuffer in = ByteBuffer.wrap(payload).order(ByteOrder.LITTLE_ENDIAN);
