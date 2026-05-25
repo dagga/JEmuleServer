@@ -130,25 +130,21 @@ class HeartbeatTest {
         sendServerStatusMethod.invoke(handler, capturedOutput);
 
         byte[] output = capturedOutput.toByteArray();
-        assertTrue(output.length >= 10, "ServerStatus packet should have at least 10 bytes");
+        assertTrue(output.length >= 14, "ServerStatus packet should have at least 14 bytes");
 
-        // Parse packet: protocol (1) + size (4) + opcode (1) + data (16 for status)
+        // Parse packet: protocol (1) + size (4) + opcode (1) + data (8 for status)
         ByteBuffer buf = ByteBuffer.wrap(output).order(ByteOrder.LITTLE_ENDIAN);
         buf.get(); // protocol
         buf.getInt(); // size
         buf.get(); // opcode
 
-        // Extract the payload: user count, file count, max users, max files
+        // Extract the payload: user count, file count
         int userCount = buf.getInt();
         int fileCount = buf.getInt();
-        int maxUsers = buf.getInt();
-        int maxFiles = buf.getInt();
 
         // Verify reasonable values
         assertTrue(userCount >= 1, "Should have at least 1 user (the current client)");
         assertTrue(fileCount >= 0, "File count should be non-negative");
-        assertEquals(config.maxUsers(), maxUsers, "Max users should match config");
-        assertEquals(config.maxFiles(), maxFiles, "Max files should match config");
     }
 
     /**
