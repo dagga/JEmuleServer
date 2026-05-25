@@ -19,31 +19,29 @@
 
 package org.jemule.network;
 
-import org.jemule.Main;
 import org.jemule.config.ServerConfig;
 import org.jemule.core.*;
-import org.jemule.protocol.OpCode;
-import org.jemule.protocol.Tag;
 import org.jemule.security.FakeFileDetector;
 import org.jemule.security.FloodProtector;
-import org.jemule.security.Obfuscation;
 import org.jemule.core.event.ClientEvent;
 import org.jemule.core.event.EventManager;
+import org.jemule.network.handler.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.*;
 import java.net.Socket;
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
-import java.nio.charset.StandardCharsets;
-import java.security.SecureRandom;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
 
-public class ClientHandler implements Runnable {
+/**
+ * Manages the lifecycle of a single eMule client connection.
+ * <p>
+ * This class handles the network I/O loop (read packets, send heartbeats,
+ * detect disconnections) and delegates all protocol-specific processing
+ * to dedicated handler classes in {@code org.jemule.network.handler}.
+ */
+public class ClientHandler implements Runnable, ClientContext {
     private static final Logger log = LoggerFactory.getLogger(ClientHandler.class);
+
     private final Socket socket;
     private final ServerConfig config;
     private final ClientRegistry registry;
@@ -53,9 +51,13 @@ public class ClientHandler implements Runnable {
     private final EventManager eventManager;
     private final ClientFactory clientFactory;
     private ClientState state;
-    private Obfuscation.RC4 sendRC4;
-    private Obfuscation.RC4 receiveRC4;
     private boolean obfuscated = false;
+    private OutputStream wrappedOut;
+
+    // Handlers
+    private final ObfuscationHandler obfuscationHandler = new ObfuscationHandler();
+    private final LoginHandler loginHandler = new LoginHandler();
+    private final PacketProcessor packetProcessor = new PacketProcessor();
 
     public ClientHandler(Socket socket, ServerConfig config, ClientRegistry registry, FileIndex fileIndex, FloodProtector floodProtector, FakeFileDetector fakeFileDetector, EventManager eventManager, ClientFactory clientFactory) {
         this.socket = socket;
@@ -85,12 +87,12 @@ public class ClientHandler implements Runnable {
                 return;
             }
 
-            InputStream in = negotiateObfuscation(socket.getInputStream(), socket.getOutputStream());
+            InputStream in = obfuscationHandler.negotiateObfuscation(this, socket.getInputStream(), socket.getOutputStream());
             Packet p = Packet.read(in, config.maxPacketSize());
             validateProtocol(p.protocol());
 
             OutputStream out = wrappedOut != null ? wrappedOut : socket.getOutputStream();
-            handleLogin(p, out);
+            loginHandler.handleLogin(this, p, out);
 
             long lastHeartbeat = System.currentTimeMillis();
             int heartbeatIntervalMs = config.heartbeatIntervalSeconds() * 1000;
@@ -104,7 +106,7 @@ public class ClientHandler implements Runnable {
                         long waitTime = nextHeartbeat - now;
                         
                         if (waitTime <= 0) {
-                            sendServerStatus(out);
+                            LoginHandler.sendServerStatus(this, out);
                             lastHeartbeat = System.currentTimeMillis();
                             waitTime = heartbeatIntervalMs;
                         }
@@ -114,7 +116,7 @@ public class ClientHandler implements Runnable {
 
                     Packet nextP = Packet.read(in, config.maxPacketSize());
                     if (floodProtector.allow(socket.getInetAddress())) {
-                        processPacket(nextP, out);
+                        packetProcessor.processPacket(this, nextP, out);
                     }
                 } catch (java.net.SocketTimeoutException e) {
                     if (heartbeatIntervalMs > 0) {
@@ -160,923 +162,8 @@ public class ClientHandler implements Runnable {
     }
 
     /**
-     * Determines if the connection is obfuscated and returns the appropriate input stream.
-     *
-     * @param in  The original input stream.
-     * @param out The original output stream.
-     * @return A {@link PushbackInputStream} or a decrypted stream if obfuscated.
-     * @throws IOException If a network error occurs.
+     * Masks the last part of an IP address for GDPR compliance.
      */
-    private InputStream negotiateObfuscation(InputStream in, OutputStream out) throws IOException {
-        // Use a larger pushback buffer so we can safely peek several bytes
-        PushbackInputStream pin = new PushbackInputStream(in, 1024);
-        byte[] probe = new byte[6];
-        int read = 0;
-        while (read < probe.length) {
-            int r = pin.read(probe, read, probe.length - read);
-            if (r == -1) break;
-            read += r;
-        }
-
-        if (read == 0) return pin;
-
-        int firstByte = probe[0] & 0xFF;
-        // If the first byte is a normal protocol byte, push everything back and continue normally
-        if (firstByte == (Packet.PROTOCOL_ED2K & 0xFF) || firstByte == (Packet.PROTOCOL_EMULE & 0xFF) || firstByte == (Packet.PROTOCOL_ZLIB & 0xFF)) {
-            pin.unread(probe, 0, read);
-            return pin;
-        }
-
-        // If we couldn't read the full probe, push back and treat as normal
-        if (read < probe.length) {
-            if (log.isDebugEnabled()) {
-                StringBuilder sb = new StringBuilder();
-                for (int i = 0; i < read; i++) sb.append(String.format("%02X", probe[i])).append(' ');
-                log.debug("Peeked {} bytes (incomplete probe), will push back: {}", read, sb.toString().trim());
-            }
-            pin.unread(probe, 0, read);
-            return pin;
-        }
-
-        // Check for obfuscation marker at expected position (6th byte == 0x97)
-        if ((probe[5] & 0xFF) != 0x97) {
-            if (log.isDebugEnabled()) {
-                StringBuilder sb = new StringBuilder();
-                for (int i = 0; i < probe.length; i++) sb.append(String.format("%02X", probe[i])).append(' ');
-                log.debug("Probe does not match obfuscation marker, pushing back probe bytes: {}", sb.toString().trim());
-            }
-            pin.unread(probe, 0, read);
-            return pin;
-        }
-
-        // Looks like an obfuscation handshake. Process it using the already-read bytes.
-        log.info("Detected obfuscated handshake from {}", sanitize(socket.getRemoteSocketAddress().toString()));
-
-        // clientRandom is bytes 1..4
-        byte[] clientRandom = new byte[4];
-        System.arraycopy(probe, 1, clientRandom, 0, 4);
-
-        byte[] magic = {(byte) 0x97};
-        receiveRC4 = new Obfuscation.RC4(Obfuscation.md5(magic, clientRandom));
-        sendRC4 = new Obfuscation.RC4(Obfuscation.md5(magic, clientRandom));
-
-        // Discard first 1024 bytes of keystream
-        receiveRC4.crypt(new byte[1024]);
-        sendRC4.crypt(new byte[1024]);
-
-        // Wrap the remaining stream for decryption; note we already consumed the probe bytes
-        InputStream encryptedIn = new ObfuscatedInputStream(pin, receiveRC4);
-
-        // Read until EncryptionMethod = Obfuscation (0x00)
-        int method = -1;
-        for (int k = 0; k < 256; k++) {
-            int b = encryptedIn.read();
-            if (b == 0x00) {
-                method = b;
-                break;
-            }
-            if (b == -1) break;
-        }
-
-        if (method != 0x00) {
-            // Handshake failed; push back probe bytes so caller can re-interpret stream
-            try { pin.unread(probe, 0, read); } catch (IOException ignored) {}
-            throw new IOException("Unsupported encryption method or handshake timeout");
-        }
-
-        // Server Response: [Random 1-256] [PaddingLen 1] [Padding] [EncryptionMethod 1]
-        java.security.SecureRandom rng = new java.security.SecureRandom();
-        int serverPadLen = rng.nextInt(16);
-        byte[] serverHandshake = new byte[1 + serverPadLen + 1];
-        rng.nextBytes(serverHandshake);
-        serverHandshake[0] = (byte) serverPadLen;
-        serverHandshake[serverHandshake.length - 1] = 0x00; // Method
-
-        byte[] encryptedResponse = serverHandshake.clone();
-        sendRC4.crypt(encryptedResponse);
-        out.write(encryptedResponse);
-        out.flush();
-
-        log.info("Obfuscation handshake complete for {}", sanitize(socket.getRemoteSocketAddress().toString()));
-        obfuscated = true;
-        this.wrappedOut = new ObfuscatedOutputStream(out, sendRC4);
-        return encryptedIn;
-    }
-
-    /**
-     * Performs the eMule obfuscation handshake (RC4).
-     *
-     * @param firstByte The first byte already read from the stream.
-     * @param in        The input stream.
-     * @param out       The output stream.
-     * @return A decrypted input stream wrapper.
-     * @throws IOException If the handshake fails or an attack is detected.
-     */
-    private InputStream handleObfuscatedHandshake(int firstByte, InputStream in, OutputStream out) throws IOException {
-        // Obfuscated handshake:
-        // Client -> Server: [1 byte random] [4 bytes random] [1 byte 0x97] [n bytes random] [1 byte padding len] [n bytes padding] [1 byte encryption method]
-        DataInputStream dis = new DataInputStream(in);
-        byte[] clientRandom = new byte[4];
-        dis.readFully(clientRandom);
-
-        // Anti-replay check
-        if (Obfuscation.isReplay(clientRandom)) {
-            throw new IOException("Replay attack detected from " + sanitize(socket.getRemoteSocketAddress().toString()));
-        }
-
-        int marker = dis.readUnsignedByte();
-        if (marker != 0x97) {
-            throw new IOException("Invalid obfuscation marker: 0x" + Integer.toHexString(marker));
-        }
-
-        // Keys creation
-        byte[] magic = {(byte) 0x97};
-        receiveRC4 = new Obfuscation.RC4(Obfuscation.md5(magic, clientRandom));
-        sendRC4 = new Obfuscation.RC4(Obfuscation.md5(magic, clientRandom));
-
-        // Discard first 1024 bytes
-        receiveRC4.crypt(new byte[1024]);
-        sendRC4.crypt(new byte[1024]);
-
-        // Wrap streams
-        InputStream encryptedIn = new ObfuscatedInputStream(in, receiveRC4);
-        
-        // Read until EncryptionMethod = Obfuscation (0x00)
-        int method = -1;
-        for (int k = 0; k < 256; k++) {
-            int b = encryptedIn.read();
-            if (b == 0x00) {
-                method = b;
-                break;
-            }
-        }
-
-        if (method != 0x00) throw new IOException("Unsupported encryption method or handshake timeout");
-
-        // Server Response: [Random 1-256] [PaddingLen 1] [Padding] [EncryptionMethod 1]
-        SecureRandom rng = new SecureRandom();
-        int serverPadLen = rng.nextInt(16);
-        byte[] serverHandshake = new byte[1 + serverPadLen + 1];
-        rng.nextBytes(serverHandshake);
-        serverHandshake[0] = (byte) serverPadLen;
-        serverHandshake[serverHandshake.length - 1] = 0x00; // Method
-
-        byte[] encryptedResponse = serverHandshake.clone();
-        sendRC4.crypt(encryptedResponse);
-        out.write(encryptedResponse);
-        out.flush();
-
-        log.info("Obfuscation handshake complete for {}", sanitize(socket.getRemoteSocketAddress().toString()));
-        obfuscated = true;
-        this.wrappedOut = new ObfuscatedOutputStream(out, sendRC4);
-        return encryptedIn;
-    }
-
-    /**
-     * Helper stream to decrypt data on the fly using RC4.
-     */
-    private static class ObfuscatedInputStream extends InputStream {
-        private final InputStream in;
-        private final Obfuscation.RC4 rc4;
-
-        public ObfuscatedInputStream(InputStream in, Obfuscation.RC4 rc4) {
-            this.in = in;
-            this.rc4 = rc4;
-        }
-
-        @Override
-        public int read() throws IOException {
-            int b = in.read();
-            if (b == -1) return -1;
-            byte[] data = {(byte) b};
-            rc4.crypt(data);
-            return data[0] & 0xFF;
-        }
-
-        @Override
-        public int read(byte[] b, int off, int len) throws IOException {
-            int r = in.read(b, off, len);
-            if (r > 0) rc4.crypt(b, off, r);
-            return r;
-        }
-    }
-
-    /**
-     * Helper stream to encrypt data on the fly using RC4.
-     */
-    private static class ObfuscatedOutputStream extends OutputStream {
-        private final OutputStream out;
-        private final Obfuscation.RC4 rc4;
-
-        public ObfuscatedOutputStream(OutputStream out, Obfuscation.RC4 rc4) {
-            this.out = out;
-            this.rc4 = rc4;
-        }
-
-        @Override
-        public void write(int b) throws IOException {
-            byte[] data = {(byte) b};
-            rc4.crypt(data);
-            out.write(data[0]);
-        }
-
-        @Override
-        public void write(byte[] b, int off, int len) throws IOException {
-            byte[] copy = Arrays.copyOfRange(b, off, off + len);
-            rc4.crypt(copy);
-            out.write(copy);
-        }
-
-        @Override
-        public void flush() throws IOException {
-            out.flush();
-        }
-    }
-
-    private OutputStream wrappedOut;
-
-    /**
-     * Processes the initial login packet and establishes the client session.
-     *
-     * @param initialPacket The first packet received from the client.
-     * @param out           The output stream to send responses.
-     * @throws IOException If login fails or network error occurs.
-     */
-    private void handleLogin(Packet initialPacket, OutputStream out) throws IOException {
-        if (wrappedOut != null) out = wrappedOut;
-        byte[] data = initialPacket.data();
-        log.info("Handling login request, data size: {} bytes", data.length);
-
-        // Use a dynamic client ID generation (simple IP-based ID for now or random)
-        // For eMule, high ID is often the IP address in little-endian if public.
-        int clientId = ByteBuffer.wrap(socket.getInetAddress().getAddress()).order(ByteOrder.LITTLE_ENDIAN).getInt();
-
-        state = clientFactory.createClient(socket.getInetAddress(), socket.getPort(), clientId);
-        
-        if (eventManager != null) {
-            eventManager.broadcast(new ClientEvent(ClientEvent.LOGIN, socket.getInetAddress().getHostAddress(), "ID:" + clientId, "Client logged in with ID " + clientId));
-        }
-
-        // Check if initial packet was ZLIB, if so, client supports it
-        if (initialPacket.protocol() == Packet.PROTOCOL_ZLIB) {
-            state.setZlibSupported(true);
-            log.info("Client supports ZLIB (detected from initial packet)");
-        }
-
-        OutputStream finalOut = out;
-        registry.add(state, (p) -> {
-            try {
-                p.write(finalOut, state.isZlibSupported());
-            } catch (IOException e) {
-                log.error("Failed to send relayed packet to {}: {}", state.clientId(), e.getMessage());
-            }
-        });
-
-        // Standard eMule Handshake order (Strict Lugdunum/aMule style):
-        // 1. Server Ident (0x41)
-        sendServerIdent(out);
-
-        // 2. Login Accepted / ID Change (0x40) - Standard Lugdunum ID Change
-        // OpCode 0x40 is often used by servers to finalize the ID assignment.
-        ByteBuffer resp = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN);
-        resp.putInt(clientId);
-        new Packet(Packet.PROTOCOL_ED2K, OpCode.ID_CHANGE.value, resp.array()).write(out, state.isZlibSupported());
-
-        // Also send the old 0x1B for compatibility
-        new Packet(Packet.PROTOCOL_ED2K, OpCode.LOGIN_ACCEPTED.value, resp.array()).write(out, state.isZlibSupported());
-
-        log.info("Logged in ID: {} (Sent 0x40 and 0x1B)", clientId);
-
-        // 3. Server Message (0x38) - MotD
-        sendServerMessage(out, "Welcome to " + Main.VERSION + " (JEmuleServer)\n" +
-                "Your ID is: " + Integer.toUnsignedString(clientId) + "\n" +
-                "Enjoy the extended protocol support!");
-
-        // 4. Server Status (0x34) - Finalizes the state in aMule
-        sendServerStatus(out);
-
-        // 6. Ask client to share their files
-        sendAskSharedFiles(out);
-
-        // 7. Send additional status updates to encourage file publishing
-        // Some clients wait for multiple status updates before publishing
-        try {
-            Thread.sleep(100); // Small delay
-            sendServerStatus(out);
-            log.debug("Sent additional SERVER_STATUS to encourage file publishing");
-
-            // Start a background thread to send periodic status updates for the first 5 minutes
-            // to encourage clients to publish their files
-            final OutputStream statusOut = out; // Make effectively final for lambda
-            Thread statusThread = new Thread(() -> {
-                try {
-                    for (int i = 0; i < 30 && !socket.isClosed(); i++) { // 30 updates over ~5 minutes
-                        Thread.sleep(10000); // Every 10 seconds
-                        if (!socket.isClosed()) {
-                            sendServerStatus(statusOut);
-                            log.debug("Sent periodic SERVER_STATUS #{} to encourage file publishing", i + 2);
-                        }
-                    }
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                } catch (IOException e) {
-                    log.debug("Failed to send periodic status update: {}", e.getMessage());
-                }
-            });
-            statusThread.setDaemon(true);
-            statusThread.start();
-            log.info("Started periodic status updates thread for client {}", clientId);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
-    }
-
-    /**
-     * Sends a text message to the client (typically used for MotD).
-     *
-     * @param out The output stream.
-     * @param msg The message string.
-     * @throws IOException If sending fails.
-     */
-    private void sendServerMessage(OutputStream out, String msg) throws IOException {
-        byte[] content = msg.getBytes(StandardCharsets.UTF_8);
-        ByteBuffer buf = ByteBuffer.allocate(2 + content.length).order(ByteOrder.LITTLE_ENDIAN);
-        buf.putShort((short) content.length);
-        buf.put(content);
-        new Packet(Packet.PROTOCOL_ED2K, OpCode.SERVER_MESSAGE.value, buf.array()).write(out, state.isZlibSupported());
-    }
-
-    /**
-     * Sends the server identification packet (OpCode 0x41) including tags.
-     *
-     * @param out The output stream.
-     * @throws IOException If sending fails.
-     */
-     private void sendServerIdent(OutputStream out) throws IOException {
-         byte[] hash = new byte[16]; // Empty hash
-         int portInt = config.port(); // Keep as int to avoid sign issues
-
-         String serverName = "JEmuleServer (https://github.com/dagga/JEmuleServer/)";
-         String serverVersion = Main.VERSION + " (JEmuleServer)";
-         String desc = "Experimental eMule Server";
-
-         List<Tag> tags = new ArrayList<>();
-         tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_NAME, serverName));
-         tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_DESCRIPTION, desc));
-         tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_VERSION, serverVersion));
-         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_EMULE_VERSION, 0x3C)); // 0x3C = 60, typical for eMule 0.4x/0.5x compatible
-         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_TCP_FLAGS, 0x01 | 0x08 | 0x10)); // ZLIB + OBFUSCATION + NEWTAGS support bits
-         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_AUX_PORT, portInt));
-         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_MAX_USERS, config.maxUsers()));
-         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_MAX_FILES, config.maxFiles()));
-
-         // Use a dynamic buffer to avoid manual size calculation errors
-         ByteBuffer buf = ByteBuffer.allocate(4096).order(ByteOrder.LITTLE_ENDIAN);
-         buf.put(hash);
-
-         // Write IP and Port in BIG_ENDIAN (network byte order) for SERVER_IDENT
-         byte[] addr = socket.getLocalAddress().getAddress();
-         if (addr.length == 4) {
-             buf.put(addr);
-         } else {
-             // Fallback to localhost if not IPv4
-             buf.put((byte) 0x7F);
-             buf.put((byte) 0x00);
-             buf.put((byte) 0x00);
-             buf.put((byte) 0x01);
-         }
-         // Port must be in network byte order (big-endian)
-         // Write as 2 bytes: high byte first, then low byte
-         buf.put((byte) ((portInt >> 8) & 0xFF));
-         buf.put((byte) (portInt & 0xFF));
-
-         Tag.writeList(buf, tags);
-
-        buf.flip();
-        byte[] response = new byte[buf.remaining()];
-        buf.get(response);
-
-        new Packet(Packet.PROTOCOL_ED2K, OpCode.SERVER_IDENT.value, response).write(out, state.isZlibSupported());
-    }
-
-    /**
-     * Sends the current server status (OpCode 0x34) including user and file counts.
-     *
-     * @param out The output stream.
-     * @throws IOException If sending fails.
-     */
-    private void sendServerStatus(OutputStream out) throws IOException {
-        ByteBuffer buf = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN);
-        buf.putInt(registry.size());
-        buf.putInt(fileIndex.fileCount());
-        new Packet(Packet.PROTOCOL_ED2K, OpCode.SERVER_STATUS.value, buf.array()).write(out, state.isZlibSupported());
-    }
-
-    /**
-     * Sends a list of alternative servers (OpCode 0x42 - SERVER_LIST).
-     * This is a Lugdunum extension that helps clients discover and update their server.met file.
-     *
-     * @param out The output stream.
-     * @throws IOException If sending fails.
-     */
-    private void sendServerList(OutputStream out) throws IOException {
-        // For now, send an empty server list (0 servers)
-        // In a real implementation, this could include the current server or trusted peers
-        ByteBuffer buf = ByteBuffer.allocate(1).order(ByteOrder.LITTLE_ENDIAN);
-        buf.put((byte) 0); // Number of servers in the list
-        new Packet(Packet.PROTOCOL_ED2K, OpCode.SERVER_LIST.value, buf.array()).write(out, state.isZlibSupported());
-        log.debug("Sent SERVER_LIST (empty) to client {}", state.clientId());
-    }
-
-    /**
-     * Sends a request for the client to share their files (OpCode 0xC5:0x4F).
-     *
-     * @param out The output stream.
-     * @throws IOException If sending fails.
-     */
-    private void sendAskSharedFiles(OutputStream out) throws IOException {
-        log.info("Sending ASK_SHARED_FILES to client {}", state.clientId());
-        // Send ASK_SHARED_FILES using eMule protocol (0xC5) which is the canonical form
-        new Packet(Packet.PROTOCOL_EMULE, OpCode.ASK_SHARED_FILES.value, new byte[0]).write(out, state.isZlibSupported());
-        // Some clients expect or will respond better to the same request on the ED2K protocol (0xE3).
-        // Send a second ASK_SHARED_FILES using ED2K to increase compatibility.
-        try {
-            new Packet(Packet.PROTOCOL_ED2K, OpCode.ASK_SHARED_FILES.value, new byte[0]).write(out, state.isZlibSupported());
-            log.debug("Also sent ASK_SHARED_FILES as ED2K for compatibility");
-        } catch (Exception e) {
-            log.debug("Failed to send fallback ED2K ASK_SHARED_FILES: {}", e.getMessage());
-        }
-    }
-
-    /**
-     * Dispatches the received packet to the appropriate handler method.
-     *
-     * @param p   The received packet.
-     * @param out The output stream for responses.
-     * @throws IOException If handling fails.
-     */
-    private void processPacket(Packet p, OutputStream out) throws IOException {
-        state.lastActivity().set(System.currentTimeMillis());
-        OpCode op = OpCode.fromByte(p.protocol(), p.opcode());
-        if (op == null) {
-            log.info("Unknown opcode received: 0x" + String.format("%02X", p.opcode()) + " (Proto: 0x" + String.format("%02X", p.protocol()) + "), Data length: " + (p.data() != null ? p.data().length : 0));
-            return;
-        }
-
-        log.info("Processing packet: " + op + " (Proto: 0x" + String.format("%02X", p.protocol()) + ", Data length: " + (p.data() != null ? p.data().length : 0) + ")");
-
-         switch (op) {
-             case SEARCH_REQUEST -> handleSearch(p.data(), out);
-             case QUERY_MORE_RESULT -> handleQueryMoreResult(out);
-             case PUBLISH_FILES, OFFER_FILES -> handlePublish(op, p.data(), out);
-             case GET_SOURCES, GET_SOURCES_OBFU -> handleGetSources(p, out);
-             case EMULE_INFO -> handleEmuleInfo(p.data(), out);
-             case CALLBACK -> handleCallback(p.data(), out);
-             case COMPRESSED_PART -> handleCompressedPart(p.data(), out);
-             case FOUND_SOURCES, SOURCES_RESULT_OBFU -> handleSourcesResult(p, out);
-             case GET_SERVER_LIST -> sendServerList(out);
-             case DISCONNECT -> handleDisconnect();
-             default -> log.debug("Unhandled: {} (Proto: 0x{})", op, String.format("%02X", p.protocol()));
-         }
-    }
-
-    private void handleDisconnect() throws IOException {
-        log.info("Client {} requested disconnect", state.clientId());
-        socket.close();
-    }
-
-          /**
-           * Handle incoming SOURCES_RESULT (clients sometimes send empty/keepalive or unexpected responses).
-           */
-          private void handleSourcesResult(Packet p, OutputStream out) throws IOException {
-              byte[] data = p.data();
-              int len = data == null ? 0 : data.length;
-              log.info("Received SOURCES_RESULT (Proto: 0x{}), length={}", String.format("%02X", p.protocol()), len);
-              if (len > 0) {
-                  // Log a short hex preview for debugging
-                  StringBuilder sb = new StringBuilder();
-                  for (int i = 0; i < Math.min(64, data.length); i++) {
-                      sb.append(String.format("%02X", data[i])).append(' ');
-                  }
-                  log.debug("SOURCES_RESULT payload (first {} bytes): {}", Math.min(64, data.length), sb.toString().trim());
-              } else {
-                  log.debug("SOURCES_RESULT payload is empty (client may be indicating no sources or using it as keepalive)");
-              }
-              // No further action required on server side for SOURCES_RESULT from clients.
-          }
-
-    /**
-     * Handles eMule capability information packets (OpCode 0xC5:0x01).
-     *
-     * @param data The packet payload.
-     * @param out  The output stream for the ACK.
-     * @throws IOException If sending fails.
-     */
-    private void handleEmuleInfo(byte[] data, OutputStream out) throws IOException {
-        log.debug("Received EMULE_INFO from {}", sanitize(socket.getRemoteSocketAddress().toString()));
-        // For now, just ACK it with basic server info or empty EMULE_INFO_ACK
-        // eMule Info usually contains client capabilities.
-        new Packet(Packet.PROTOCOL_EMULE, OpCode.EMULE_INFO_ACK.value, new byte[0]).write(out, state.isZlibSupported());
-    }
-
-    /**
-     * Handles file search requests (OpCode 0x16).
-     * Supports both complex (binary tree) and simple (textual) search fallbacks.
-     *
-     * @param data The search query data.
-     * @param out  The output stream for results.
-     * @throws IOException If sending results fails.
-     */
-    private void handleSearch(byte[] data, OutputStream out) throws IOException {
-        if (data == null || data.length < 1) {
-            log.warn("Invalid search request: empty data");
-            return;
-        }
-
-        List<FileMetadata> results;
-        try {
-            SearchQuery query = SearchQuery.parse(ByteBuffer.wrap(data));
-            results = fileIndex.searchComplex(query, config.maxSearchResults());
-            log.debug("Complex search -> {} results", results.size());
-        } catch (Exception e) {
-            log.warn("Failed to parse complex search, falling back to simple search: {}", sanitize(e.getMessage()));
-            String queryStr = new String(data, StandardCharsets.UTF_8).trim();
-            if (queryStr.length() < 3) {
-                log.warn("Simple search query too short: '{}'", sanitize(queryStr));
-                results = List.of();
-            } else {
-                results = fileIndex.search(queryStr, config.maxSearchResults());
-                log.debug("Simple search '{}' -> {} results", queryStr, results.size());
-            }
-        }
-
-        int BATCH_SIZE = 50;
-        List<FileMetadata> batch = results.subList(0, Math.min(results.size(), BATCH_SIZE));
-        sendSearchResults(batch, out);
-
-        if (results.size() > BATCH_SIZE) {
-            state.setPendingSearchResults(new ArrayList<>(results.subList(BATCH_SIZE, results.size())));
-        } else {
-            state.setPendingSearchResults(null);
-        }
-    }
-
-    private void handleQueryMoreResult(OutputStream out) throws IOException {
-        List<FileMetadata> pending = state.getPendingSearchResults();
-        if (pending == null || pending.isEmpty()) {
-            return;
-        }
-
-        int BATCH_SIZE = 50;
-        List<FileMetadata> batch = pending.subList(0, Math.min(pending.size(), BATCH_SIZE));
-        sendSearchResults(batch, out);
-
-        if (pending.size() > BATCH_SIZE) {
-            state.setPendingSearchResults(new ArrayList<>(pending.subList(BATCH_SIZE, pending.size())));
-        } else {
-            state.setPendingSearchResults(null);
-        }
-    }
-
-    private void sendSearchResults(List<FileMetadata> results, OutputStream out) throws IOException {
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        DataOutputStream dos = new DataOutputStream(baos);
-        dos.writeInt(results.size());
-        for (var m : results) {
-            byte[] hashBytes = hashToBytes(m.hash());
-            
-            // Port and ID are usually added via Tag list
-            // For now, let's keep it simple or follow Lugdunum style
-            // Standard ed2k SEARCH_RESULT: Hash(16), ClientID(4), Port(2), TagList
-            // Use BIG_ENDIAN for legacy ed2k fields if not specified, but Packet uses LITTLE_ENDIAN generally.
-            // Actually, ClientID and Port in SEARCH_RESULT are usually BIG_ENDIAN in some docs, but LITTLE in others.
-            // Let's stick to what eMule expects (usually LITTLE for tags, but IP/Port can be BIG).
-            // Actually, the Packet class uses the default ByteOrder of the buffer/stream.
-            // Let's use ByteBuffer to be sure.
-            
-            ByteBuffer itemBuf = ByteBuffer.allocate(2048).order(ByteOrder.LITTLE_ENDIAN);
-            itemBuf.put(hashBytes);
-            itemBuf.putInt(0); // ID
-            itemBuf.putShort((short) 0); // Port
-            
-            List<Tag> tags = new ArrayList<>();
-            tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_NAME, m.name()));
-            if (m.size() > Integer.MAX_VALUE) {
-                tags.add(new Tag(Tag.TYPE_INTEGER, "\u0002", (int) (m.size() & 0xFFFFFFFFL))); // Low 32 bits
-                tags.add(new Tag(Tag.TYPE_INTEGER, "\u003A", (int) (m.size() >> 32))); // ID_FILESIZE_HIGH
-            } else {
-                tags.add(new Tag(Tag.TYPE_INTEGER, "\u0002", (int) m.size())); // ID_FILESIZE
-            }
-            tags.add(new Tag(Tag.TYPE_STRING, "\u0003", m.type())); // ID_FILETYPE
-            
-            Tag.writeList(itemBuf, tags);
-            itemBuf.flip();
-            byte[] itemData = new byte[itemBuf.remaining()];
-            itemBuf.get(itemData);
-            dos.write(itemData);
-        }
-        new Packet(Packet.PROTOCOL_ED2K, OpCode.SEARCH_RESULT.value, baos.toByteArray()).write(out, state.isZlibSupported());
-    }
-
-    private static String sanitize(String input) {
-        if (input == null) return "";
-        return input.replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t");
-    }
-
-    private boolean isValidHash(String hash) {
-        if (hash == null || hash.length() != 32) return false;
-        return hash.matches("^[0-9a-fA-F]{32}$");
-    }
-
-    private boolean isValidFilename(String name) {
-        if (name == null || name.isBlank()) return false;
-        if (name.length() > 255) return false;
-        for (char c : name.toCharArray()) {
-            if (c < 32) return false;
-        }
-        return true;
-    }
-
-    /**
-     * Handles file publication requests (OpCode 0x20).
-     * Supports both the standard ed2k binary format (with Tags) and a simple pipe-separated fallback.
-     *
-     * @param data The publication data.
-     * @param out  The output stream for ACK.
-     * @throws IOException If sending ACK fails.
-     */
-    private void handlePublish(OpCode op, byte[] data, OutputStream out) throws IOException {
-        if (data == null || data.length == 0) {
-            log.warn("Invalid publish request: empty data");
-            return;
-        }
-
-        log.info("Received {} packet with {} bytes of data", op, data.length);
-
-        try {
-            ByteBuffer buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN);
-            // In ed2k protocol, PUBLISH_FILES usually starts with the number of files (4 bytes)
-            // But some simplified versions might send just one or use a different format.
-            // Let's try to detect if it's binary or text.
-            if (data[0] < 32) { // Likely binary (count or first byte of hash/type)
-                int count = buf.getInt();
-                log.info("Detected binary PUBLISH format with {} files", count);
-                for (int i = 0; i < count; i++) {
-                    byte[] hashBytes = new byte[16];
-                    buf.get(hashBytes);
-
-                    if (op == OpCode.OFFER_FILES) {
-                        buf.getInt();   // FileID
-                        buf.getShort(); // FilePort
-                    }
-
-                    StringBuilder sb = new StringBuilder();
-                    for (byte b : hashBytes) sb.append(String.format("%02x", b));
-                    String hash = sb.toString();
-
-                    List<Tag> tags = Tag.readList(buf);
-                    String name = "";
-                    long size = 0;
-                    String type = "";
-
-                    for (Tag t : tags) {
-                        switch (t.name()) {
-                            case Tag.NAME_NAME -> name = (String) t.value();
-                            case "\u0002" -> size = ((Number) t.value()).longValue(); // ID_FILESIZE
-                            case "\u0003" -> type = (String) t.value(); // ID_FILETYPE
-                            // Additional tags like format, bitrate, etc. can be ignored or added to meta
-                        }
-                    }
-
-                    // Verbose logging: announce file publication attempt with filename so we can confirm client-side publishing
-                    log.info("PUBLISH attempt from client {}: name='{}' hash={} size={} type={}", state != null ? state.clientId() : -1, sanitize(name), hash, size, type);
-
-                    log.debug("Processing file: hash={}, name={}, size={}, type={}", hash, sanitize(name), size, type);
-
-                    if (isValidHash(hash) && isValidFilename(name) && state.publishedFilesCount().get() < config.maxFilesPerUser()) {
-                        if (fakeFileDetector.isFake(hash, name, size)) {
-                            log.warn("Fake file detected and rejected (binary): {} (hash={})", sanitize(name), hash);
-                            sendServerMessage(out, "File rejected (spam/malicious detected): " + sanitize(name));
-                            continue;
-                        }
-                        if (size < 0 || size > 100_000_000_000L) { // 100 GB limit
-                            log.warn("Invalid file size for PUBLISH (binary): {}", size);
-                            continue;
-                        }
-                        FileMetadata meta = new FileMetadata(hash, name, size, type, tags);
-                        meta.sources().put(String.valueOf(state.clientId()), state);
-                        fileIndex.addFile(meta);
-                        state.publishedFilesCount().incrementAndGet();
-                        log.info("Published (binary): {} - Total files in index: {}", sanitize(name), fileIndex.fileCount());
-                    } else {
-                        log.warn("Invalid publish data (binary): hash={}, name={}, quota={}/{}",
-                                hash, sanitize(name), state.publishedFilesCount().get(), config.maxFilesPerUser());
-                    }
-                }
-            } else {
-                // Fallback to simple pipe-separated format
-                String raw = new String(data, StandardCharsets.UTF_8);
-                log.info("Detected text PUBLISH format: {}", sanitize(raw));
-                String[] p = raw.split("\\|");
-                if (p.length >= 4) {
-                    String hash = p[0].trim();
-                    String name = p[1].trim();
-                    String sizeStr = p[2].trim();
-                    String type = p[3].trim();
-
-                    // Verbose logging for text publish as well
-                    log.info("PUBLISH attempt from client {}: name='{}' hash={} size={} type={}", state != null ? state.clientId() : -1, sanitize(name), hash, sizeStr, type);
-
-                    log.debug("Processing text file: hash={}, name={}, size={}, type={}", hash, sanitize(name), sizeStr, type);
-
-                    if (isValidHash(hash) && isValidFilename(name) && state.publishedFilesCount().get() < config.maxFilesPerUser()) {
-                        try {
-                            long size = Long.parseLong(sizeStr);
-                            if (fakeFileDetector.isFake(hash, name, size)) {
-                                log.warn("Fake file detected and rejected (text): {} (hash={})", sanitize(name), hash);
-                                sendServerMessage(out, "File rejected (spam/malicious detected): " + sanitize(name));
-                                return;
-                            }
-                            if (size >= 0 && size <= 100_000_000_000L) {
-                                FileMetadata meta = new FileMetadata(hash, name, size, type);
-                                meta.sources().put(String.valueOf(state.clientId()), state);
-                                fileIndex.addFile(meta);
-                                state.publishedFilesCount().incrementAndGet();
-                                log.info("Published (text): {} - Total files in index: {}", sanitize(name), fileIndex.fileCount());
-                            } else {
-                                log.warn("Invalid file size for PUBLISH (text): {}", size);
-                            }
-                        } catch (NumberFormatException e) {
-                            log.warn("Invalid size format for PUBLISH (text): {}", sanitize(sizeStr));
-                        }
-                    } else {
-                        log.warn("Invalid publish data (text): hash={}, name={}, quota={}/{}",
-                                hash, sanitize(name), state.publishedFilesCount().get(), config.maxFilesPerUser());
-                    }
-                } else {
-                    log.warn("Invalid text format - expected at least 4 pipe-separated fields, got {}", p.length);
-                }
-            }
-        } catch (Exception e) {
-            log.warn("Failed to parse PUBLISH_FILES: {}", sanitize(e.getMessage()));
-        }
-
-        new Packet(Packet.PROTOCOL_ED2K, OpCode.PUBLISH_ACK.value, new byte[0]).write(out, state.isZlibSupported());
-    }
-
-    /**
-     * Converts a 32-character hex string hash to 16 bytes.
-     */
-    private byte[] hashToBytes(String hex) {
-        if (hex == null || hex.length() != 32) return new byte[16];
-        byte[] b = new byte[16];
-        for (int i = 0; i < 16; i++) {
-            b[i] = (byte) Integer.parseInt(hex.substring(i * 2, i * 2 + 2), 16);
-        }
-        return b;
-    }
-
-     /**
-      * Handles requests for file sources (OpCode 0x15 or 0xC5:0x23).
-      * Returns the appropriate opcode based on the request protocol.
-      *
-      * @param packet The received packet (contains protocol info).
-      * @param out    The output stream for results.
-      * @throws IOException If sending results fails.
-      */
-     private void handleGetSources(Packet packet, OutputStream out) throws IOException {
-         byte[] data = packet.data();
-         String hash = null;
-         byte[] hashBytes = null;
-
-         if (data.length == 16) {
-             hashBytes = data;
-             StringBuilder sb = new StringBuilder();
-             for (byte b : data) sb.append(String.format("%02x", b));
-             hash = sb.toString();
-         } else if (data.length == 32) {
-             hash = new String(data, StandardCharsets.UTF_8).trim();
-             if (isValidHash(hash)) {
-                 hashBytes = hashToBytes(hash);
-             }
-         }
-
-         // If not found in simple formats, try to parse as tags (typical for extended GET_SOURCES)
-         if (hash == null && data.length > 16) {
-             try {
-                 ByteBuffer buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN);
-                 // In extended GET_SOURCES, the hash is often the first 16 bytes, followed by tags
-                 // OR it's a list of tags.
-                 // Let's try the "hash + tags" approach first as it's common.
-                 byte[] potentialHash = new byte[16];
-                 buf.get(potentialHash);
-                 hashBytes = potentialHash;
-                 StringBuilder sb = new StringBuilder();
-                 for (byte b : potentialHash) sb.append(String.format("%02x", b));
-                 hash = sb.toString();
-
-                 log.debug("Extracted hash from extended GET_SOURCES: {}", sanitize(hash));
-             } catch (Exception e) {
-                 log.warn("Failed to extract hash from extended GET_SOURCES: {}", sanitize(e.getMessage()));
-             }
-         }
-
-         if (hash == null || !isValidHash(hash)) {
-             log.warn("Invalid hash format/length for GET_SOURCES: {}", data.length);
-             return;
-         }
-
-         log.info("Client requested sources for hash: {}", sanitize(hash));
-
-         var sources = fileIndex.getSources(hash, state, config.maxSourcesPerFile());
-         ByteArrayOutputStream baos = new ByteArrayOutputStream();
-         DataOutputStream dos = new DataOutputStream(baos);
-
-         dos.write(hashBytes);
-         dos.writeByte((byte) Math.min(sources.size(), 255));
-         for (var s : sources) {
-             dos.writeInt(ClientState.ipToInt(s.address()));
-             dos.writeShort((short) s.port());
-         }
-
-         // Determine the response opcode based on the request protocol
-         byte responseProtocol = Packet.PROTOCOL_ED2K;
-         byte responseOpcode = OpCode.FOUND_SOURCES.value;
-
-         if (packet.protocol() == Packet.PROTOCOL_EMULE) {
-             // Client requested with eMule protocol (obfuscated), respond accordingly
-             responseProtocol = Packet.PROTOCOL_EMULE;
-             responseOpcode = OpCode.SOURCES_RESULT_OBFU.value;
-             log.debug("Responding to GET_SOURCES_OBFU with SOURCES_RESULT_OBFU (0xC5:0x24)");
-         } else {
-             log.debug("Responding to GET_SOURCES with FOUND_SOURCES (0xE3:0x42)");
-         }
-
-         new Packet(responseProtocol, responseOpcode, baos.toByteArray()).write(out, state.isZlibSupported());
-     }
-
-    /**
-     * Handles callback requests (OpCode 0x1C).
-     * Used when a LowID client wants to connect to another client.
-     *
-     * @param data The target client ID.
-     * @param out  The output stream (ignored for CALLBACK as it's relayed).
-     * @throws IOException If relay fails.
-     */
-    private void handleCallback(byte[] data, OutputStream out) throws IOException {
-        if (data == null || data.length < 4) {
-            log.warn("Invalid CALLBACK request: data too short");
-            return;
-        }
-
-        int targetId = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN).getInt();
-        log.info("Client {} requested callback to ID: {}", state.clientId(), targetId);
-
-        ClientState targetClient = registry.get(targetId);
-        if (targetClient == null) {
-            log.warn("CALLBACK target not found: {}", targetId);
-            return;
-        }
-
-        // The CALLBACK packet sent to the target should contain the requester's IP and Port.
-        // Format: [IP (4 bytes)][Port (2 bytes)]
-        ByteBuffer relayData = ByteBuffer.allocate(6).order(ByteOrder.LITTLE_ENDIAN);
-        relayData.putInt(ClientState.ipToInt(state.address()));
-        relayData.putShort(Short.reverseBytes((short) state.port())); // Little-endian
-
-        Packet callbackPacket = new Packet(Packet.PROTOCOL_ED2K, OpCode.CALLBACK.value, relayData.array());
-        registry.sendTo(targetId, callbackPacket);
-        
-        if (eventManager != null) {
-            eventManager.broadcast(new ClientEvent("CALLBACK_RELAY", 
-                String.valueOf(targetId), 
-                String.valueOf(state.clientId()), 
-                "Relaying callback request"));
-        }
-    }
-
-     /**
-      * Handles COMPRESSED_PART packets (OpCode 0xC5:0x28).
-      * Used for receiving compressed file parts in P2P transfers.
-      * Server-side implementation just logs this (actual file downloads are P2P).
-      *
-      * @param data The compressed part data.
-      * @param out  The output stream (not used for this packet type).
-      * @throws IOException If handling fails.
-      */
-     private void handleCompressedPart(byte[] data, OutputStream out) throws IOException {
-         if (data == null || data.length < 1) {
-             log.warn("Invalid COMPRESSED_PART request: empty data");
-             return;
-         }
-         log.debug("Received COMPRESSED_PART from client {} (size: {} bytes)", state.clientId(), data.length);
-         // No specific response is needed for COMPRESSED_PART packets at the server level
-         // These are typically P2P transfers relayed through clients
-     }
-
-     /**
-      * Masks the last part of an IP address for GDPR compliance.
-      */
     private String maskIp(String addr) {
         if (addr == null) return "unknown";
         // Handles both "/1.2.3.4:port" and "1.2.3.4"
@@ -1095,4 +182,21 @@ public class ClientHandler implements Runnable {
         }
         return addr; // Return as is for IPv6 or unknown format for now
     }
+
+    // ---- ClientContext interface implementation ----
+
+    @Override public Socket getSocket() { return socket; }
+    @Override public ServerConfig getConfig() { return config; }
+    @Override public ClientRegistry getRegistry() { return registry; }
+    @Override public FileIndex getFileIndex() { return fileIndex; }
+    @Override public FloodProtector getFloodProtector() { return floodProtector; }
+    @Override public FakeFileDetector getFakeFileDetector() { return fakeFileDetector; }
+    @Override public EventManager getEventManager() { return eventManager; }
+    @Override public ClientFactory getClientFactory() { return clientFactory; }
+    @Override public ClientState getState() { return state; }
+    @Override public void setState(ClientState s) { this.state = s; }
+    @Override public OutputStream getWrappedOut() { return wrappedOut; }
+    @Override public void setWrappedOut(OutputStream out) { this.wrappedOut = out; }
+    @Override public void setObfuscated(boolean o) { this.obfuscated = o; }
+    @Override public void disconnect() throws IOException { socket.close(); }
 }

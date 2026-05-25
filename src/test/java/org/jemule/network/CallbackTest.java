@@ -89,9 +89,7 @@ class CallbackTest {
         ByteBuffer data = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN);
         data.putInt(222); // Target ID
 
-        Method method = ClientHandler.class.getDeclaredMethod("handleCallback", byte[].class, java.io.OutputStream.class);
-        method.setAccessible(true);
-        method.invoke(handler1, data.array(), new ByteArrayOutputStream());
+        new org.jemule.network.handler.SourceHandler().handleCallback(handler1, data.array(), new ByteArrayOutputStream());
 
         // Check if Client 2 received the CALLBACK packet
         Packet p = receivedPacket2.get();

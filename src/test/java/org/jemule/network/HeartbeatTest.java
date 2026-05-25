@@ -11,6 +11,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import org.jemule.network.handler.LoginHandler;
+import org.jemule.network.handler.PublishHandler;
+
 import java.io.*;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -97,11 +100,7 @@ class HeartbeatTest {
         assertTrue(heartbeatIntervalSeconds > 0, "Heartbeat interval should be enabled (> 0)");
 
         // Call sendServerStatus method directly to verify it can send the heartbeat packet
-        Method sendServerStatusMethod = ClientHandler.class.getDeclaredMethod("sendServerStatus", OutputStream.class);
-        sendServerStatusMethod.setAccessible(true);
-
-        // Execute sendServerStatus
-        sendServerStatusMethod.invoke(handler, capturedOutput);
+        LoginHandler.sendServerStatus(handler, capturedOutput);
 
         // Verify that data was written (heartbeat packet was sent)
         byte[] output = capturedOutput.toByteArray();
@@ -124,10 +123,7 @@ class HeartbeatTest {
      */
     @Test
     void testHeartbeatPacketStructure() throws Exception {
-        Method sendServerStatusMethod = ClientHandler.class.getDeclaredMethod("sendServerStatus", OutputStream.class);
-        sendServerStatusMethod.setAccessible(true);
-
-        sendServerStatusMethod.invoke(handler, capturedOutput);
+        LoginHandler.sendServerStatus(handler, capturedOutput);
 
         byte[] output = capturedOutput.toByteArray();
         assertTrue(output.length >= 14, "ServerStatus packet should have at least 14 bytes");
@@ -169,9 +165,7 @@ class HeartbeatTest {
         Thread.sleep(10);
 
         // Send a heartbeat (which triggers client activity tracking)
-        Method sendServerStatusMethod = ClientHandler.class.getDeclaredMethod("sendServerStatus", OutputStream.class);
-        sendServerStatusMethod.setAccessible(true);
-        sendServerStatusMethod.invoke(handler, capturedOutput);
+        LoginHandler.sendServerStatus(handler, capturedOutput);
 
         // Verify that the packet was sent
         assertTrue(capturedOutput.toByteArray().length > 0, "Heartbeat should be sent");
@@ -228,9 +222,7 @@ class HeartbeatTest {
         assertEquals(0, fileIndex.fileCount(), "File index should be empty initially");
 
         // Process the PUBLISH_FILES packet
-        Method handlePublishMethod = ClientHandler.class.getDeclaredMethod("handlePublish", OpCode.class, byte[].class, OutputStream.class);
-        handlePublishMethod.setAccessible(true);
-        handlePublishMethod.invoke(handler, OpCode.PUBLISH_FILES, publishData, capturedOutput);
+        new PublishHandler().handlePublish(handler, OpCode.PUBLISH_FILES, publishData, capturedOutput);
 
         // Verify file was added
         assertEquals(1, fileIndex.fileCount(), "File should be added to index");
@@ -256,9 +248,7 @@ class HeartbeatTest {
         assertEquals(0, fileIndex.fileCount(), "File index should be empty initially");
 
         // Process the PUBLISH_FILES packet
-        Method handlePublishMethod = ClientHandler.class.getDeclaredMethod("handlePublish", OpCode.class, byte[].class, OutputStream.class);
-        handlePublishMethod.setAccessible(true);
-        handlePublishMethod.invoke(handler, OpCode.PUBLISH_FILES, data, capturedOutput);
+        new PublishHandler().handlePublish(handler, OpCode.PUBLISH_FILES, data, capturedOutput);
 
         // Verify file was added
         assertEquals(1, fileIndex.fileCount(), "File should be added to index");
