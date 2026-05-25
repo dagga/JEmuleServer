@@ -436,12 +436,7 @@ public class ClientHandler implements Runnable {
         // 1. Server Ident (0x41)
         sendServerIdent(out);
 
-        // 2. Server Message (0x38) - MotD
-        sendServerMessage(out, "Welcome to " + Main.VERSION + " (JEmuleServer)\n" +
-                "Your ID is: " + Integer.toUnsignedString(clientId) + "\n" +
-                "Enjoy the extended protocol support!");
-
-        // 3. Login Accepted / ID Change (0x40) - Standard Lugdunum ID Change
+        // 2. Login Accepted / ID Change (0x40) - Standard Lugdunum ID Change
         // OpCode 0x40 is often used by servers to finalize the ID assignment.
         ByteBuffer resp = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN);
         resp.putInt(clientId);
@@ -452,11 +447,13 @@ public class ClientHandler implements Runnable {
 
         log.info("Logged in ID: {} (Sent 0x40 and 0x1B)", clientId);
 
+        // 3. Server Message (0x38) - MotD
+        sendServerMessage(out, "Welcome to " + Main.VERSION + " (JEmuleServer)\n" +
+                "Your ID is: " + Integer.toUnsignedString(clientId) + "\n" +
+                "Enjoy the extended protocol support!");
+
         // 4. Server Status (0x34) - Finalizes the state in aMule
         sendServerStatus(out);
-
-        // 5. Send Server List (optional but recommended for Lugdunum compatibility)
-        sendServerList(out);
 
         // 6. Ask client to share their files
         sendAskSharedFiles(out);
@@ -637,8 +634,9 @@ public class ClientHandler implements Runnable {
              case EMULE_INFO -> handleEmuleInfo(p.data(), out);
              case CALLBACK -> handleCallback(p.data(), out);
              case COMPRESSED_PART -> handleCompressedPart(p.data(), out);
-                case SOURCES_RESULT, SOURCES_RESULT_OBFU -> handleSourcesResult(p, out);
-                default -> log.debug("Unhandled: {} (Proto: 0x{})", op, String.format("%02X", p.protocol()));
+             case FOUND_SOURCES, SOURCES_RESULT_OBFU -> handleSourcesResult(p, out);
+             case GET_SERVER_LIST -> sendServerList(out);
+             default -> log.debug("Unhandled: {} (Proto: 0x{})", op, String.format("%02X", p.protocol()));
          }
     }
 
@@ -963,7 +961,7 @@ public class ClientHandler implements Runnable {
 
          // Determine the response opcode based on the request protocol
          byte responseProtocol = Packet.PROTOCOL_ED2K;
-         byte responseOpcode = OpCode.SOURCES_RESULT.value;
+         byte responseOpcode = OpCode.FOUND_SOURCES.value;
 
          if (packet.protocol() == Packet.PROTOCOL_EMULE) {
              // Client requested with eMule protocol (obfuscated), respond accordingly
@@ -971,7 +969,7 @@ public class ClientHandler implements Runnable {
              responseOpcode = OpCode.SOURCES_RESULT_OBFU.value;
              log.debug("Responding to GET_SOURCES_OBFU with SOURCES_RESULT_OBFU (0xC5:0x24)");
          } else {
-             log.debug("Responding to GET_SOURCES with SOURCES_RESULT (0xE3:0x14)");
+             log.debug("Responding to GET_SOURCES with FOUND_SOURCES (0xE3:0x42)");
          }
 
          new Packet(responseProtocol, responseOpcode, baos.toByteArray()).write(out, state.isZlibSupported());

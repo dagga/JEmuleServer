@@ -81,15 +81,13 @@ public record Tag(byte type, String name, Object value) {
      * @param buf The buffer to write into.
      */
     public void write(ByteBuffer buf) {
-        buf.put(type);
-        
-        // Write name
-        byte[] nameBytes;
-        if (name.length() == 1) {
-            buf.putShort((short) 1);
+        boolean isId = name.length() == 1;
+        if (isId) {
+            buf.put((byte) (type | 0x80));
             buf.put((byte) name.charAt(0));
         } else {
-            nameBytes = name.getBytes(StandardCharsets.UTF_8);
+            buf.put(type);
+            byte[] nameBytes = name.getBytes(StandardCharsets.UTF_8);
             buf.putShort((short) nameBytes.length);
             buf.put(nameBytes);
         }
@@ -126,12 +124,15 @@ public record Tag(byte type, String name, Object value) {
      * @return A new {@link Tag} instance.
      */
     public static Tag read(ByteBuffer buf) {
-        byte type = buf.get();
-        int nameLen = Short.toUnsignedInt(buf.getShort());
+        byte rawType = buf.get();
+        boolean isId = (rawType & 0x80) != 0;
+        byte type = (byte) (rawType & 0x7F);
+
         String name;
-        if (nameLen == 1) {
+        if (isId) {
             name = String.valueOf((char) (buf.get() & 0xFF));
         } else {
+            int nameLen = Short.toUnsignedInt(buf.getShort());
             byte[] nameBytes = new byte[nameLen];
             buf.get(nameBytes);
             name = new String(nameBytes, StandardCharsets.UTF_8);

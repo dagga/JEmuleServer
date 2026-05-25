@@ -112,6 +112,30 @@ class PacketTest {
     }
 
     @Test
+    void testKadCompression() throws IOException {
+        byte protocol = Packet.PROTOCOL_KAD;
+        byte opcode = (byte) 0x21; // KADEMLIA2_REQ
+        byte[] payload = new byte[1000];
+        for (int i = 0; i < payload.length; i++) payload[i] = (byte) (i % 10);
+
+        Packet packet = new Packet(protocol, opcode, payload);
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        packet.write(out, true); // Force compression
+
+        byte[] compressedData = out.toByteArray();
+        assertTrue(compressedData.length < payload.length + Packet.HEADER_SIZE, "Compressed data should be smaller");
+        assertEquals(Packet.PROTOCOL_KAD_ZLIB, compressedData[0], "Protocol should be KAD_ZLIB (0xE5)");
+
+        ByteArrayInputStream in = new ByteArrayInputStream(compressedData);
+        Packet readPacket = Packet.read(in, 1024);
+
+        assertEquals(opcode, readPacket.opcode());
+        assertArrayEquals(payload, readPacket.data());
+        assertEquals(Packet.PROTOCOL_KAD_ZLIB, readPacket.protocol());
+    }
+
+    @Test
     void testEmuleProtocolPacket() throws IOException {
         byte protocol = Packet.PROTOCOL_EMULE;
         byte opcode = (byte) 0x23; // GET_SOURCES_OBFU
@@ -171,9 +195,30 @@ class PacketTest {
     }
 
     @Test
+    void testTagShortNameEncoding() {
+        Tag t = new Tag(Tag.TYPE_STRING, "\u0011", "Version");
+        ByteBuffer buf = ByteBuffer.allocate(128).order(ByteOrder.LITTLE_ENDIAN);
+        t.write(buf);
+        buf.flip();
+
+        byte typeByte = buf.get();
+        assertEquals((byte) (Tag.TYPE_STRING | 0x80), typeByte, "Type should have MSB set for 1-byte names");
+        byte nameByte = buf.get();
+        assertEquals((byte) '\u0011', nameByte, "Name should be written as 1 byte");
+    }
+
+    @Test
     void testNewOpCodes() {
         assertEquals(OpCode.SOURCES_RESULT_OBFU, OpCode.fromByte(Packet.PROTOCOL_EMULE, (byte) 0x24));
         assertEquals(OpCode.COMPRESSED_PART, OpCode.fromByte(Packet.PROTOCOL_EMULE, (byte) 0x28));
+        
+        // Conformity tests
+        assertEquals((byte) 0x33, OpCode.SEARCH_RESULT.value);
+        assertEquals((byte) 0x19, OpCode.GET_SOURCES.value);
+        assertEquals((byte) 0x42, OpCode.FOUND_SOURCES.value);
+        assertEquals((byte) 0x32, OpCode.SERVER_LIST.value);
+        assertEquals((byte) 0x15, OpCode.OFFER_FILES.value);
+        assertEquals((byte) 0x14, OpCode.GET_SERVER_LIST.value);
     }
 
     @Test

@@ -27,11 +27,13 @@ public enum OpCode {
     CLIENT_LOGIN((byte) 0x1A), // This might be an old/alternative login? Usually 0x01 is used.
     LOGIN_ACCEPTED((byte) 0x1B),
     ID_CHANGE((byte) 0x40),         // Lugdunum extension: ID Change (confirm HighID)
-    SERVER_LIST((byte) 0x42),       // Lugdunum extension: Server List
     SEARCH_REQUEST((byte) 0x16),
-    SEARCH_RESULT((byte) 0x64),
-    GET_SOURCES((byte) 0x15),
-    SOURCES_RESULT((byte) 0x14),
+    SEARCH_RESULT((byte) 0x33),     // Conformité spec : 0x33 (au lieu de 0x64)
+    GET_SOURCES((byte) 0x19),       // Conformité spec : 0x19 (au lieu de 0x15)
+    OFFER_FILES((byte) 0x15),       // Ajout depuis la spec
+    FOUND_SOURCES((byte) 0x42),     // Conformité spec : OP_FOUNDSOURCES
+    GET_SERVER_LIST((byte) 0x14),   // Ajout depuis la spec
+    SERVER_LIST((byte) 0x32),       // Conformité spec : 0x32 (au lieu de 0x42)
     PUBLISH_FILES((byte) 0x20),
     PUBLISH_ACK((byte) 0x21),
     CALLBACK((byte) 0x1C),

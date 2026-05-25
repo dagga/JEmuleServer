@@ -155,7 +155,7 @@ public class ServerIntegrationTest {
             Packet sourcesRes = null;
             for (int i = 0; i < 10; i++) {
                 Packet pp = readPacketOrEOF(in);
-                if (pp != null && pp.opcode() == OpCode.SOURCES_RESULT.value) {
+                if (pp != null && pp.opcode() == OpCode.FOUND_SOURCES.value) {
                     sourcesRes = pp;
                     break;
                 }

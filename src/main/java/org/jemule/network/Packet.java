@@ -46,6 +46,12 @@ public record Packet(byte protocol, byte opcode, byte[] data) {
     public static final byte PROTOCOL_EMULE = (byte) 0xC5;
     /** Protocol ID for ZLIB compressed packets. */
     public static final byte PROTOCOL_ZLIB = (byte) 0xD4;
+    /** Protocol ID for base eMule packets. */
+    public static final byte PROTOCOL_BASE = (byte) 0x01;
+    /** Protocol ID for Kademlia packets. */
+    public static final byte PROTOCOL_KAD = (byte) 0xE4;
+    /** Protocol ID for ZLIB compressed Kademlia packets. */
+    public static final byte PROTOCOL_KAD_ZLIB = (byte) 0xE5;
     /** Fixed size of the packet header (1 byte protocol + 4 bytes length + 1 byte opcode). */
     public static final int HEADER_SIZE = 6;
 
@@ -85,7 +91,7 @@ public record Packet(byte protocol, byte opcode, byte[] data) {
             throw new EOFException("Incomplete payload: expected=" + payloadLength + " received=" + payload.length + " preview=[" + sb.toString() + "]");
         }
 
-        byte[] data = (protocol == PROTOCOL_ZLIB) ? decompress(payload) : payload;
+        byte[] data = (protocol == PROTOCOL_ZLIB || protocol == PROTOCOL_KAD_ZLIB) ? decompress(payload) : payload;
         return new Packet(protocol, opcode, data);
     }
 
@@ -101,7 +107,7 @@ public record Packet(byte protocol, byte opcode, byte[] data) {
         byte[] payload = data;
         if (useCompression && data.length > 64) {
             payload = compress(data);
-            proto = PROTOCOL_ZLIB;
+            proto = (protocol == PROTOCOL_KAD) ? PROTOCOL_KAD_ZLIB : PROTOCOL_ZLIB;
         }
 
         ByteBuffer buf = ByteBuffer.allocate(HEADER_SIZE + payload.length).order(ByteOrder.LITTLE_ENDIAN);
