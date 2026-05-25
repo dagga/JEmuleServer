@@ -232,9 +232,9 @@ class HeartbeatTest {
         assertEquals(0, fileIndex.fileCount(), "File index should be empty initially");
 
         // Process the PUBLISH_FILES packet
-        Method handlePublishMethod = ClientHandler.class.getDeclaredMethod("handlePublish", byte[].class, OutputStream.class);
+        Method handlePublishMethod = ClientHandler.class.getDeclaredMethod("handlePublish", OpCode.class, byte[].class, OutputStream.class);
         handlePublishMethod.setAccessible(true);
-        handlePublishMethod.invoke(handler, publishData, capturedOutput);
+        handlePublishMethod.invoke(handler, OpCode.PUBLISH_FILES, publishData, capturedOutput);
 
         // Verify file was added
         assertEquals(1, fileIndex.fileCount(), "File should be added to index");
@@ -260,9 +260,9 @@ class HeartbeatTest {
         assertEquals(0, fileIndex.fileCount(), "File index should be empty initially");
 
         // Process the PUBLISH_FILES packet
-        Method handlePublishMethod = ClientHandler.class.getDeclaredMethod("handlePublish", byte[].class, OutputStream.class);
+        Method handlePublishMethod = ClientHandler.class.getDeclaredMethod("handlePublish", OpCode.class, byte[].class, OutputStream.class);
         handlePublishMethod.setAccessible(true);
-        handlePublishMethod.invoke(handler, data, capturedOutput);
+        handlePublishMethod.invoke(handler, OpCode.PUBLISH_FILES, data, capturedOutput);
 
         // Verify file was added
         assertEquals(1, fileIndex.fileCount(), "File should be added to index");

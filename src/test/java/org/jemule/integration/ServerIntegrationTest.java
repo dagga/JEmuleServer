@@ -102,28 +102,28 @@ public class ServerIntegrationTest {
             Assertions.assertEquals(Packet.PROTOCOL_ED2K, p1.protocol());
             Assertions.assertEquals(OpCode.SERVER_IDENT.value, p1.opcode());
 
-            Assertions.assertNotNull(p2, "Connection closed before SERVER_MESSAGE");
+            Assertions.assertNotNull(p2, "Connection closed before ID_CHANGE");
             Assertions.assertEquals(Packet.PROTOCOL_ED2K, p2.protocol());
-            Assertions.assertEquals(OpCode.SERVER_MESSAGE.value, p2.opcode());
+            Assertions.assertEquals(OpCode.ID_CHANGE.value, p2.opcode());
 
-            Assertions.assertNotNull(p3, "Connection closed before ID_CHANGE");
+            Assertions.assertNotNull(p3, "Connection closed before LOGIN_ACCEPTED");
             Assertions.assertEquals(Packet.PROTOCOL_ED2K, p3.protocol());
-            Assertions.assertEquals(OpCode.ID_CHANGE.value, p3.opcode());
+            Assertions.assertEquals(OpCode.LOGIN_ACCEPTED.value, p3.opcode());
 
-            Assertions.assertNotNull(p4, "Connection closed before LOGIN_ACCEPTED");
+            Assertions.assertNotNull(p4, "Connection closed before SERVER_MESSAGE");
             Assertions.assertEquals(Packet.PROTOCOL_ED2K, p4.protocol());
-            Assertions.assertEquals(OpCode.LOGIN_ACCEPTED.value, p4.opcode());
+            Assertions.assertEquals(OpCode.SERVER_MESSAGE.value, p4.opcode());
 
             Assertions.assertNotNull(p5, "Connection closed before SERVER_STATUS");
             Assertions.assertEquals(Packet.PROTOCOL_ED2K, p5.protocol());
             Assertions.assertEquals(OpCode.SERVER_STATUS.value, p5.opcode());
 
-            Assertions.assertNotNull(p6, "Connection closed before SERVER_LIST");
-            Assertions.assertEquals(Packet.PROTOCOL_ED2K, p6.protocol());
-            Assertions.assertEquals(OpCode.SERVER_LIST.value, p6.opcode());
+            Assertions.assertNotNull(p6, "Connection closed before ASK_SHARED_FILES (EMULE)");
+            Assertions.assertEquals(Packet.PROTOCOL_EMULE, p6.protocol());
+            Assertions.assertEquals(OpCode.ASK_SHARED_FILES.value, p6.opcode());
 
-            Assertions.assertNotNull(p7, "Connection closed before ASK_SHARED_FILES");
-            Assertions.assertEquals(Packet.PROTOCOL_EMULE, p7.protocol());
+            Assertions.assertNotNull(p7, "Connection closed before ASK_SHARED_FILES (ED2K)");
+            Assertions.assertEquals(Packet.PROTOCOL_ED2K, p7.protocol());
             Assertions.assertEquals(OpCode.ASK_SHARED_FILES.value, p7.opcode());
 
             // Now publish a file (text pipe-separated format supported by server)

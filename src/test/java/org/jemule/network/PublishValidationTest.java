@@ -64,9 +64,9 @@ class PublishValidationTest {
     }
 
     private void invokeHandlePublish(String data) throws Exception {
-        Method method = ClientHandler.class.getDeclaredMethod("handlePublish", byte[].class, java.io.OutputStream.class);
+        Method method = ClientHandler.class.getDeclaredMethod("handlePublish", org.jemule.protocol.OpCode.class, byte[].class, java.io.OutputStream.class);
         method.setAccessible(true);
-        method.invoke(handler, data.getBytes(StandardCharsets.UTF_8), new ByteArrayOutputStream());
+        method.invoke(handler, org.jemule.protocol.OpCode.PUBLISH_FILES, data.getBytes(StandardCharsets.UTF_8), new ByteArrayOutputStream());
     }
 
     @Test
