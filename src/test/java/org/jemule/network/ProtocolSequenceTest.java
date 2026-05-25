@@ -197,9 +197,6 @@ class ProtocolSequenceTest {
         Packet p = new Packet(Packet.PROTOCOL_ED2K, OpCode.GET_SOURCES.value, hexBytes);
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         ctx.setWrappedOut(out);
-        // Ensure requester state exists so handlers can access isZlibSupported() without NPE
-        org.jemule.core.ClientState requester = new org.jemule.core.ClientState(remote, 22222, 42, System.currentTimeMillis(), new AtomicLong(System.currentTimeMillis()));
-        ctx.setState(requester);
 
         SourceHandler sh = new SourceHandler();
         sh.handleGetSources(ctx, p, out);
