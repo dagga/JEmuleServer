@@ -566,11 +566,9 @@ public class ClientHandler implements Runnable {
      * @throws IOException If sending fails.
      */
     private void sendServerStatus(OutputStream out) throws IOException {
-        ByteBuffer buf = ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN);
+        ByteBuffer buf = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN);
         buf.putInt(registry.size());
         buf.putInt(fileIndex.fileCount());
-        buf.putInt(config.maxUsers()); // Soft/Hard Limit for users
-        buf.putInt(config.maxFiles()); // Soft/Hard Limit for files
         new Packet(Packet.PROTOCOL_ED2K, OpCode.SERVER_STATUS.value, buf.array()).write(out, state.isZlibSupported());
     }
 
