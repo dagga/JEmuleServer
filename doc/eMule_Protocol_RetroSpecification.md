@@ -280,3 +280,7 @@ classDiagram
     Packet "1" -- "1..*" CTag : contains (for some opcodes)
     CServer "1" -- "0..*" CTag : has properties as tags
 ```
+
+## Annex: Implementation notes
+Voir `doc/Protocol_Implementation_Notes.md` pour les détails d'implémentation (encodage des tags, compteur 4-octets, variantes ED2K/eMule, etc.)
+
