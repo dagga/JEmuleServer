@@ -22,6 +22,7 @@ package org.jemule.core;
 import java.net.InetAddress;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.List;
 
 public final class ClientState {
     private final InetAddress address;
@@ -31,6 +32,7 @@ public final class ClientState {
     private final AtomicLong lastActivity;
     private final AtomicInteger publishedFilesCount = new AtomicInteger(0);
     private boolean zlibSupported = false;
+    private List<FileMetadata> pendingSearchResults;
 
     public ClientState(InetAddress address, int port, int clientId, long connectedAt, AtomicLong lastActivity) {
         this.address = address;
@@ -50,6 +52,9 @@ public final class ClientState {
 
     public boolean isZlibSupported() { return zlibSupported; }
     public void setZlibSupported(boolean zlibSupported) { this.zlibSupported = zlibSupported; }
+
+    public List<FileMetadata> getPendingSearchResults() { return pendingSearchResults; }
+    public void setPendingSearchResults(List<FileMetadata> results) { this.pendingSearchResults = results; }
 
     public static int ipToInt(InetAddress addr) {
         byte[] b = addr.getAddress();

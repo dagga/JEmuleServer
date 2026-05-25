@@ -34,8 +34,9 @@ public enum OpCode {
     FOUND_SOURCES((byte) 0x42),     // Conformité spec : OP_FOUNDSOURCES
     GET_SERVER_LIST((byte) 0x14),   // Ajout depuis la spec
     SERVER_LIST((byte) 0x32),       // Conformité spec : 0x32 (au lieu de 0x42)
+    DISCONNECT((byte) 0x18),
     PUBLISH_FILES((byte) 0x20),
-    PUBLISH_ACK((byte) 0x21),
+    QUERY_MORE_RESULT((byte) 0x21), // OP_QUERY_MORE_RESULT
     CALLBACK((byte) 0x1C),
 
     // eMule Protocol (0xC5) Extensions

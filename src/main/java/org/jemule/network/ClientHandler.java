@@ -629,15 +629,22 @@ public class ClientHandler implements Runnable {
 
          switch (op) {
              case SEARCH_REQUEST -> handleSearch(p.data(), out);
-             case PUBLISH_FILES -> handlePublish(p.data(), out);
+             case QUERY_MORE_RESULT -> handleQueryMoreResult(out);
+             case PUBLISH_FILES, OFFER_FILES -> handlePublish(op, p.data(), out);
              case GET_SOURCES, GET_SOURCES_OBFU -> handleGetSources(p, out);
              case EMULE_INFO -> handleEmuleInfo(p.data(), out);
              case CALLBACK -> handleCallback(p.data(), out);
              case COMPRESSED_PART -> handleCompressedPart(p.data(), out);
              case FOUND_SOURCES, SOURCES_RESULT_OBFU -> handleSourcesResult(p, out);
              case GET_SERVER_LIST -> sendServerList(out);
+             case DISCONNECT -> handleDisconnect();
              default -> log.debug("Unhandled: {} (Proto: 0x{})", op, String.format("%02X", p.protocol()));
          }
+    }
+
+    private void handleDisconnect() throws IOException {
+        log.info("Client {} requested disconnect", state.clientId());
+        socket.close();
     }
 
           /**
@@ -705,6 +712,35 @@ public class ClientHandler implements Runnable {
             }
         }
 
+        int BATCH_SIZE = 50;
+        List<FileMetadata> batch = results.subList(0, Math.min(results.size(), BATCH_SIZE));
+        sendSearchResults(batch, out);
+
+        if (results.size() > BATCH_SIZE) {
+            state.setPendingSearchResults(new ArrayList<>(results.subList(BATCH_SIZE, results.size())));
+        } else {
+            state.setPendingSearchResults(null);
+        }
+    }
+
+    private void handleQueryMoreResult(OutputStream out) throws IOException {
+        List<FileMetadata> pending = state.getPendingSearchResults();
+        if (pending == null || pending.isEmpty()) {
+            return;
+        }
+
+        int BATCH_SIZE = 50;
+        List<FileMetadata> batch = pending.subList(0, Math.min(pending.size(), BATCH_SIZE));
+        sendSearchResults(batch, out);
+
+        if (pending.size() > BATCH_SIZE) {
+            state.setPendingSearchResults(new ArrayList<>(pending.subList(BATCH_SIZE, pending.size())));
+        } else {
+            state.setPendingSearchResults(null);
+        }
+    }
+
+    private void sendSearchResults(List<FileMetadata> results, OutputStream out) throws IOException {
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         DataOutputStream dos = new DataOutputStream(baos);
         dos.writeInt(results.size());
@@ -771,13 +807,13 @@ public class ClientHandler implements Runnable {
      * @param out  The output stream for ACK.
      * @throws IOException If sending ACK fails.
      */
-    private void handlePublish(byte[] data, OutputStream out) throws IOException {
+    private void handlePublish(OpCode op, byte[] data, OutputStream out) throws IOException {
         if (data == null || data.length == 0) {
             log.warn("Invalid publish request: empty data");
             return;
         }
 
-        log.info("Received PUBLISH_FILES packet with {} bytes of data", data.length);
+        log.info("Received {} packet with {} bytes of data", op, data.length);
 
         try {
             ByteBuffer buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN);
@@ -790,6 +826,12 @@ public class ClientHandler implements Runnable {
                 for (int i = 0; i < count; i++) {
                     byte[] hashBytes = new byte[16];
                     buf.get(hashBytes);
+
+                    if (op == OpCode.OFFER_FILES) {
+                        buf.getInt();   // FileID
+                        buf.getShort(); // FilePort
+                    }
+
                     StringBuilder sb = new StringBuilder();
                     for (byte b : hashBytes) sb.append(String.format("%02x", b));
                     String hash = sb.toString();
