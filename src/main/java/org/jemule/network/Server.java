@@ -327,6 +327,13 @@ public class Server {
     }
 
     /**
+     * Exposes the internal file index (primarily for testing).
+     */
+    public FileIndex getFileIndex() {
+        return fileIndex;
+    }
+
+    /**
      * Stops the server, shuts down executors, and closes the database.
      */
     public void stop() {

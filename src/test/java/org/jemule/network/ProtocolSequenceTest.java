@@ -179,8 +179,8 @@ class ProtocolSequenceTest {
         DummySocket s = new DummySocket(remote, remote, 22222);
         FakeClientContext ctx = new FakeClientContext(s, ServerConfig.DEFAULT, cf, reg, fi, em);
 
-        // Create a file and a source
-        String hash = "00112233445566778899AABBCCDDEEFF".toLowerCase();
+        // Create a file and a source — hash must match hexBytes used in packets below
+        String hash = "000102030405060708090a0b0c0d0e0f";
         FileMetadata meta = new FileMetadata(hash, "file.iso", 12345, "ISO");
         fi.addFile(meta);
 
@@ -210,6 +210,8 @@ class ProtocolSequenceTest {
 
         // UDP: invoke Server.handleUdp via reflection and capture responses
         org.jemule.network.Server server = new org.jemule.network.Server(ServerConfig.DEFAULT, cf);
+        // Register the file and source on the Server's own FileIndex
+        server.getFileIndex().addFile(meta);
         byte[] udpReq = new byte[18];
         udpReq[0] = Packet.PROTOCOL_ED2K;
         udpReq[1] = (byte) 0x9A; // OP_GLOBGETSOURCES

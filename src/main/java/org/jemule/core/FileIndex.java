@@ -135,7 +135,7 @@ public class FileIndex {
             });
         }
 
-        return all.subList(0, limit);
+        return all.subList(0, Math.min(limit, all.size()));
     }
 
     private int calculateProximity(byte[] ipA, byte[] ipB) {
