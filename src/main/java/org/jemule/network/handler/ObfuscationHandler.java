@@ -19,6 +19,8 @@ public class ObfuscationHandler {
 
     public InputStream negotiateObfuscation(ClientContext context, InputStream in, OutputStream out) throws IOException {
         PushbackInputStream pin = new PushbackInputStream(in, 1024);
+        // First read 6 bytes — enough to check for a known protocol or
+        // detect the common no-padding obfuscation handshake.
         byte[] probe = new byte[6];
         int read = 0;
         while (read < probe.length) {
@@ -40,9 +42,34 @@ public class ObfuscationHandler {
             return pin;
         }
 
-        if ((probe[5] & 0xFF) != 0x97) {
-            pin.unread(probe, 0, read);
-            return pin;
+        // eMule obfuscation handshake: [userCount(1)] [randomKey(4)] [padding(0-15 zero bytes)] [0x97]
+        // total length = 6..21 bytes; the 0x97 marker is always at the last position
+        if ((probe[5] & 0xFF) == 0x97) {
+            // Common case: no padding, marker at index 5 — proceed directly
+        } else {
+            // Probe has padding bytes before the marker; slurp up to 15 more bytes
+            int more = Math.min(in.available(), 15);
+            if (more > 0) {
+                byte[] extra = new byte[6 + more];
+                System.arraycopy(probe, 0, extra, 0, 6);
+                int extraRead = pin.read(extra, 6, more);
+                if (extraRead > 0) {
+                    read = 6 + extraRead;
+                    probe = extra;
+                }
+            }
+            // Find the 0x97 marker scanning backward from the end
+            int markerPos = -1;
+            for (int i = read - 1; i >= 0; i--) {
+                if ((probe[i] & 0xFF) == 0x97) {
+                    markerPos = i;
+                    break;
+                }
+            }
+            if (markerPos < 5) {
+                pin.unread(probe, 0, read);
+                return pin;
+            }
         }
 
         SocketAddress remoteAddr = context.getSocket().getRemoteSocketAddress();

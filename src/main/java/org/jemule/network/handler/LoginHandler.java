@@ -114,7 +114,7 @@ public class LoginHandler {
         tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_DESCRIPTION, desc));
         tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_VERSION, serverVersion));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_EMULE_VERSION, 0x3C));
-        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_TCP_FLAGS, 0x01 | 0x08 | 0x10));
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_TCP_FLAGS, 0x01 | 0x04 | 0x08 | 0x10));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_AUX_PORT, portInt));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_MAX_USERS, context.getConfig().maxUsers()));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_MAX_FILES, context.getConfig().maxFiles()));
