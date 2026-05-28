@@ -57,7 +57,7 @@ The signature of `handleGetSources()` was modified to receive the complete `Pack
 ```java
 private void handleGetSources(byte[] data, OutputStream out) throws IOException {
     // ...
-    new Packet(Packet.PROTOCOL_ED2K, OpCode.SOURCES_RESULT.value, ...).write(out, ...);
+    new Packet(Packet.PROTOCOL_ED2K, OpCode.SOURCES_RESULT.value, ...).write(out, ...)
 }
 ```
 
@@ -77,7 +77,7 @@ private void handleGetSources(Packet packet, OutputStream out) throws IOExceptio
         log.debug("Responding to GET_SOURCES_OBFU with SOURCES_RESULT_OBFU (0xC5:0x24)");
     }
     
-    new Packet(responseProtocol, responseOpcode, ...).write(out, ...);
+    new Packet(responseProtocol, responseOpcode, ...).write(out, ...)
 }
 ```
 

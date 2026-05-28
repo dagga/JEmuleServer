@@ -59,7 +59,7 @@ class ProtocolSequenceTest {
         @Override public ClientFactory getClientFactory() { return clientFactory; }
         @Override public org.jemule.core.ClientState getState() { return state; }
         @Override public void setState(org.jemule.core.ClientState state) { this.state = state; }
-        @Override public java.io.OutputStream getWrappedOut() { return (java.io.OutputStream) wrappedOut; }
+        @Override public java.io.OutputStream getWrappedOut() { return wrappedOut; }
         @Override public void setWrappedOut(java.io.OutputStream out) { this.wrappedOut = out; }
         @Override public void setObfuscated(boolean obfuscated) { }
         @Override public void disconnect() throws IOException { }
