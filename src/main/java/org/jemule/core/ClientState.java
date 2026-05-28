@@ -20,9 +20,9 @@
 package org.jemule.core;
 
 import java.net.InetAddress;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.List;
 
 public final class ClientState {
     private final InetAddress address;

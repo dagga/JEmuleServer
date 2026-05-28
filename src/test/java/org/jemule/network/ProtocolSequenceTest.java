@@ -3,7 +3,6 @@ package org.jemule.network;
 import org.jemule.config.ServerConfig;
 import org.jemule.core.ClientFactory;
 import org.jemule.core.ClientRegistry;
-import org.jemule.core.ClientState;
 import org.jemule.core.FileIndex;
 import org.jemule.core.FileMetadata;
 import org.jemule.core.event.EventManager;
@@ -16,20 +15,18 @@ import org.junit.jupiter.api.Test;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
-import java.io.DataInputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.Socket;
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 
 class ProtocolSequenceTest {
 

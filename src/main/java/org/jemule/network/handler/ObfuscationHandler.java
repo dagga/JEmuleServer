@@ -1,18 +1,14 @@
 package org.jemule.network.handler;
 
+import org.jemule.network.Packet;
 import org.jemule.security.Obfuscation;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.DataInputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.io.PushbackInputStream;
+import java.io.*;
 import java.net.SocketAddress;
 import java.security.SecureRandom;
 import java.util.Arrays;
-import org.jemule.network.Packet;
 
 public class ObfuscationHandler {
     private static final Logger log = LoggerFactory.getLogger(ObfuscationHandler.class);

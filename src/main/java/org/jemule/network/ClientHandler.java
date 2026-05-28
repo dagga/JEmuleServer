@@ -20,16 +20,25 @@
 package org.jemule.network;
 
 import org.jemule.config.ServerConfig;
-import org.jemule.core.*;
-import org.jemule.security.FakeFileDetector;
-import org.jemule.security.FloodProtector;
+import org.jemule.core.ClientFactory;
+import org.jemule.core.ClientRegistry;
+import org.jemule.core.ClientState;
+import org.jemule.core.FileIndex;
 import org.jemule.core.event.ClientEvent;
 import org.jemule.core.event.EventManager;
-import org.jemule.network.handler.*;
+import org.jemule.network.handler.ClientContext;
+import org.jemule.network.handler.LoginHandler;
+import org.jemule.network.handler.ObfuscationHandler;
+import org.jemule.network.handler.PacketProcessor;
+import org.jemule.security.FakeFileDetector;
+import org.jemule.security.FloodProtector;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.*;
+import java.io.EOFException;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.Socket;
 
 /**

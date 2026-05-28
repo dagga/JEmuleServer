@@ -18,10 +18,11 @@
 
 package org.jemule.core;
 
-import java.net.InetAddress;
-import java.util.concurrent.atomic.AtomicLong;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.net.InetAddress;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Factory for creating {@link ClientState} instances.

@@ -3,6 +3,8 @@ package org.jemule.network;
 import org.jemule.config.ServerConfig;
 import org.jemule.core.*;
 import org.jemule.core.event.EventManager;
+import org.jemule.network.handler.LoginHandler;
+import org.jemule.network.handler.PublishHandler;
 import org.jemule.protocol.OpCode;
 import org.jemule.protocol.Tag;
 import org.jemule.security.FakeFileDetector;
@@ -11,12 +13,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-import org.jemule.network.handler.LoginHandler;
-import org.jemule.network.handler.PublishHandler;
-
-import java.io.*;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.lang.reflect.Field;
-import java.lang.reflect.Method;
 import java.net.InetAddress;
 import java.net.Socket;
 import java.nio.ByteBuffer;
@@ -27,7 +26,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 

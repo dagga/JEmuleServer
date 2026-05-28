@@ -1,13 +1,15 @@
 package org.jemule.core.event;
 
-import org.jemule.core.*;
+import org.jemule.core.FileIndex;
+import org.jemule.core.FileMetadata;
 import org.junit.jupiter.api.Test;
-import java.net.InetAddress;
 
+import java.net.InetAddress;
 import java.util.ArrayList;
 import java.util.List;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 
 public class EventSystemTest {
 

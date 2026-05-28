@@ -19,9 +19,10 @@
 
 package org.jemule.core;
 
+import org.jemule.network.Packet;
+
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
-import org.jemule.network.Packet;
 
 public class ClientRegistry {
     private final ConcurrentHashMap<Integer, ClientState> clients = new ConcurrentHashMap<>();

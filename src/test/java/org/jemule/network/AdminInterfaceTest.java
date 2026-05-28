@@ -1,20 +1,18 @@
 package org.jemule.network;
 
-import org.jemule.config.ServerConfig;
-import org.jemule.core.ClientFactory;
 import org.jemule.core.ClientRegistry;
 import org.jemule.core.FileIndex;
 import org.jemule.security.FakeFileDetector;
 import org.jemule.security.IPFilter;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.mockito.Mockito;
 
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.Mockito.*;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 
 public class AdminInterfaceTest {
     private Server server;

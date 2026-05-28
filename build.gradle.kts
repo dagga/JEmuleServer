@@ -1,11 +1,4 @@
-import org.gradle.api.plugins.JavaPluginExtension
 // ...existing code...
-import org.gradle.api.tasks.testing.Test
-import org.gradle.api.tasks.JavaExec
-import org.gradle.api.tasks.SourceSetContainer
-import org.gradle.api.tasks.compile.JavaCompile
-import org.gradle.api.tasks.bundling.Jar
-import org.gradle.testing.jacoco.tasks.JacocoReport
 
 plugins {
     java
