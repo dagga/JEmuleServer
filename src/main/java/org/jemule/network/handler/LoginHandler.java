@@ -106,7 +106,7 @@ public class LoginHandler {
         int portInt = context.getConfig().port();
 
         String serverName = "JEmuleServer (https://github.com/dagga/JEmuleServer/)";
-        String serverVersion = Main.VERSION + " (JEmuleServer)";
+        String serverVersion = Main.ESERVER_VERSION;
         String desc = "Experimental eMule Server";
 
         List<Tag> tags = new ArrayList<>();

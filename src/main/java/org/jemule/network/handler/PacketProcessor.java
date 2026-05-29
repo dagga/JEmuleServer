@@ -1,5 +1,6 @@
 package org.jemule.network.handler;
 
+import org.jemule.Main;
 import org.jemule.network.Packet;
 import org.jemule.protocol.OpCode;
 import org.slf4j.Logger;
@@ -65,7 +66,7 @@ public class PacketProcessor {
     private void handleEmuleInfo(ClientContext context, byte[] data, OutputStream out) throws IOException {
         log.debug("Received EMULE_INFO from {}", context.getSocket().getRemoteSocketAddress() != null ? HandlerUtils.sanitize(context.getSocket().getRemoteSocketAddress().toString()) : "unknown");
         String serverName = "JEmuleServer (https://github.com/dagga/JEmuleServer/)";
-        String serverVersion = "1.0beta1 (JEmuleServer)";
+        String serverVersion = Main.ESERVER_VERSION;
         byte[] nameBytes = serverName.getBytes(java.nio.charset.StandardCharsets.UTF_8);
         byte[] versionBytes = serverVersion.getBytes(java.nio.charset.StandardCharsets.UTF_8);
         ByteBuffer buf = ByteBuffer.allocate(1 + nameBytes.length + 1 + versionBytes.length).order(ByteOrder.LITTLE_ENDIAN);

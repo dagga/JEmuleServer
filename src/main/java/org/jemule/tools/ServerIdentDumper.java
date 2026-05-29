@@ -18,8 +18,8 @@ public class ServerIdentDumper {
         byte[] hash = new byte[16];
         int port = 4662; // example
 
-        String serverName = "JEmuleServer (test)";
-        String serverVersion = Main.VERSION + " (JEmuleServer)";
+        String serverName = "JEmuleServer" + Main.VERSION;
+        String serverVersion = Main.ESERVER_VERSION;
         String desc = "Experimental eMule Server";
 
         List<Tag> tags = new ArrayList<>();

@@ -19,6 +19,7 @@
 
 package org.jemule.network;
 
+import org.jemule.Main;
 import org.jemule.config.ServerConfig;
 import org.jemule.core.*;
 import org.jemule.core.event.ClientEvent;
@@ -249,8 +250,8 @@ public class Server {
             log.debug("UDP Description Request from {}", p.getAddress());
 
             String sName = "JEmuleServer (https://github.com/dagga/JEmuleServer/)";
-            String sVersion = "1.0beta1 (JEmuleServer)";
-            String sDesc = "Experimental eMule Server";
+            String sVersion = Main.ESERVER_VERSION;
+            String sDesc = "NoPedo eMule Server";
 
             java.util.List<org.jemule.protocol.Tag> tags = new java.util.ArrayList<>();
             tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_STRING, org.jemule.protocol.Tag.NAME_NAME, sName));
