@@ -244,6 +244,29 @@ public class Server {
             resp.putInt(config.maxFiles());
 
             ds.send(new java.net.DatagramPacket(resp.array(), resp.position(), p.getAddress(), p.getPort()));
+        } else if (opcode == (byte) 0x95) { // OP_SERVER_DESC_REQ
+            if (p.getLength() < 2) return;
+            log.debug("UDP Description Request from {}", p.getAddress());
+
+            String sName = "JEmuleServer (https://github.com/dagga/JEmuleServer/)";
+            String sVersion = "1.0beta1 (JEmuleServer)";
+            String sDesc = "Experimental eMule Server";
+
+            java.util.List<org.jemule.protocol.Tag> tags = new java.util.ArrayList<>();
+            tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_STRING, org.jemule.protocol.Tag.NAME_NAME, sName));
+            tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_STRING, org.jemule.protocol.Tag.NAME_DESCRIPTION, sDesc));
+            tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_STRING, org.jemule.protocol.Tag.NAME_VERSION, sVersion));
+
+            ByteBuffer resp = ByteBuffer.allocate(1024).order(ByteOrder.LITTLE_ENDIAN);
+            resp.put(Packet.PROTOCOL_ED2K);
+            resp.put((byte) 0x95);
+            resp.putShort((short) config.port());
+            org.jemule.protocol.Tag.writeList(resp, tags);
+            resp.flip();
+
+            byte[] outBuf = new byte[resp.remaining()];
+            resp.get(outBuf);
+            ds.send(new java.net.DatagramPacket(outBuf, outBuf.length, p.getAddress(), p.getPort()));
         } else if (opcode == (byte) 0x9A) { // OP_GLOBGETSOURCES
             if (p.getLength() < 18) return;
             log.debug("UDP Source Request from {}", p.getAddress());

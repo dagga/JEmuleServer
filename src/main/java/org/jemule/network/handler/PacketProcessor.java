@@ -64,7 +64,16 @@ public class PacketProcessor {
 
     private void handleEmuleInfo(ClientContext context, byte[] data, OutputStream out) throws IOException {
         log.debug("Received EMULE_INFO from {}", context.getSocket().getRemoteSocketAddress() != null ? HandlerUtils.sanitize(context.getSocket().getRemoteSocketAddress().toString()) : "unknown");
-        new Packet(Packet.PROTOCOL_EMULE, OpCode.EMULE_INFO_ACK.value, new byte[0]).write(out, context.getState().isZlibSupported());
+        String serverName = "JEmuleServer (https://github.com/dagga/JEmuleServer/)";
+        String serverVersion = "1.0beta1 (JEmuleServer)";
+        byte[] nameBytes = serverName.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        byte[] versionBytes = serverVersion.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        ByteBuffer buf = ByteBuffer.allocate(1 + nameBytes.length + 1 + versionBytes.length).order(ByteOrder.LITTLE_ENDIAN);
+        buf.put((byte) nameBytes.length);
+        buf.put(nameBytes);
+        buf.put((byte) versionBytes.length);
+        buf.put(versionBytes);
+        new Packet(Packet.PROTOCOL_EMULE, OpCode.EMULE_INFO_ACK.value, buf.array()).write(out, context.getState().isZlibSupported());
     }
 
     private void handleCompressedPart(ClientContext context, byte[] data, OutputStream out) throws IOException {
