@@ -137,6 +137,11 @@ public class LoginHandler {
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_PREFERENCE, 0));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_LOWID_USERS, context.getRegistry().lowIdCount()));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDP_FLAGS, udpFlags));
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDP_KEY, new java.util.Random().nextInt()));
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDP_KEY_IP,
+                ByteBuffer.wrap(context.getSocket().getLocalAddress().getAddress()).order(ByteOrder.LITTLE_ENDIAN).getInt()));
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_TCP_OBFUSCATION_PORT, portInt));
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDP_OBFUSCATION_PORT, portInt));
 
         ByteBuffer buf = ByteBuffer.allocate(4096).order(ByteOrder.LITTLE_ENDIAN);
         buf.put(hash);

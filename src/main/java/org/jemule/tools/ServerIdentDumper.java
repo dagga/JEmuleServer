@@ -31,6 +31,10 @@ public class ServerIdentDumper {
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_AUX_PORT, 0));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_MAX_USERS, 1000));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_MAX_FILES, 100000));
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDP_KEY, 0x12345678));
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDP_KEY_IP, 0x7F000001));
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_TCP_OBFUSCATION_PORT, port));
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDP_OBFUSCATION_PORT, port));
 
         ByteBuffer buf = ByteBuffer.allocate(4096).order(ByteOrder.LITTLE_ENDIAN);
         buf.put(hash);
