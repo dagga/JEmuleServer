@@ -109,6 +109,9 @@ public class LoginHandler {
         String serverVersion = Main.ESERVER_VERSION;
         String desc = "Experimental eMule Server";
 
+        int maxFiles = context.getConfig().maxFiles();
+        int maxUsers = context.getConfig().maxUsers();
+
         List<Tag> tags = new ArrayList<>();
         tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_NAME, serverName));
         tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_DESCRIPTION, desc));
@@ -116,8 +119,12 @@ public class LoginHandler {
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_EMULE_VERSION, 0x3C));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_TCP_FLAGS, 0x01 | 0x04 | 0x08 | 0x10));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_AUX_PORT, portInt));
-        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_MAX_USERS, context.getConfig().maxUsers()));
-        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_MAX_FILES, context.getConfig().maxFiles()));
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_MAX_USERS, maxUsers));
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_MAX_FILES, maxFiles));
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_MAX_USERS_V2, maxUsers));
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOFT_FILES, maxFiles));
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_HARD_FILES, maxFiles));
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_PREFERENCE, 0));
 
         ByteBuffer buf = ByteBuffer.allocate(4096).order(ByteOrder.LITTLE_ENDIAN);
         buf.put(hash);

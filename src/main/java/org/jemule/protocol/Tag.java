@@ -74,6 +74,16 @@ public record Tag(byte type, String name, Object value) {
     public static final String NAME_MAX_FILES = "\u0093";
     /** Special tag name for eMule-specific version reporting (Lugdunum). */
     public static final String NAME_EMULE_VERSION = "\u00FB";
+    /** Special tag name for server preference/priority (ST_PREFERENCE). */
+    public static final String NAME_PREFERENCE = "\u000E";
+    /** Special tag name for maximum user count (ST_MAXUSERS, legacy compat). */
+    public static final String NAME_MAX_USERS_V2 = "\u0087";
+    /** Special tag name for soft file limit (ST_SOFTFILES). */
+    public static final String NAME_SOFT_FILES = "\u0088";
+    /** Special tag name for hard file limit (ST_HARDFILES). */
+    public static final String NAME_HARD_FILES = "\u0089";
+    /** Special tag name for LowID user count (ST_LOWIDUSERS). */
+    public static final String NAME_LOWID_USERS = "\u0094";
 
     /**
      * Serializes this tag into a {@link ByteBuffer}.
