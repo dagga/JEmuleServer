@@ -222,6 +222,50 @@ class PacketTest {
     }
 
     @Test
+    void testTagNameConstantsMatchEmuleSpec() {
+        // Verify that all server tag name constants match eMule specification IDs
+
+        // Core eMule server tags (from server.h / server.cpp)
+        assertEquals("\u0001", Tag.NAME_NAME, "ST_SERVERNAME = 0x01");
+        assertEquals("\u0001", Tag.NAME_NICK, "ST_CLIENTNAME = 0x01");
+        assertEquals("\u000B", Tag.NAME_DESCRIPTION, "ST_DESCRIPTION = 0x0B");
+        assertEquals("\u000E", Tag.NAME_PREFERENCE, "ST_PREFERENCE = 0x0E");
+        assertEquals("\u000F", Tag.NAME_PORT, "ST_PORT = 0x0F");
+        assertEquals("\u0011", Tag.NAME_VERSION, "ST_VERSION = 0x11");
+
+        // Extended server tags (0x80-0x99 range)
+        assertEquals("\u0087", Tag.NAME_MAX_USERS_V2, "ST_MAXUSERS_V2 = 0x87");
+        assertEquals("\u0088", Tag.NAME_SOFT_FILES, "ST_SOFTFILES = 0x88");
+        assertEquals("\u0089", Tag.NAME_HARD_FILES, "ST_HARDFILES = 0x89");
+        assertEquals("\u0090", Tag.NAME_TCP_FLAGS, "ST_TCPFLAGS = 0x90");
+        assertEquals("\u0091", Tag.NAME_AUX_PORT, "ST_AUXPORT = 0x91");
+        assertEquals("\u0092", Tag.NAME_MAX_USERS, "ST_MAXUSERS = 0x92");
+        assertEquals("\u0093", Tag.NAME_MAX_FILES, "ST_MAXFILES = 0x93");
+        assertEquals("\u0094", Tag.NAME_LOWID_USERS, "ST_LOWIDUSERS = 0x94");
+        assertEquals("\u0095", Tag.NAME_UDP_FLAGS, "ST_UDPFLAGS = 0x95");
+        assertEquals("\u0096", Tag.NAME_UDP_KEY, "ST_UDPKEY = 0x96");
+        assertEquals("\u0097", Tag.NAME_UDP_KEY_IP, "ST_UDPKEYIP = 0x97");
+        assertEquals("\u0098", Tag.NAME_TCP_OBFUSCATION_PORT, "ST_TCPPORTOBFUSCATION = 0x98");
+        assertEquals("\u0099", Tag.NAME_UDP_OBFUSCATION_PORT, "ST_UDPPORTOBFUSCATION = 0x99");
+
+        // Lugdunum extension
+        assertEquals("\u00FB", Tag.NAME_EMULE_VERSION, "ST_EMULE_VERSION = 0xFB");
+    }
+
+    @Test
+    void testTagTypeConstants() {
+        assertEquals((byte) 0x01, Tag.TYPE_HASH, "TYPE_HASH = 0x01");
+        assertEquals((byte) 0x02, Tag.TYPE_STRING, "TYPE_STRING = 0x02");
+        assertEquals((byte) 0x03, Tag.TYPE_INTEGER, "TYPE_INTEGER = 0x03");
+        assertEquals((byte) 0x04, Tag.TYPE_FLOAT, "TYPE_FLOAT = 0x04");
+        assertEquals((byte) 0x05, Tag.TYPE_BOOL, "TYPE_BOOL = 0x05");
+        assertEquals((byte) 0x06, Tag.TYPE_BOOL_ALT, "TYPE_BOOL_ALT = 0x06");
+        assertEquals((byte) 0x07, Tag.TYPE_BLOB, "TYPE_BLOB = 0x07");
+        assertEquals((byte) 0x08, Tag.TYPE_INT16, "TYPE_INT16 = 0x08");
+        assertEquals((byte) 0x09, Tag.TYPE_INT8, "TYPE_INT8 = 0x09");
+    }
+
+    @Test
     void testAntiReplay() {
         byte[] nonce = {0x01, 0x02, 0x03, 0x04};
         assertFalse(Obfuscation.isReplay(nonce), "First time should not be a replay");

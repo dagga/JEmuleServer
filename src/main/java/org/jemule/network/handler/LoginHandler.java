@@ -112,12 +112,22 @@ public class LoginHandler {
         int maxFiles = context.getConfig().maxFiles();
         int maxUsers = context.getConfig().maxUsers();
 
+        // TCP capability flags matching eMule SRV_TCPFLG_ constants:
+        // 0x01 = COMPRESSION, 0x08 = NEWTAGS, 0x10 = UNICODE,
+        // 0x80 = TYPETAGINTEGER, 0x100 = LARGEFILES, 0x400 = TCPOBFUSCATION
+        int tcpFlags = 0x01 | 0x08 | 0x10 | 0x80 | 0x100 | 0x400;
+
+        // UDP capability flags matching eMule SRV_UDPFLG_ constants:
+        // 0x01 = EXT_GETSOURCES, 0x08 = NEWTAGS, 0x10 = UNICODE,
+        // 0x100 = LARGEFILES, 0x400 = TCPOBFUSCATION
+        int udpFlags = 0x01 | 0x08 | 0x10 | 0x100 | 0x400;
+
         List<Tag> tags = new ArrayList<>();
         tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_NAME, serverName));
         tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_DESCRIPTION, desc));
         tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_VERSION, serverVersion));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_EMULE_VERSION, 0x3C));
-        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_TCP_FLAGS, 0x01 | 0x04 | 0x08 | 0x10));
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_TCP_FLAGS, tcpFlags));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_AUX_PORT, portInt));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_MAX_USERS, maxUsers));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_MAX_FILES, maxFiles));
@@ -125,6 +135,8 @@ public class LoginHandler {
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOFT_FILES, maxFiles));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_HARD_FILES, maxFiles));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_PREFERENCE, 0));
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_LOWID_USERS, context.getRegistry().lowIdCount()));
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDP_FLAGS, udpFlags));
 
         ByteBuffer buf = ByteBuffer.allocate(4096).order(ByteOrder.LITTLE_ENDIAN);
         buf.put(hash);

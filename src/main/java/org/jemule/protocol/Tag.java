@@ -84,6 +84,16 @@ public record Tag(byte type, String name, Object value) {
     public static final String NAME_HARD_FILES = "\u0089";
     /** Special tag name for LowID user count (ST_LOWIDUSERS). */
     public static final String NAME_LOWID_USERS = "\u0094";
+    /** Special tag name for UDP capabilities/flags (ST_UDPFLAGS). */
+    public static final String NAME_UDP_FLAGS = "\u0095";
+    /** Special tag name for UDP key (ST_UDPKEY). */
+    public static final String NAME_UDP_KEY = "\u0096";
+    /** Special tag name for UDP key IP (ST_UDPKEYIP). */
+    public static final String NAME_UDP_KEY_IP = "\u0097";
+    /** Special tag name for TCP obfuscation port (ST_TCPPORTOBFUSCATION). */
+    public static final String NAME_TCP_OBFUSCATION_PORT = "\u0098";
+    /** Special tag name for UDP obfuscation port (ST_UDPPORTOBFUSCATION). */
+    public static final String NAME_UDP_OBFUSCATION_PORT = "\u0099";
 
     /**
      * Serializes this tag into a {@link ByteBuffer}.

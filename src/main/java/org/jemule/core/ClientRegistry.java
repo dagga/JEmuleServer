@@ -53,6 +53,10 @@ public class ClientRegistry {
         return clients.size();
     }
 
+    public int lowIdCount() {
+        return (int) clients.values().stream().filter(c -> !c.isHighId()).count();
+    }
+
     public Iterable<ClientState> getAllClients() {
         return clients.values();
     }
