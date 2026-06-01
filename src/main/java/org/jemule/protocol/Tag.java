@@ -94,6 +94,8 @@ public record Tag(byte type, String name, Object value) {
     public static final String NAME_TCP_OBFUSCATION_PORT = "\u0098";
     /** Special tag name for UDP obfuscation port (ST_UDPPORTOBFUSCATION). */
     public static final String NAME_UDP_OBFUSCATION_PORT = "\u0099";
+    /** Special tag name for number of sources (ST_SOURCES). */
+    public static final String NAME_SOURCES = "\u0015";
 
     /**
      * Serializes this tag into a {@link ByteBuffer}.

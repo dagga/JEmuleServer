@@ -92,6 +92,7 @@ public class SearchHandler {
                 tags.add(new Tag(Tag.TYPE_INTEGER, "\u0002", (int) m.size())); // ID_FILESIZE
             }
             tags.add(new Tag(Tag.TYPE_STRING, "\u0003", m.type())); // ID_FILETYPE
+            tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, m.sources().size())); // Ajout du nombre de sources
 
             Tag.writeList(itemBuf, tags);
             itemBuf.flip();

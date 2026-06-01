@@ -51,14 +51,17 @@ public class LoginHandler {
 
         sendServerIdent(context, out);
 
-        int serverFlags = 0x01 | 0x02 | 0x08 | (0x3C << 16); // SRV_PR_OBFUSCATION | SRV_PR_UTF8 | SRV_PR_NEWTAGS | VERSION
+        // --- Update ID_CHANGE packet construction ---
+        // Server Flags: SRV_PR_OBFUSCATION | SRV_PR_UTF8 | SRV_PR_NEWTAGS | (EMULE_VERSION << 16)
+        // EMULE_VERSION 0x3C (60)
+        int serverFlags = 0x01 | 0x02 | 0x08 | (0x3C << 16); // 0x01=Obfuscation, 0x02=UTF8, 0x08=NewTags
         int clientIpInt = ClientState.ipToInt(context.getSocket().getInetAddress());
 
         ByteBuffer idChange = ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN);
         idChange.putInt(clientId);
         idChange.putInt(serverFlags);
-        idChange.putInt(context.getConfig().port());
-        idChange.putInt(clientIpInt);
+        idChange.putShort((short) context.getConfig().port()); // Server Port
+        idChange.putInt(clientIpInt); // Client IP
         new Packet(Packet.PROTOCOL_ED2K, OpCode.ID_CHANGE.value, idChange.array()).write(out, state.isZlibSupported());
 
         ByteBuffer loginAccepted = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN);
@@ -138,20 +141,19 @@ public class LoginHandler {
         tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_VERSION, serverVersion));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_EMULE_VERSION, 0x3C));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_TCP_FLAGS, tcpFlags));
-        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SERVER_VERSION, 0x3C));
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SERVER_VERSION, 0x3C)); // Added for compatibility
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_MAX_USERS, maxUsers));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_MAX_FILES, maxFiles));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_MAX_USERS_V2, maxUsers));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOFT_FILES, maxFiles));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_HARD_FILES, maxFiles));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_PREFERENCE, 0));
-        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_LOWID_USERS, context.getRegistry().lowIdCount()));
-        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDP_FLAGS, udpFlags));
-        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDP_KEY, Server.getUdpKey()));
-        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDP_KEY_IP,
-                ClientState.ipToInt(context.getSocket().getLocalAddress())));
-        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_TCP_OBFUSCATION_PORT, portInt));
-        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDP_OBFUSCATION_PORT, portInt));
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_LOWID_USERS, context.getRegistry().lowIdCount())); // Added
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDP_FLAGS, udpFlags)); // Added
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDP_KEY, 0)); // Placeholder for now, needs proper generation
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDP_KEY_IP, ClientState.ipToInt(context.getSocket().getLocalAddress()))); // Added
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_TCP_OBFUSCATION_PORT, portInt)); // Added
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDP_OBFUSCATION_PORT, portInt)); // Added
 
         ByteBuffer buf = ByteBuffer.allocate(4096).order(ByteOrder.LITTLE_ENDIAN);
         buf.put(hash);
@@ -165,6 +167,7 @@ public class LoginHandler {
             buf.put((byte) 0x00);
             buf.put((byte) 0x01);
         }
+        // Port is 2 bytes, BIG_ENDIAN for this specific part of the header
         buf.put((byte) ((portInt >> 8) & 0xFF));
         buf.put((byte) (portInt & 0xFF));
 
@@ -177,12 +180,14 @@ public class LoginHandler {
     }
 
     public static void sendServerStatus(ClientContext context, OutputStream out) throws IOException {
+        // The client expects 5 integers in SERVER_STATUS:
+        // Users, Files, MaxUsers, MaxFiles, LowIDUsers
         ByteBuffer buf = ByteBuffer.allocate(20).order(ByteOrder.LITTLE_ENDIAN);
-        buf.putInt(context.getRegistry().size());
-        buf.putInt(context.getFileIndex().fileCount());
-        buf.putInt(context.getConfig().maxUsers());
-        buf.putInt(context.getConfig().maxFiles());
-        buf.putInt(context.getConfig().maxFiles());
+        buf.putInt(context.getRegistry().size()); // Users
+        buf.putInt(context.getFileIndex().fileCount()); // Files
+        buf.putInt(context.getConfig().maxUsers()); // MaxUsers
+        buf.putInt(context.getConfig().maxFiles()); // MaxFiles
+        buf.putInt(context.getRegistry().lowIdCount()); // LowIDUsers
         new Packet(Packet.PROTOCOL_ED2K, OpCode.SERVER_STATUS.value, buf.array()).write(out, context.getState() != null && context.getState().isZlibSupported());
     }
 
