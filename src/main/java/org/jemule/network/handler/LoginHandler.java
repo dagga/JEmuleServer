@@ -51,7 +51,7 @@ public class LoginHandler {
 
         sendServerIdent(context, out);
 
-        int serverFlags = 0x01 | 0x02 | 0x08; // SRV_PR_OBFUSCATION | SRV_PR_UTF8 | SRV_PR_NEWTAGS
+        int serverFlags = 0x01 | 0x02 | 0x08 | (0x3C << 16); // SRV_PR_OBFUSCATION | SRV_PR_UTF8 | SRV_PR_NEWTAGS | VERSION
         int clientIpInt = ClientState.ipToInt(context.getSocket().getInetAddress());
 
         ByteBuffer idChange = ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN);
@@ -177,9 +177,12 @@ public class LoginHandler {
     }
 
     public static void sendServerStatus(ClientContext context, OutputStream out) throws IOException {
-        ByteBuffer buf = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN);
+        ByteBuffer buf = ByteBuffer.allocate(20).order(ByteOrder.LITTLE_ENDIAN);
         buf.putInt(context.getRegistry().size());
         buf.putInt(context.getFileIndex().fileCount());
+        buf.putInt(context.getConfig().maxUsers());
+        buf.putInt(context.getConfig().maxFiles());
+        buf.putInt(context.getConfig().maxFiles());
         new Packet(Packet.PROTOCOL_ED2K, OpCode.SERVER_STATUS.value, buf.array()).write(out, context.getState() != null && context.getState().isZlibSupported());
     }
 
