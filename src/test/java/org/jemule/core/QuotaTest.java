@@ -20,7 +20,7 @@ class QuotaTest {
         // Config with small quota
         ServerConfig config = new ServerConfig(
                 4661, 2*1024*1024, 300, 50, 100, 1000, 2, 200, tempDir.resolve("db").toString(), null, true,
-                50.0f, 10, 60, 300, 120
+                50.0f, 10, 60, 300, 120, null
         );
 
         FileIndex index = new FileIndex(null); 

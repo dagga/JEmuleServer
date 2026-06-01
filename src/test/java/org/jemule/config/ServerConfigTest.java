@@ -55,16 +55,16 @@ class ServerConfigTest {
 
     @Test
     void testValidPort() {
-        assertDoesNotThrow(() -> new ServerConfig(4661, 1024, 10, 5, 100, 1000, 10, 50, "./db", null, true, 50f, 5, 30, 300, 60));
+        assertDoesNotThrow(() -> new ServerConfig(4661, 1024, 10, 5, 100, 1000, 10, 50, "./db", null, true, 50f, 5, 30, 300, 60, null));
     }
 
     @Test
     void testInvalidPort() {
         assertThrows(IllegalArgumentException.class, () -> 
-            new ServerConfig(0, 1024, 10, 5, 100, 1000, 10, 50, "./db", null, true, 50f, 5, 30, 300, 60)
+            new ServerConfig(0, 1024, 10, 5, 100, 1000, 10, 50, "./db", null, true, 50f, 5, 30, 300, 60, null)
         );
         assertThrows(IllegalArgumentException.class, () -> 
-            new ServerConfig(65536, 1024, 10, 5, 100, 1000, 10, 50, "./db", null, true, 50f, 5, 30, 300, 60)
+            new ServerConfig(65536, 1024, 10, 5, 100, 1000, 10, 50, "./db", null, true, 50f, 5, 30, 300, 60, null)
         );
     }
 }

@@ -32,11 +32,14 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.net.InetAddress;
+import java.net.NetworkInterface;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.sql.SQLException;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -64,6 +67,7 @@ public class Server {
     private final EventManager eventManager;
     private final ClientFactory clientFactory;
     private final AdminInterface admin;
+    private final InetAddress publicIp;
     private volatile boolean running = true;
 
     /**
@@ -106,6 +110,48 @@ public class Server {
         this.db = dbMgr;
         this.fileIndex = new FileIndex(db, eventManager);
         this.admin = new AdminInterface(this, registry, fileIndex, ipFilter, fakeFileDetector);
+        this.publicIp = resolvePublicIp(config.publicIp());
+    }
+
+    private static InetAddress resolvePublicIp(String configIp) {
+        if (configIp != null && !configIp.isBlank()) {
+            try {
+                return InetAddress.getByName(configIp);
+            } catch (Exception e) {
+                log.warn("Invalid publicIp in config ({}), falling back to auto-detect", configIp);
+            }
+        }
+        try {
+            var interfaces = NetworkInterface.getNetworkInterfaces();
+            if (interfaces != null) {
+                for (var iface : Collections.list(interfaces)) {
+                    if (iface.isLoopback() || !iface.isUp()) continue;
+                    var addrs = iface.getInetAddresses();
+                    while (addrs.hasMoreElements()) {
+                        InetAddress a = addrs.nextElement();
+                        if (a instanceof java.net.Inet4Address && !a.isLoopbackAddress() && !a.isLinkLocalAddress()) {
+                            log.info("Auto-detected public IPv4: {} (interface: {})", a.getHostAddress(), iface.getName());
+                            return a;
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Failed to auto-detect public IP: {}", e.getMessage());
+        }
+        try {
+            InetAddress local = InetAddress.getLocalHost();
+            if (!local.isLoopbackAddress()) {
+                log.info("Using InetAddress.getLocalHost(): {}", local.getHostAddress());
+                return local;
+            }
+        } catch (Exception ignored) {}
+        log.warn("Could not resolve public IP, using 127.0.0.1 as fallback");
+        return InetAddress.getLoopbackAddress();
+    }
+
+    public InetAddress getPublicIp() {
+        return publicIp;
     }
 
     private void setupDefaultListeners() {
@@ -279,7 +325,7 @@ public class Server {
             tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_UDP_FLAGS, 0x01 | 0x08 | 0x10 | 0x100 | 0x400));
             tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_UDP_KEY, getUdpKey()));
             tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_UDP_KEY_IP,
-                    ClientState.ipToInt(ds.getLocalAddress())));
+                    ClientState.ipToInt(publicIp)));
             tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_TCP_OBFUSCATION_PORT, config.port()));
             tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_UDP_OBFUSCATION_PORT, config.port()));
 
@@ -287,7 +333,7 @@ public class Server {
             resp.put(Packet.PROTOCOL_ED2K);
             resp.put((byte) 0x95);
             resp.putShort((short) config.port());
-            resp.putInt(ClientState.ipToInt(ds.getLocalAddress()));
+            resp.putInt(ClientState.ipToInt(publicIp));
             org.jemule.protocol.Tag.writeList(resp, tags);
             resp.flip();
 

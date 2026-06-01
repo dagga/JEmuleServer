@@ -43,7 +43,7 @@ class ServerTagsTest {
         FileIndex fi = new FileIndex(null, em);
         ServerConfig config = new ServerConfig(
                 14662, 1000000, 300, 50, 50000, 100000, 100, 200,
-                null, null, false, 50f, 10, 60, 1800, 120
+                null, null, false, 50f, 10, 60, 1800, 120, null
         );
         Server server = new Server(config, cf);
 
@@ -147,7 +147,7 @@ class ServerTagsTest {
         FileIndex fi = new FileIndex(null, em);
         ServerConfig config = new ServerConfig(
                 14663, 1000000, 300, 50, 50000, 100000, 100, 200,
-                null, null, false, 50f, 10, 60, 1800, 120
+                null, null, false, 50f, 10, 60, 1800, 120, null
         );
         Server server = new Server(config, cf);
 

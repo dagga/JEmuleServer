@@ -65,7 +65,8 @@ public class Main {
                         cfg.cbMinimumNumberOfCalls(),
                         cfg.cbWaitDurationInSeconds(),
                         cfg.tcpKeepAliveTimeoutInSeconds(),
-                        cfg.heartbeatIntervalSeconds()
+                        cfg.heartbeatIntervalSeconds(),
+                        cfg.publicIp()
                 );
                 break; // Use the first integer found as port
             } catch (NumberFormatException ignored) {}

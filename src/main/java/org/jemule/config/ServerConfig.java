@@ -61,7 +61,10 @@ public record ServerConfig(
         int tcpKeepAliveTimeoutInSeconds,
         
         // Heartbeat settings
-        int heartbeatIntervalSeconds
+        int heartbeatIntervalSeconds,
+        
+        // Public IP (optional – null or empty means auto-detect)
+        String publicIp
 ) {
     public ServerConfig {
         if (port < 1 || port > 65535) {
@@ -92,7 +95,8 @@ public record ServerConfig(
             10,
             60,
             1800,
-            120
+            120,
+            null
     );
 
     /**
@@ -115,7 +119,8 @@ public record ServerConfig(
                 Integer.parseInt(props.getProperty("cbMinimumNumberOfCalls", String.valueOf(DEFAULT.cbMinimumNumberOfCalls()))),
                 Integer.parseInt(props.getProperty("cbWaitDurationInSeconds", String.valueOf(DEFAULT.cbWaitDurationInSeconds()))),
                 Integer.parseInt(props.getProperty("tcpKeepAliveTimeoutInSeconds", String.valueOf(DEFAULT.tcpKeepAliveTimeoutInSeconds()))),
-                Integer.parseInt(props.getProperty("heartbeatIntervalSeconds", String.valueOf(DEFAULT.heartbeatIntervalSeconds())))
+                Integer.parseInt(props.getProperty("heartbeatIntervalSeconds", String.valueOf(DEFAULT.heartbeatIntervalSeconds()))),
+                props.getProperty("publicIp", DEFAULT.publicIp())
         );
     }
 }

@@ -52,7 +52,7 @@ class HeartbeatTest {
         config = new ServerConfig(
                 4661, 2*1024*1024, 300, 50, 100, 1000, 5, 200,
                 tempDir.resolve("db").toString(), null, true,
-                50.0f, 10, 60, 300, 2 // heartbeatIntervalSeconds = 2
+                50.0f, 10, 60, 300, 2, null // heartbeatIntervalSeconds = 2, publicIp = null
         );
 
         FileIndex index = new FileIndex(null);
@@ -182,7 +182,7 @@ class HeartbeatTest {
         ServerConfig configNoHeartbeat = new ServerConfig(
                 4661, 2*1024*1024, 300, 50, 100, 1000, 5, 200,
                 tempDir.resolve("db").toString(), null, true,
-                50.0f, 10, 60, 300, 0 // heartbeatIntervalSeconds = 0 (disabled)
+                50.0f, 10, 60, 300, 0, null // heartbeatIntervalSeconds = 0 (disabled), publicIp = null
         );
 
         assertEquals(0, configNoHeartbeat.heartbeatIntervalSeconds(), "Heartbeat should be disabled");

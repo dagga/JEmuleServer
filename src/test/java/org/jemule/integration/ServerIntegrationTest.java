@@ -52,7 +52,8 @@ public class ServerIntegrationTest {
                 d.cbMinimumNumberOfCalls(),
                 d.cbWaitDurationInSeconds(),
                 d.tcpKeepAliveTimeoutInSeconds(),
-                d.heartbeatIntervalSeconds()
+                d.heartbeatIntervalSeconds(),
+                d.publicIp()
         );
 
         server = new Server(config, new ClientFactory());
