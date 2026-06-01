@@ -126,9 +126,9 @@ class ServerTagsTest {
         assertNotNull(tcpFlagsTag, "Missing NAME_TCP_FLAGS tag (newly added to UDP)");
         assertEquals(TCP_FLAGS, (int) tcpFlagsTag.value());
 
-        Tag auxTag = findTag(tags, Tag.NAME_AUX_PORT);
-        assertNotNull(auxTag, "Missing NAME_AUX_PORT tag (newly added to UDP)");
-        assertEquals(14662, (int) auxTag.value());
+        Tag auxTag = findTag(tags, Tag.NAME_SERVER_VERSION);
+        assertNotNull(auxTag, "Missing NAME_SERVER_VERSION tag");
+        assertEquals(0x3C, (int) auxTag.value());
 
         Tag lowIdTag = findTag(tags, Tag.NAME_LOWID_USERS);
         assertNotNull(lowIdTag, "Missing NAME_LOWID_USERS tag (newly added)");

@@ -28,7 +28,7 @@ public class ServerIdentDumper {
         tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_VERSION, serverVersion));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_EMULE_VERSION, 0x3C));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_TCP_FLAGS, 0x01 | 0x04 | 0x08 | 0x10));
-        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_AUX_PORT, 0));
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SERVER_VERSION, 0x3C));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_MAX_USERS, 1000));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_MAX_FILES, 100000));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDP_KEY, 0x12345678));

@@ -66,8 +66,8 @@ public record Tag(byte type, String name, Object value) {
     public static final String NAME_DESCRIPTION = "\u000B";
     /** Special tag name for TCP capabilities/flags. */
     public static final String NAME_TCP_FLAGS = "\u0090";
-    /** Special tag name for auxiliary port. */
-    public static final String NAME_AUX_PORT = "\u0091";
+    /** Special tag name for eMule server version (ST_VERSION 0x91), used for the Version column in the client's server list. */
+    public static final String NAME_SERVER_VERSION = "\u0091";
     /** Special tag name for maximum user limit. */
     public static final String NAME_MAX_USERS = "\u0092";
     /** Special tag name for maximum file limit. */

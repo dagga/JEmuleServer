@@ -138,7 +138,7 @@ public class LoginHandler {
         tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_VERSION, serverVersion));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_EMULE_VERSION, 0x3C));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_TCP_FLAGS, tcpFlags));
-        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_AUX_PORT, portInt));
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SERVER_VERSION, 0x3C));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_MAX_USERS, maxUsers));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_MAX_FILES, maxFiles));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_MAX_USERS_V2, maxUsers));

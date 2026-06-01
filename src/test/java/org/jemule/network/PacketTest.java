@@ -238,7 +238,7 @@ class PacketTest {
         assertEquals("\u0088", Tag.NAME_SOFT_FILES, "ST_SOFTFILES = 0x88");
         assertEquals("\u0089", Tag.NAME_HARD_FILES, "ST_HARDFILES = 0x89");
         assertEquals("\u0090", Tag.NAME_TCP_FLAGS, "ST_TCPFLAGS = 0x90");
-        assertEquals("\u0091", Tag.NAME_AUX_PORT, "ST_AUXPORT = 0x91");
+        assertEquals("\u0091", Tag.NAME_SERVER_VERSION, "ST_SERVER_VERSION = 0x91");
         assertEquals("\u0092", Tag.NAME_MAX_USERS, "ST_MAXUSERS = 0x92");
         assertEquals("\u0093", Tag.NAME_MAX_FILES, "ST_MAXFILES = 0x93");
         assertEquals("\u0094", Tag.NAME_LOWID_USERS, "ST_LOWIDUSERS = 0x94");
