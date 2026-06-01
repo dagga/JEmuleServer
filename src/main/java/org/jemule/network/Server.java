@@ -287,6 +287,7 @@ public class Server {
             resp.put(Packet.PROTOCOL_ED2K);
             resp.put((byte) 0x95);
             resp.putShort((short) config.port());
+            resp.putInt(ClientState.ipToInt(ds.getLocalAddress()));
             org.jemule.protocol.Tag.writeList(resp, tags);
             resp.flip();
 

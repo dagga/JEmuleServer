@@ -69,12 +69,13 @@ class ServerTagsTest {
         assertEquals(Packet.PROTOCOL_ED2K, data[0]);
         assertEquals((byte) 0x95, data[1]);
 
-        // Parse response: [Protocol 1] [Opcode 1] [Port 2] [Tags...]
+        // Parse response: [Protocol 1] [Opcode 1] [Port 2] [IP 4] [Tags...]
         ByteBuffer buf = ByteBuffer.wrap(data, 0, len).order(ByteOrder.LITTLE_ENDIAN);
         buf.get(); // protocol
         buf.get(); // opcode
         int port = Short.toUnsignedInt(buf.getShort());
         assertEquals(14662, port);
+        buf.getInt(); // skip server IP
 
         List<Tag> tags = Tag.readList(buf);
 
@@ -180,7 +181,7 @@ class ServerTagsTest {
         assertFalse(cds.sent.isEmpty());
         DatagramPacket response = cds.sent.get(0);
         ByteBuffer buf = ByteBuffer.wrap(response.getData(), 0, response.getLength()).order(ByteOrder.LITTLE_ENDIAN);
-        buf.get(); buf.get(); buf.getShort(); // skip header
+        buf.get(); buf.get(); buf.getShort(); buf.getInt(); // skip header + server IP
         List<Tag> tags = Tag.readList(buf);
 
         Tag lowIdTag = findTag(tags, Tag.NAME_LOWID_USERS);
