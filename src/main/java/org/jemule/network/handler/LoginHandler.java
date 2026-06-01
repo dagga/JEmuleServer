@@ -51,10 +51,19 @@ public class LoginHandler {
 
         sendServerIdent(context, out);
 
-        ByteBuffer resp = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN);
-        resp.putInt(clientId);
-        new Packet(Packet.PROTOCOL_ED2K, OpCode.ID_CHANGE.value, resp.array()).write(out, state.isZlibSupported());
-        new Packet(Packet.PROTOCOL_ED2K, OpCode.LOGIN_ACCEPTED.value, resp.array()).write(out, state.isZlibSupported());
+        int serverFlags = 0x01 | 0x02 | 0x08; // SRV_PR_OBFUSCATION | SRV_PR_UTF8 | SRV_PR_NEWTAGS
+        int clientIpInt = ClientState.ipToInt(context.getSocket().getInetAddress());
+
+        ByteBuffer idChange = ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN);
+        idChange.putInt(clientId);
+        idChange.putInt(serverFlags);
+        idChange.putInt(context.getConfig().port());
+        idChange.putInt(clientIpInt);
+        new Packet(Packet.PROTOCOL_ED2K, OpCode.ID_CHANGE.value, idChange.array()).write(out, state.isZlibSupported());
+
+        ByteBuffer loginAccepted = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN);
+        loginAccepted.putInt(clientId);
+        new Packet(Packet.PROTOCOL_ED2K, OpCode.LOGIN_ACCEPTED.value, loginAccepted.array()).write(out, state.isZlibSupported());
 
         log.info("Logged in ID: {} (Sent 0x40 and 0x1B)", clientId);
 
