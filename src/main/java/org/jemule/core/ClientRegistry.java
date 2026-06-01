@@ -1,63 +1,60 @@
-/*
- * JEmuleServer - An experimental eMule server.
- * Copyright (C) 2026 Nicolas Hernandez (hernicatgmail.com)
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with this program.  If not, see <https://www.gnu.org/licenses/>.
- */
-
-
 package org.jemule.core;
 
 import org.jemule.network.Packet;
 
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 
 public class ClientRegistry {
-    private final ConcurrentHashMap<Integer, ClientState> clients = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Integer, ClientState> connections = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Integer, Consumer<Packet>> messengers = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Integer, Set<Integer>> clientIdIndex = new ConcurrentHashMap<>();
 
     public void add(ClientState s, Consumer<Packet> messenger) {
-        clients.put(s.clientId(), s);
-        if (messenger != null) messengers.put(s.clientId(), messenger);
+        connections.put(s.connectionId(), s);
+        if (messenger != null) messengers.put(s.connectionId(), messenger);
+        clientIdIndex.computeIfAbsent(s.clientId(), k -> ConcurrentHashMap.newKeySet()).add(s.connectionId());
     }
 
     public void remove(ClientState s) {
-        clients.remove(s.clientId());
-        messengers.remove(s.clientId());
+        connections.remove(s.connectionId());
+        messengers.remove(s.connectionId());
+        Set<Integer> set = clientIdIndex.get(s.clientId());
+        if (set != null) {
+            set.remove(s.connectionId());
+            if (set.isEmpty()) clientIdIndex.remove(s.clientId());
+        }
     }
 
-    public ClientState get(int id) {
-        return clients.get(id);
+    public ClientState get(int clientId) {
+        Set<Integer> set = clientIdIndex.get(clientId);
+        if (set == null || set.isEmpty()) return null;
+        for (Integer connId : set) {
+            ClientState cs = connections.get(connId);
+            if (cs != null) return cs;
+        }
+        return null;
     }
 
     public void sendTo(int targetId, Packet p) {
-        Consumer<Packet> messenger = messengers.get(targetId);
-        if (messenger != null) {
-            messenger.accept(p);
+        Set<Integer> connIds = clientIdIndex.get(targetId);
+        if (connIds == null) return;
+        for (Integer connId : connIds) {
+            Consumer<Packet> messenger = messengers.get(connId);
+            if (messenger != null) messenger.accept(p);
         }
     }
 
     public int size() {
-        return clients.size();
+        return connections.size();
     }
 
     public int lowIdCount() {
-        return (int) clients.values().stream().filter(c -> !c.isHighId()).count();
+        return (int) connections.values().stream().filter(c -> !c.isHighId()).count();
     }
 
     public Iterable<ClientState> getAllClients() {
-        return clients.values();
+        return connections.values();
     }
 }

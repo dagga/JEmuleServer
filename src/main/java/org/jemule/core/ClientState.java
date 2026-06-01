@@ -24,7 +24,12 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
+import static java.util.Objects.requireNonNull;
+
 public final class ClientState {
+    private static final AtomicInteger nextConnectionId = new AtomicInteger(1);
+
+    private final int connectionId;
     private final InetAddress address;
     private final int port;
     private final int clientId;
@@ -35,13 +40,15 @@ public final class ClientState {
     private List<FileMetadata> pendingSearchResults;
 
     public ClientState(InetAddress address, int port, int clientId, long connectedAt, AtomicLong lastActivity) {
-        this.address = address;
+        this.connectionId = nextConnectionId.getAndIncrement();
+        this.address = requireNonNull(address);
         this.port = port;
         this.clientId = clientId;
         this.connectedAt = connectedAt;
         this.lastActivity = lastActivity;
     }
 
+    public int connectionId() { return connectionId; }
     public InetAddress address() { return address; }
     public int port() { return port; }
     public int clientId() { return clientId; }
