@@ -4,6 +4,7 @@ import org.jemule.Main;
 import org.jemule.core.ClientState;
 import org.jemule.core.event.ClientEvent;
 import org.jemule.network.Packet;
+import org.jemule.network.Server;
 import org.jemule.protocol.OpCode;
 import org.jemule.protocol.Tag;
 import org.slf4j.Logger;
@@ -137,9 +138,9 @@ public class LoginHandler {
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_PREFERENCE, 0));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_LOWID_USERS, context.getRegistry().lowIdCount()));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDP_FLAGS, udpFlags));
-        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDP_KEY, new java.util.Random().nextInt()));
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDP_KEY, Server.getUdpKey()));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDP_KEY_IP,
-                ByteBuffer.wrap(context.getSocket().getLocalAddress().getAddress()).order(ByteOrder.LITTLE_ENDIAN).getInt()));
+                ClientState.ipToInt(context.getSocket().getLocalAddress())));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_TCP_OBFUSCATION_PORT, portInt));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDP_OBFUSCATION_PORT, portInt));
 

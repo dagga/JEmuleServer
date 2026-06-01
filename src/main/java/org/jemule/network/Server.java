@@ -55,10 +55,15 @@ public class Server {
     private final FakeFileDetector fakeFileDetector;
     private final ExecutorService executor;
     private final DatabaseManager db;
+    private static final int GLOBAL_UDP_KEY = new java.util.Random().nextInt();
+
+    public static int getUdpKey() {
+        return GLOBAL_UDP_KEY;
+    }
+
     private final EventManager eventManager;
     private final ClientFactory clientFactory;
     private final AdminInterface admin;
-    private final int udpKey = new java.util.Random().nextInt();
     private volatile boolean running = true;
 
     /**
@@ -272,9 +277,9 @@ public class Server {
             tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_AUX_PORT, config.port()));
             tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_LOWID_USERS, registry.lowIdCount()));
             tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_UDP_FLAGS, 0x01 | 0x08 | 0x10 | 0x100 | 0x400));
-            tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_UDP_KEY, udpKey));
+            tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_UDP_KEY, getUdpKey()));
             tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_UDP_KEY_IP,
-                    ByteBuffer.wrap(ds.getLocalAddress().getAddress()).order(ByteOrder.LITTLE_ENDIAN).getInt()));
+                    ClientState.ipToInt(ds.getLocalAddress())));
             tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_TCP_OBFUSCATION_PORT, config.port()));
             tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_UDP_OBFUSCATION_PORT, config.port()));
 
