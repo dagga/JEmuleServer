@@ -297,7 +297,7 @@ public class Server {
             resp.putInt(config.maxFiles());
 
             ds.send(new java.net.DatagramPacket(resp.array(), resp.position(), p.getAddress(), p.getPort()));
-        } else if (opcode == (byte) 0x95) { // OP_SERVER_DESC_REQ
+        } else if (opcode == (byte) 0xA2) { // OP_SERVER_DESC_REQ
             if (p.getLength() < 2) return;
             log.debug("UDP Description Request from {}", p.getAddress());
 
@@ -309,11 +309,11 @@ public class Server {
             int maxUsers = config.maxUsers();
 
             java.util.List<org.jemule.protocol.Tag> tags = new java.util.ArrayList<>();
-            tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_STRING, org.jemule.protocol.Tag.NAME_NAME, sName));
+            tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_STRING, org.jemule.protocol.Tag.NAME_SERVERNAME, sName));
             tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_STRING, org.jemule.protocol.Tag.NAME_DESCRIPTION, sDesc));
             tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_STRING, org.jemule.protocol.Tag.NAME_VERSION, sVersion));
-            tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_MAX_USERS, maxUsers));
-            tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_MAX_FILES, maxFiles));
+            tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_MAXUSERS, maxUsers));
+            tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_MAXFILES, maxFiles));
             tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_MAX_USERS_V2, maxUsers));
             tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_SOFT_FILES, maxFiles));
             tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_HARD_FILES, maxFiles));
@@ -327,11 +327,11 @@ public class Server {
             tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_UDP_KEY_IP,
                     ClientState.ipToInt(publicIp)));
             tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_TCP_OBFUSCATION_PORT, config.port()));
-            tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_UDP_OBFUSCATION_PORT, config.port()));
+            tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_UDPPORTOBFUSCATION, config.port()));
 
             ByteBuffer resp = ByteBuffer.allocate(2048).order(ByteOrder.LITTLE_ENDIAN);
             resp.put(Packet.PROTOCOL_ED2K);
-            resp.put((byte) 0x95);
+            resp.put((byte) 0xA3); // OP_SERVER_DESC_RES
             resp.putShort((short) config.port());
             resp.putInt(ClientState.ipToInt(publicIp));
             org.jemule.protocol.Tag.writeList(resp, tags);
