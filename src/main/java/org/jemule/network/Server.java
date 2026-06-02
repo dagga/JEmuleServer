@@ -218,47 +218,55 @@ public class Server {
     }
 
     private void startUdpResponder() {
-        executor.submit(() -> {
-            while (running) {
-                java.net.DatagramSocket ds = null;
-                try {
-                    // Prefer IPv6 wildcard; if unavailable, fallback to IPv4
-                    try {
-                        ds = new java.net.DatagramSocket(null);
-                        ds.bind(new java.net.InetSocketAddress(java.net.InetAddress.getByName("::"), config.port()));
-                        log.info("UDP Responder listening on port {} (IPv6 wildcard)", config.port());
-                    } catch (IOException e) {
-                        if (ds != null && !ds.isClosed()) { ds.close(); }
-                        ds = new java.net.DatagramSocket(config.port());
-                        log.info("UDP Responder listening on port {} (IPv4 wildcard)", config.port());
-                    }
+        // Bind UDP responder on both the configured TCP port and the common UDP offset (port+4)
+        java.util.Set<Integer> ports = new java.util.LinkedHashSet<>();
+        ports.add(config.port());
+        if (config.port() <= 0xFFFF - 4) ports.add(config.port() + 4);
 
-                    ds.setSoTimeout(1000);
-                    byte[] buf = new byte[1024];
-                    while (running) {
+        for (int port : ports) {
+            final int bindPort = port;
+            executor.submit(() -> {
+                while (running) {
+                    java.net.DatagramSocket ds = null;
+                    try {
+                        // Prefer IPv6 wildcard; if unavailable, fallback to IPv4
                         try {
-                            java.net.DatagramPacket p = new java.net.DatagramPacket(buf, buf.length);
-                            ds.receive(p);
-                            handleUdp(ds, p);
-                        } catch (java.net.SocketTimeoutException e) {
-                            // Timeout, check 'running'
+                            ds = new java.net.DatagramSocket(null);
+                            ds.bind(new java.net.InetSocketAddress(java.net.InetAddress.getByName("::"), bindPort));
+                            log.info("UDP Responder listening on port {} (IPv6 wildcard)", bindPort);
+                        } catch (IOException e) {
+                            if (ds != null && !ds.isClosed()) { ds.close(); }
+                            ds = new java.net.DatagramSocket(bindPort);
+                            log.info("UDP Responder listening on port {} (IPv4 wildcard)", bindPort);
                         }
-                    }
-                } catch (IOException e) {
-                    if (running) {
-                        log.error("UDP Error (retrying in 5s): {}", e.getMessage());
-                        try {
-                            Thread.sleep(5000);
-                        } catch (InterruptedException ie) {
-                            Thread.currentThread().interrupt();
-                            break;
+
+                        ds.setSoTimeout(1000);
+                        byte[] buf = new byte[4096];
+                        while (running) {
+                            try {
+                                java.net.DatagramPacket p = new java.net.DatagramPacket(buf, buf.length);
+                                ds.receive(p);
+                                handleUdp(ds, p);
+                            } catch (java.net.SocketTimeoutException e) {
+                                // Timeout, check 'running'
+                            }
                         }
+                    } catch (IOException e) {
+                        if (running) {
+                            log.error("UDP Error on port {} (retrying in 5s): {}", bindPort, e.getMessage());
+                            try {
+                                Thread.sleep(5000);
+                            } catch (InterruptedException ie) {
+                                Thread.currentThread().interrupt();
+                                break;
+                            }
+                        }
+                    } finally {
+                        if (ds != null && !ds.isClosed()) ds.close();
                     }
-                } finally {
-                    if (ds != null && !ds.isClosed()) ds.close();
                 }
-            }
-        });
+            });
+        }
     }
 
     private void startAdminInterface() {
