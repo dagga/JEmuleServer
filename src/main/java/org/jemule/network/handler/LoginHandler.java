@@ -139,7 +139,15 @@ public class LoginHandler {
         tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_SERVERNAME, serverName));
         tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_DESCRIPTION, desc));
         tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_VERSION, serverVersion)); // CT_VERSION (string)
-        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SERVER_VERSION, 0x3C)); // ST_VERSION numeric (major<<16|minor)
+        // ST_VERSION as uint32: (major<<16) | minor when possible
+        int serverVersionInt = 0x003C0000; // fallback (ED2K version in high word)
+        try {
+            String[] v = serverVersion.split("\\.");
+            int maj = Integer.parseInt(v[0]);
+            int min = v.length > 1 ? Integer.parseInt(v[1]) : 0;
+            serverVersionInt = (maj << 16) | (min & 0xFFFF);
+        } catch (Exception ignored) {}
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SERVER_VERSION, serverVersionInt)); // ST_VERSION numeric (major<<16|minor)
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_TCP_FLAGS, tcpFlags));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_MAXUSERS, maxUsers)); // ST_MAXUSERS
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOFTFILES, maxFiles)); // ST_SOFTFILES
@@ -147,7 +155,7 @@ public class LoginHandler {
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_PREFERENCE, 0));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_LOWIDUSERS, context.getRegistry().lowIdCount())); // ST_LOWIDUSERS
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDPFLAGS, udpFlags)); // ST_UDPFLAGS
-        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDPKEY, 0)); // ST_UDPKEY (Placeholder for now)
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDPKEY, org.jemule.network.Server.getUdpKey())); // ST_UDPKEY
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDPKEYIP, ClientState.ipToInt(context.getSocket().getLocalAddress()))); // ST_UDPKEYIP
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_TCPPORTOBFUSCATION, portInt)); // ST_TCPPORTOBFUSCATION
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDPPORTOBFUSCATION, portInt)); // ST_UDPPORTOBFUSCATION
