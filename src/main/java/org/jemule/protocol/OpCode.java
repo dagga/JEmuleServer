@@ -38,15 +38,15 @@ public enum OpCode {
     PUBLISH_FILES((byte) 0x20),
     QUERY_MORE_RESULT((byte) 0x21), // OP_QUERY_MORE_RESULT (Client -> Server)
     PUBLISH_ACK((byte) 0x22),       // (Server -> Client)
-    CALLBACK((byte) 0x1C),
+    CALLBACK((byte) 0x99),
 
     // eMule Protocol (0xC5) Extensions
     GET_SOURCES_OBFU((byte) 0x23), // Used for obfuscated/extended source requests
-    SOURCES_RESULT_OBFU((byte) 0x24), // OP_EXT_SOURCESRES
+    SOURCES_RESULT_OBFU((byte) 0x44), // OP_FOUNDSOURCES_OBFU
     EMULE_INFO((byte) 0x01),      // OP_EMULE_INFO
     EMULE_INFO_ACK((byte) 0x02),
-    COMPRESSED_PART((byte) 0x28), // OP_COMPRESSEDPART
-    ASK_SHARED_FILES((byte) 0x4F); // OP_ASKSHAREDFILES
+    COMPRESSED_PART((byte) 0x40), // OP_COMPRESSEDPART
+    ASK_SHARED_FILES((byte) 0x4A); // OP_ASKSHAREDFILES
 
     public final byte value;
 
@@ -59,9 +59,9 @@ public enum OpCode {
             if (b == (byte) 0x01) return EMULE_INFO;
             if (b == (byte) 0x02) return EMULE_INFO_ACK;
             if (b == (byte) 0x23) return GET_SOURCES_OBFU;
-            if (b == (byte) 0x24) return SOURCES_RESULT_OBFU;
-            if (b == (byte) 0x28) return COMPRESSED_PART;
-            if (b == (byte) 0x4F) return ASK_SHARED_FILES;
+            if (b == (byte) 0x44) return SOURCES_RESULT_OBFU;
+            if (b == (byte) 0x40) return COMPRESSED_PART;
+            if (b == (byte) 0x4A) return ASK_SHARED_FILES;
         }
         for (OpCode op : values()) {
             // Avoid collision if same byte used in different protocols
