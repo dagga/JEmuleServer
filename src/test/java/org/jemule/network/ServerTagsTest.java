@@ -170,7 +170,7 @@ class ServerTagsTest {
         InetAddress remote = InetAddress.getByName("127.0.0.1");
         byte[] req = new byte[2];
         req[0] = Packet.PROTOCOL_ED2K;
-        req[1] = (byte) 0x95;
+        req[1] = (byte) 0xA2;
         DatagramPacket dp = new DatagramPacket(req, req.length, remote, 40000);
         CapturingDatagramSocket cds = new CapturingDatagramSocket();
 

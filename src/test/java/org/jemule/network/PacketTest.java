@@ -231,7 +231,7 @@ class PacketTest {
         assertEquals("\u000B", Tag.NAME_DESCRIPTION, "ST_DESCRIPTION = 0x0B");
         assertEquals("\u000E", Tag.NAME_PREFERENCE, "ST_PREFERENCE = 0x0E");
         assertEquals("\u000F", Tag.NAME_PORT, "ST_PORT = 0x0F");
-        assertEquals("\u0091", Tag.NAME_VERSION, "ST_VERSION = 0x91");
+        assertEquals("\u0011", Tag.NAME_VERSION, "CT_VERSION = 0x11");
 
         // Extended server tags (0x80-0x99 range)
         assertEquals("\u0087", Tag.NAME_MAX_USERS_V2, "ST_MAXUSERS_V2 = 0x87");

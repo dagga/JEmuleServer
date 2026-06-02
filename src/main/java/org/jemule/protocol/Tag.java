@@ -29,7 +29,7 @@ public record Tag(byte type, String name, Object value) {
     public static final String NAME_SOFTFILES = "\u0088"; // ST_SOFTFILES
     public static final String NAME_HARDFILES = "\u0089"; // ST_HARDFILES
     public static final String NAME_LASTPING = "\u0090"; // ST_LASTPING
-    public static final String NAME_VERSION = "\u0091"; // ST_VERSION
+    public static final String NAME_VERSION = "\u0011"; // CT_VERSION (client/server short version tag)
     public static final String NAME_UDPFLAGS = "\u0092"; // ST_UDPFLAGS
     public static final String NAME_AUXPORTSLIST = "\u0093"; // ST_AUXPORTSLIST
     public static final String NAME_LOWIDUSERS = "\u0094"; // ST_LOWIDUSERS
