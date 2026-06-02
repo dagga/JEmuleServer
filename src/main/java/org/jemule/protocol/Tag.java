@@ -1,21 +1,3 @@
-/*
- * JEmuleServer - An experimental eMule server.
- * Copyright (C) 2026 Nicolas Hernandez (hernicatgmail.com)
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with this program.  If not, see <https://www.gnu.org/licenses/>.
- */
-
 package org.jemule.protocol;
 
 import java.nio.ByteBuffer;
@@ -23,85 +5,69 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * Represents an ed2k tag.
- */
-/**
- * Represents an ed2k tag (TLV - Type Length Value).
- * Used for exchanging metadata in packets.
- *
- * @param type  The data type of the tag value.
- * @param name  The name of the tag (can be a special 1-byte code).
- * @param value The actual data of the tag.
- */
 public record Tag(byte type, String name, Object value) {
-    /** MD4 Hash type (16 bytes). */
     public static final byte TYPE_HASH = (byte) 0x01;
-    /** UTF-8 String type. */
     public static final byte TYPE_STRING = (byte) 0x02;
-    /** 32-bit Integer type (DWORD). */
     public static final byte TYPE_INTEGER = (byte) 0x03;
-    /** 32-bit Float type. */
     public static final byte TYPE_FLOAT = (byte) 0x04;
-    /** Boolean type (1 byte). */
     public static final byte TYPE_BOOL = (byte) 0x05;
-    /** Alternative Boolean type (1 byte). */
     public static final byte TYPE_BOOL_ALT = (byte) 0x06;
-    /** Arbitrary Blob type (4 bytes length prefix). */
     public static final byte TYPE_BLOB = (byte) 0x07;
-    /** 16-bit Integer type (short). */
     public static final byte TYPE_INT16 = (byte) 0x08;
-    /** 8-bit Integer type (byte). */
     public static final byte TYPE_INT8 = (byte) 0x09;
 
-    /** Special tag name for server/client version. */
-    public static final String NAME_VERSION = "\u0011";
-    /** Special tag name for server/client port. */
-    public static final String NAME_PORT = "\u000F";
-    /** Special tag name for client nickname. */
-    public static final String NAME_NICK = "\u0001";
-    /** Special tag name for server name. */
-    public static final String NAME_NAME = "\u0001";
-    /** Special tag name for server description. */
-    public static final String NAME_DESCRIPTION = "\u000B";
-    /** Special tag name for TCP capabilities/flags. */
-    public static final String NAME_TCP_FLAGS = "\u0090";
-    /** Special tag name for eMule server version (ST_VERSION 0x91), used for the Version column in the client's server list. */
-    public static final String NAME_SERVER_VERSION = "\u0091";
-    /** Special tag name for maximum user limit. */
-    public static final String NAME_MAX_USERS = "\u0092";
-    /** Special tag name for maximum file limit. */
-    public static final String NAME_MAX_FILES = "\u0093";
-    /** Special tag name for eMule-specific version reporting (Lugdunum). */
-    public static final String NAME_EMULE_VERSION = "\u00FB";
-    /** Special tag name for server preference/priority (ST_PREFERENCE). */
-    public static final String NAME_PREFERENCE = "\u000E";
-    /** Special tag name for maximum user count (ST_MAXUSERS, legacy compat). */
-    public static final String NAME_MAX_USERS_V2 = "\u0087";
-    /** Special tag name for soft file limit (ST_SOFTFILES). */
-    public static final String NAME_SOFT_FILES = "\u0088";
-    /** Special tag name for hard file limit (ST_HARDFILES). */
-    public static final String NAME_HARD_FILES = "\u0089";
-    /** Special tag name for LowID user count (ST_LOWIDUSERS). */
-    public static final String NAME_LOWID_USERS = "\u0094";
-    /** Special tag name for UDP capabilities/flags (ST_UDPFLAGS). */
-    public static final String NAME_UDP_FLAGS = "\u0095";
-    /** Special tag name for UDP key (ST_UDPKEY). */
-    public static final String NAME_UDP_KEY = "\u0096";
-    /** Special tag name for UDP key IP (ST_UDPKEYIP). */
-    public static final String NAME_UDP_KEY_IP = "\u0097";
-    /** Special tag name for TCP obfuscation port (ST_TCPPORTOBFUSCATION). */
-    public static final String NAME_TCP_OBFUSCATION_PORT = "\u0098";
-    /** Special tag name for UDP obfuscation port (ST_UDPPORTOBFUSCATION). */
-    public static final String NAME_UDP_OBFUSCATION_PORT = "\u0099";
-    /** Special tag name for number of sources (ST_SOURCES). */
-    public static final String NAME_SOURCES = "\u0015";
+    // Server Tags (ST_ from opcodes.h)
+    public static final String NAME_SERVERNAME = "\u0001"; // ST_SERVERNAME
+    public static final String NAME_DESCRIPTION = "\u000B"; // ST_DESCRIPTION
+    public static final String NAME_PING = "\u000C"; // ST_PING
+    public static final String NAME_FAIL = "\r"; // ST_FAIL (Corrected to "\r" for CR character)
+    public static final String NAME_PREFERENCE = "\u000E"; // ST_PREFERENCE
+    public static final String NAME_PORT = "\u000F"; // ST_PORT
+    public static final String NAME_IP = "\u0010"; // ST_IP
+    public static final String NAME_DYNIP = "\u0085"; // ST_DYNIP
+    public static final String NAME_MAXUSERS = "\u0087"; // ST_MAXUSERS
+    public static final String NAME_SOFTFILES = "\u0088"; // ST_SOFTFILES
+    public static final String NAME_HARDFILES = "\u0089"; // ST_HARDFILES
+    public static final String NAME_LASTPING = "\u0090"; // ST_LASTPING
+    public static final String NAME_VERSION = "\u0091"; // ST_VERSION
+    public static final String NAME_UDPFLAGS = "\u0092"; // ST_UDPFLAGS
+    public static final String NAME_AUXPORTSLIST = "\u0093"; // ST_AUXPORTSLIST
+    public static final String NAME_LOWIDUSERS = "\u0094"; // ST_LOWIDUSERS
+    public static final String NAME_UDPKEY = "\u0095"; // ST_UDPKEY
+    public static final String NAME_UDPKEYIP = "\u0096"; // ST_UDPKEYIP
+    public static final String NAME_TCPPORTOBFUSCATION = "\u0097"; // ST_TCPPORTOBFUSCATION
+    public static final String NAME_UDPPORTOBFUSCATION = "\u0098"; // ST_UDPPORTOBFUSCATION
 
-    /**
-     * Serializes this tag into a {@link ByteBuffer}.
-     *
-     * @param buf The buffer to write into.
-     */
+    // File Tags (FT_ from opcodes.h)
+    public static final String NAME_FILENAME = "\u0001"; // FT_FILENAME (Note: same as NAME_SERVERNAME)
+    public static final String NAME_FILESIZE = "\u0002"; // FT_FILESIZE
+    public static final String NAME_FILESIZE_HI = "\u003A"; // FT_FILESIZE_HI
+    public static final String NAME_FILETYPE = "\u0003"; // FT_FILETYPE
+    public static final String NAME_FILEFORMAT = "\u0004"; // FT_FILEFORMAT
+    public static final String NAME_SOURCES = "\u0015"; // FT_SOURCES
+
+    // Client/Server Capability Tags (CT_ from opcodes.h)
+    public static final String NAME_TCP_FLAGS = "\u0020"; // CT_SERVER_FLAGS
+    public static final String NAME_CLIENT_VERSION = "\u0011"; // CT_VERSION
+    public static final String NAME_EMULE_VERSION = "\u00FB"; // CT_EMULE_VERSION
+    public static final String NAME_MAX_USERS_V2 = "\u0087"; // CT_MAX_USERS_V2 (Same as ST_MAXUSERS, but used in Server.java)
+    public static final String NAME_SERVER_VERSION = "\u0091"; // CT_SERVER_VERSION (Same as ST_VERSION, but used in Server.java)
+
+    // Backward-compatible aliases for older naming conventions (underscored names)
+    public static final String NAME_NAME = NAME_SERVERNAME; // alias for NAME_SERVERNAME
+    public static final String NAME_MAX_USERS = NAME_MAXUSERS; // alias for NAME_MAXUSERS
+    public static final String NAME_MAX_FILES = NAME_HARDFILES; // alias for hard files count
+    public static final String NAME_MAXFILES = NAME_HARDFILES; // alternate alias used in older code
+    public static final String NAME_SOFT_FILES = NAME_SOFTFILES; // alias
+    public static final String NAME_HARD_FILES = NAME_HARDFILES; // alias
+    public static final String NAME_LOWID_USERS = NAME_LOWIDUSERS; // alias
+    public static final String NAME_UDP_FLAGS = NAME_UDPFLAGS; // alias
+    public static final String NAME_UDP_KEY = NAME_UDPKEY; // alias
+    public static final String NAME_UDP_KEY_IP = NAME_UDPKEYIP; // alias
+    public static final String NAME_TCP_OBFUSCATION_PORT = NAME_TCPPORTOBFUSCATION; // alias
+    public static final String NAME_UDP_OBFUSCATION_PORT = NAME_UDPPORTOBFUSCATION; // alias
+
+
     public void write(ByteBuffer buf) {
         boolean isId = name.length() == 1;
         if (isId) {
@@ -114,7 +80,6 @@ public record Tag(byte type, String name, Object value) {
             buf.put(nameBytes);
         }
 
-        // Write value
         switch (type) {
             case TYPE_STRING -> {
                 byte[] valBytes = ((String) value).getBytes(StandardCharsets.UTF_8);
@@ -131,7 +96,7 @@ public record Tag(byte type, String name, Object value) {
             }
             case TYPE_HASH -> {
                 byte[] hash = (byte[]) value;
-                buf.put(hash); // 16 bytes assumed
+                buf.put(hash);
             }
             case TYPE_INT16 -> buf.putShort(((Number) value).shortValue());
             case TYPE_INT8 -> buf.put(((Number) value).byteValue());
@@ -139,12 +104,6 @@ public record Tag(byte type, String name, Object value) {
         }
     }
 
-    /**
-     * Reads a single tag from a {@link ByteBuffer}.
-     *
-     * @param buf The buffer to read from.
-     * @return A new {@link Tag} instance.
-     */
     public static Tag read(ByteBuffer buf) {
         byte rawType = buf.get();
         boolean isId = (rawType & 0x80) != 0;
@@ -189,12 +148,6 @@ public record Tag(byte type, String name, Object value) {
         return new Tag(type, name, value);
     }
 
-    /**
-     * Reads a list of tags from a {@link ByteBuffer} (prefixed by a 4-byte count).
-     *
-     * @param buf The buffer to read from.
-     * @return A list of tags.
-     */
     public static List<Tag> readList(ByteBuffer buf) {
         int count = buf.getInt();
         List<Tag> tags = new ArrayList<>(count);
@@ -204,12 +157,6 @@ public record Tag(byte type, String name, Object value) {
         return tags;
     }
 
-    /**
-     * Writes a list of tags into a {@link ByteBuffer} (prefixed by a 4-byte count).
-     *
-     * @param buf  The buffer to write into.
-     * @param tags The list of tags to serialize.
-     */
     public static void writeList(ByteBuffer buf, List<Tag> tags) {
         buf.putInt(tags.size());
         for (Tag tag : tags) {
