@@ -49,10 +49,10 @@ class ServerTagsTest {
 
         InetAddress remote = InetAddress.getByName("127.0.0.1");
 
-        // Build UDP OP_SERVER_DESC_REQ (0x95) payload
+        // Build UDP OP_SERVER_DESC_REQ (0xA2) payload
         byte[] req = new byte[2];
         req[0] = Packet.PROTOCOL_ED2K;
-        req[1] = (byte) 0x95;
+        req[1] = (byte) 0xA2;
 
         DatagramPacket dp = new DatagramPacket(req, req.length, remote, 40000);
         CapturingDatagramSocket cds = new CapturingDatagramSocket();
@@ -67,7 +67,7 @@ class ServerTagsTest {
         int len = response.getLength();
 
         assertEquals(Packet.PROTOCOL_ED2K, data[0]);
-        assertEquals((byte) 0x95, data[1]);
+        assertEquals((byte) 0xA3, data[1]);
 
         // Parse response: [Protocol 1] [Opcode 1] [Port 2] [IP 4] [Tags...]
         ByteBuffer buf = ByteBuffer.wrap(data, 0, len).order(ByteOrder.LITTLE_ENDIAN);
