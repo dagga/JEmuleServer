@@ -55,6 +55,7 @@ public record Tag(byte type, String name, Object value) {
 
     // Backward-compatible aliases for older naming conventions (underscored names)
     public static final String NAME_NAME = NAME_SERVERNAME; // alias for NAME_SERVERNAME
+    public static final String NAME_NICK = NAME_SERVERNAME; // alias for client nickname (ST_CLIENTNAME = 0x01)
     public static final String NAME_MAX_USERS = NAME_MAXUSERS; // alias for NAME_MAXUSERS
     public static final String NAME_MAX_FILES = NAME_HARDFILES; // alias for hard files count
     public static final String NAME_MAXFILES = NAME_HARDFILES; // alternate alias used in older code
