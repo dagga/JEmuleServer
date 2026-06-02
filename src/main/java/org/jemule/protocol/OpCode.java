@@ -38,6 +38,7 @@ public enum OpCode {
     PUBLISH_FILES((byte) 0x20),
     QUERY_MORE_RESULT((byte) 0x21), // OP_QUERY_MORE_RESULT (Client -> Server)
     PUBLISH_ACK((byte) 0x22),       // (Server -> Client)
+    CALLBACK_REQUEST((byte) 0x1C),
     CALLBACK((byte) 0x99),
 
     // eMule Protocol (0xC5) Extensions

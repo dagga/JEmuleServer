@@ -34,7 +34,7 @@ public class PacketProcessor {
             case PUBLISH_FILES, OFFER_FILES -> publishHandler.handlePublish(context, op, p.data(), out);
             case GET_SOURCES, GET_SOURCES_OBFU -> sourceHandler.handleGetSources(context, p, out);
             case EMULE_INFO -> handleEmuleInfo(context, p.data(), out);
-            case CALLBACK -> sourceHandler.handleCallback(context, p.data(), out);
+            case CALLBACK_REQUEST -> sourceHandler.handleCallback(context, p.data(), out);
             case COMPRESSED_PART -> handleCompressedPart(context, p.data(), out);
             case FOUND_SOURCES, SOURCES_RESULT_OBFU -> handleSourcesResult(context, p, out);
             case GET_SERVER_LIST -> sendServerList(context, out);
