@@ -49,10 +49,13 @@ public class PublishHandler {
                     String type = "";
 
                     for (Tag t : tags) {
-                        switch (t.name()) {
-                            case Tag.NAME_NAME -> name = (String) t.value();
-                            case "\u0002" -> size = ((Number) t.value()).longValue(); // ID_FILESIZE
-                            case "\u0003" -> type = (String) t.value(); // ID_FILETYPE
+                        // Replaced switch with if-else if to avoid "constant string expression required" error
+                        if (t.name().equals(Tag.NAME_FILENAME)) {
+                            name = (String) t.value();
+                        } else if (t.name().equals(Tag.NAME_FILESIZE)) {
+                            size = ((Number) t.value()).longValue();
+                        } else if (t.name().equals(Tag.NAME_FILETYPE)) {
+                            type = (String) t.value();
                         }
                     }
 

@@ -84,14 +84,14 @@ public class SearchHandler {
             itemBuf.putShort((short) 0); // Port
 
             List<Tag> tags = new ArrayList<>();
-            tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_NAME, m.name()));
+            tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_FILENAME, m.name())); // Corrected tag name
             if (m.size() > Integer.MAX_VALUE) {
-                tags.add(new Tag(Tag.TYPE_INTEGER, "\u0002", (int) (m.size() & 0xFFFFFFFFL))); // Low 32 bits
-                tags.add(new Tag(Tag.TYPE_INTEGER, "\u003A", (int) (m.size() >> 32))); // ID_FILESIZE_HIGH
+                tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_FILESIZE, (int) (m.size() & 0xFFFFFFFFL))); // Corrected tag name
+                tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_FILESIZE_HI, (int) (m.size() >> 32))); // Corrected tag name
             } else {
-                tags.add(new Tag(Tag.TYPE_INTEGER, "\u0002", (int) m.size())); // ID_FILESIZE
+                tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_FILESIZE, (int) m.size())); // Corrected tag name
             }
-            tags.add(new Tag(Tag.TYPE_STRING, "\u0003", m.type())); // ID_FILETYPE
+            tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_FILETYPE, m.type())); // Corrected tag name
             tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, m.sources().size())); // Ajout du nombre de sources
 
             Tag.writeList(itemBuf, tags);

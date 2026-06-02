@@ -73,13 +73,13 @@ public record Packet(byte protocol, byte opcode, byte[] data) {
 
         ByteBuffer buf = ByteBuffer.wrap(header).order(ByteOrder.LITTLE_ENDIAN);
         byte protocol = buf.get();
-        int length = buf.getInt();
+        int length = buf.getInt(); // This length now represents the payload size only
         byte opcode = buf.get();
 
-        if (length < 1 || length > maxPacketSize)
+        if (length < 0 || length > maxPacketSize) // Length can be 0 for empty payloads
             throw new IOException("Invalid packet length: " + length);
 
-        int payloadLength = length - 1;
+        int payloadLength = length; // Corrected: length is already the payload size
         byte[] payload = in.readNBytes(payloadLength);
         if (payload.length < payloadLength) {
             // Build a short hex preview of what we did receive for diagnostics
@@ -112,7 +112,7 @@ public record Packet(byte protocol, byte opcode, byte[] data) {
 
         ByteBuffer buf = ByteBuffer.allocate(HEADER_SIZE + payload.length).order(ByteOrder.LITTLE_ENDIAN);
         buf.put(proto);
-        buf.putInt(payload.length + 1);
+        buf.putInt(payload.length); // Corrected: length is now just the payload size
         buf.put(opcode);
         buf.put(payload);
         out.write(buf.array());
@@ -125,13 +125,13 @@ public record Packet(byte protocol, byte opcode, byte[] data) {
                 if (i < bytes.length - 1) sb.append(' ');
             }
             log.debug("Sent packet proto=0x{} opcode=0x{} len={} bytes={}{}",
-                    String.format("%02X", proto & 0xFF), String.format("%02X", opcode & 0xFF), payload.length + 1,
+                    String.format("%02X", proto & 0xFF), String.format("%02X", opcode & 0xFF), payload.length,
                     sb, bytes.length > 256 ? " ..." : "");
 
             // Also append to a debug file for easier collection (non-fatal on error)
             try {
                 String line = java.time.Instant.now().toString() + " " +
-                        String.format("proto=0x%02X opcode=0x%02X len=%d ", proto & 0xFF, opcode & 0xFF, payload.length + 1) + sb + System.lineSeparator();
+                        String.format("proto=0x%02X opcode=0x%02X len=%d ", proto & 0xFF, opcode & 0xFF, payload.length) + sb + System.lineSeparator();
                 java.nio.file.Path p = java.nio.file.Path.of("build/packet-debug.log");
                 java.nio.file.Files.createDirectories(p.getParent() != null ? p.getParent() : java.nio.file.Path.of("build"));
                 java.nio.file.Files.writeString(p, line, java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.APPEND);
