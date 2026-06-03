@@ -365,7 +365,8 @@ public class Server {
             tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_TCP_OBFUSCATION_PORT, config.port()));
             tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_UDPPORTOBFUSCATION, config.port()));
 
-            ByteBuffer resp = ByteBuffer.allocate(2048).order(ByteOrder.LITTLE_ENDIAN);
+            // Respond with the port, public IP and a Tag list (legacy format used by many servers/clients)
+            ByteBuffer resp = ByteBuffer.allocate(4096).order(ByteOrder.LITTLE_ENDIAN);
             resp.put(Packet.PROTOCOL_ED2K);
             resp.put((byte) 0xA3); // OP_SERVER_DESC_RES
             resp.putShort((short) config.port());
