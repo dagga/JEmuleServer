@@ -11,6 +11,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
+import java.net.InetAddress;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -76,6 +79,28 @@ public class LoginHandler {
 
         sendServerStatus(context, out);
         sendAskSharedFiles(context, out);
+
+        // Try to parse client's listening UDP/TCP port from the initial login packet and proactively send a UDP GLOBSERVSTATRES
+        int clientUdpPort = -1;
+        try {
+            ByteBuffer inBuf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN);
+            if (inBuf.remaining() >= 22) { // 16(hash) + 4(id) + 2(port)
+                byte[] clientHash = new byte[16];
+                inBuf.get(clientHash);
+                int idFromPacket = inBuf.getInt();
+                clientUdpPort = Short.toUnsignedInt(inBuf.getShort());
+                log.info("Parsed client listening port from login packet: {} (id from packet: {})", clientUdpPort, Integer.toUnsignedString(idFromPacket));
+            } else {
+                log.debug("Login packet too short to extract client listening port (len={})", inBuf.remaining());
+            }
+        } catch (Exception e) {
+            log.debug("Failed to parse client listening port from login packet: {}", e.getMessage());
+        }
+
+        if (clientUdpPort > 0) {
+            // Send a UDP GLOBSERVSTATRES with challenge == 0 which clients commonly accept when no challenge was issued
+            sendUdpStatusToClient(context, context.getSocket().getInetAddress(), clientUdpPort);
+        }
 
         try {
             Thread.sleep(100);
@@ -203,6 +228,93 @@ public class LoginHandler {
             log.debug("Also sent ASK_SHARED_FILES as ED2K for compatibility");
         } catch (Exception e) {
             log.debug("Failed to send fallback ED2K ASK_SHARED_FILES: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Proactively send a UDP GLOBSERVSTATRES and SERVER_DESC_RES to the given client address/port.
+     * Attempts to use the server's bound UDP socket(s) (so source port is 4661/4665) for better NAT compatibility.
+     */
+    private void sendUdpStatusToClient(ClientContext context, java.net.InetAddress addr, int port) {
+        // Build OP_GLOBSERVSTATRES
+        try {
+            ByteBuffer resp = ByteBuffer.allocate(22).order(ByteOrder.LITTLE_ENDIAN);
+            resp.put(Packet.PROTOCOL_ED2K);
+            resp.put((byte) 0x97); // OP_GLOBSERVSTATRES
+            resp.putInt(0); // challenge == 0 (unsolicited)
+            resp.putInt(context.getRegistry().size());
+            resp.putInt(context.getFileIndex().fileCount());
+            resp.putInt(context.getConfig().maxUsers());
+            resp.putInt(context.getConfig().maxFiles());
+            resp.flip();
+            byte[] globOut = new byte[resp.remaining()];
+            resp.get(globOut);
+
+            boolean sent = Server.sendUdpFromBoundPort(context.getConfig().port(), globOut, addr, port);
+            if (!sent && context.getConfig().port() <= 0xFFFF - 4) sent = Server.sendUdpFromBoundPort(context.getConfig().port() + 4, globOut, addr, port);
+            if (!sent) {
+                try (java.net.DatagramSocket ds = new java.net.DatagramSocket()) {
+                    java.net.DatagramPacket dp = new java.net.DatagramPacket(globOut, globOut.length, addr, port);
+                    ds.send(dp);
+                    log.info("Fallback: Sent UDP GLOBSERVSTATRES from ephemeral socket to {}:{}", addr.getHostAddress(), port);
+                } catch (Exception e) {
+                    log.debug("Failed to send UDP status to client {}:{} - {}", addr, port, e.getMessage());
+                }
+            } else {
+                log.info("Sent UDP GLOBSERVSTATRES to {}:{} via bound socket", addr.getHostAddress(), port);
+            }
+
+            // Build OP_SERVER_DESC_RES and send it as well
+            String sName = "JEmuleServer (https://github.com/dagga/JEmuleServer/)";
+            String sVersion = Main.ESERVER_VERSION;
+            String sDesc = "Experimental eMule Server";
+            int maxFiles = context.getConfig().maxFiles();
+            int maxUsers = context.getConfig().maxUsers();
+
+            java.util.List<org.jemule.protocol.Tag> tags = new java.util.ArrayList<>();
+            tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_STRING, org.jemule.protocol.Tag.NAME_SERVERNAME, sName));
+            tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_STRING, org.jemule.protocol.Tag.NAME_DESCRIPTION, sDesc));
+            tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_STRING, org.jemule.protocol.Tag.NAME_VERSION, sVersion));
+            tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_MAXUSERS, maxUsers));
+            tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_MAXFILES, maxFiles));
+            tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_MAX_USERS_V2, maxUsers));
+            tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_SOFT_FILES, maxFiles));
+            tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_HARD_FILES, maxFiles));
+            tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_PREFERENCE, 0));
+            tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_EMULE_VERSION, 0x3C));
+            tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_TCP_FLAGS, 0x01 | 0x08 | 0x10 | 0x80 | 0x100 | 0x400));
+            tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_SERVER_VERSION, 0x3C));
+            tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_LOWID_USERS, context.getRegistry().lowIdCount()));
+            tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_UDP_FLAGS, 0x01 | 0x08 | 0x10 | 0x100 | 0x400));
+            tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_UDP_KEY, org.jemule.network.Server.getUdpKey()));
+            tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_UDP_KEY_IP, ClientState.ipToInt(context.getSocket().getLocalAddress())));
+            tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_TCP_OBFUSCATION_PORT, context.getConfig().port()));
+            tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_UDPPORTOBFUSCATION, context.getConfig().port()));
+
+            ByteBuffer descBuf = ByteBuffer.allocate(2048).order(ByteOrder.LITTLE_ENDIAN);
+            descBuf.put(Packet.PROTOCOL_ED2K);
+            descBuf.put((byte) 0xA3); // OP_SERVER_DESC_RES
+            descBuf.putShort((short) context.getConfig().port());
+            descBuf.putInt(ClientState.ipToInt(context.getSocket().getLocalAddress()));
+            org.jemule.protocol.Tag.writeList(descBuf, tags);
+            descBuf.flip();
+            byte[] descOut = new byte[descBuf.remaining()];
+            descBuf.get(descOut);
+
+            boolean descSent = Server.sendUdpFromBoundPort(context.getConfig().port(), descOut, addr, port);
+            if (!descSent && context.getConfig().port() <= 0xFFFF - 4) descSent = Server.sendUdpFromBoundPort(context.getConfig().port() + 4, descOut, addr, port);
+            if (!descSent) {
+                try (java.net.DatagramSocket ds2 = new java.net.DatagramSocket()) {
+                    ds2.send(new java.net.DatagramPacket(descOut, descOut.length, addr, port));
+                    log.info("Fallback: Sent UDP SERVER_DESC_RES from ephemeral socket to {}:{}", addr.getHostAddress(), port);
+                } catch (Exception e) {
+                    log.debug("Failed to send UDP server description to {}:{} - {}", addr, port, e.getMessage());
+                }
+            } else {
+                log.info("Sent UDP SERVER_DESC_RES to {}:{} via bound socket", addr.getHostAddress(), port);
+            }
+        } catch (Exception e) {
+            log.debug("Failed to build/send SERVER_DESC_RES: {}", e.getMessage());
         }
     }
 }

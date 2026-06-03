@@ -60,8 +60,30 @@ public class Server {
     private final DatabaseManager db;
     private static final int GLOBAL_UDP_KEY = new java.util.Random().nextInt();
 
+    // Map of UDP sockets bound by startUdpResponder so other components can send via the same source port
+    private static final java.util.concurrent.ConcurrentHashMap<Integer, java.net.DatagramSocket> boundUdpSockets = new java.util.concurrent.ConcurrentHashMap<>();
+
     public static int getUdpKey() {
         return GLOBAL_UDP_KEY;
+    }
+
+    /**
+     * Send a UDP packet using a previously-bound DatagramSocket for the given local port.
+     * Returns true if the packet was sent, false if no bound socket was available or send failed.
+     */
+    public static boolean sendUdpFromBoundPort(int localPort, byte[] data, InetAddress destAddr, int destPort) {
+        java.net.DatagramSocket ds = boundUdpSockets.get(localPort);
+        if (ds == null) {
+            log.debug("No bound UDP socket for local port {}", localPort);
+            return false;
+        }
+        try {
+            ds.send(new java.net.DatagramPacket(data, data.length, destAddr, destPort));
+            return true;
+        } catch (IOException e) {
+            log.debug("Failed to send UDP from bound port {} to {}:{} - {}", localPort, destAddr, destPort, e.getMessage());
+            return false;
+        }
     }
 
     private final EventManager eventManager;
@@ -240,6 +262,9 @@ public class Server {
                             log.info("UDP Responder listening on port {} (IPv4 wildcard)", bindPort);
                         }
 
+                        // Register bound socket so other threads can send via the same source port
+                        boundUdpSockets.put(bindPort, ds);
+
                         ds.setSoTimeout(1000);
                         byte[] buf = new byte[4096];
                         while (running) {
@@ -262,7 +287,10 @@ public class Server {
                             }
                         }
                     } finally {
-                        if (ds != null && !ds.isClosed()) ds.close();
+                        if (ds != null) {
+                            boundUdpSockets.remove(bindPort, ds);
+                            if (!ds.isClosed()) ds.close();
+                        }
                     }
                 }
             });
