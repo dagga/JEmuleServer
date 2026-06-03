@@ -41,6 +41,7 @@ import java.nio.ByteOrder;
 import java.sql.SQLException;
 import java.util.Collections;
 import java.util.List;
+import java.util.Arrays;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -311,6 +312,8 @@ public class Server {
         }
         if (p.getLength() < 2) return;
         byte[] data = p.getData();
+        byte[] recv = java.util.Arrays.copyOfRange(data, 0, p.getLength());
+        log.info("UDP recv {} bytes from {}:{} - {}", p.getLength(), p.getAddress(), p.getPort(), hex(recv, recv.length));
         if ((data[0] & 0xFF) != (Packet.PROTOCOL_ED2K & 0xFF)) return;
 
         // Spec says UDP packets are: [Protocol] [Opcode] [Data...]
@@ -331,52 +334,21 @@ public class Server {
             resp.putInt(fileIndex.fileCount());
             resp.putInt(config.maxUsers());
             resp.putInt(config.maxFiles());
+            resp.flip();
+            byte[] outStat = new byte[resp.remaining()];
+            resp.get(outStat);
+            log.info("UDP send (STAT) {} bytes to {}:{} - {}", outStat.length, p.getAddress(), p.getPort(), hex(outStat, outStat.length));
+            ds.send(new java.net.DatagramPacket(outStat, outStat.length, p.getAddress(), p.getPort()));
 
-            ds.send(new java.net.DatagramPacket(resp.array(), resp.position(), p.getAddress(), p.getPort()));
+            // Not sending server description here to avoid race with subsequent UDP requests (e.g. GET_SOURCES)
+            // If needed, client should request OP_SERVER_DESC_REQ (0xA2) which is handled below.
         } else if (opcode == (byte) 0xA2) { // OP_SERVER_DESC_REQ
             if (p.getLength() < 2) return;
             log.debug("UDP Description Request from {}", p.getAddress());
 
-            String sName = "JEmuleServer (https://github.com/dagga/JEmuleServer/)";
-            String sVersion = Main.ESERVER_VERSION;
-            String sDesc = "NoPedo eMule Server";
-
-            int maxFiles = config.maxFiles();
-            int maxUsers = config.maxUsers();
-
-            java.util.List<org.jemule.protocol.Tag> tags = new java.util.ArrayList<>();
-            tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_STRING, org.jemule.protocol.Tag.NAME_SERVERNAME, sName));
-            tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_STRING, org.jemule.protocol.Tag.NAME_DESCRIPTION, sDesc));
-            tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_STRING, org.jemule.protocol.Tag.NAME_VERSION, sVersion));
-            tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_MAXUSERS, maxUsers));
-            tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_MAXFILES, maxFiles));
-            tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_MAX_USERS_V2, maxUsers));
-            tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_SOFT_FILES, maxFiles));
-            tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_HARD_FILES, maxFiles));
-            tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_PREFERENCE, 0));
-            tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_EMULE_VERSION, 0x3C));
-            tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_TCP_FLAGS, 0x01 | 0x08 | 0x10 | 0x80 | 0x100 | 0x400));
-            tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_SERVER_VERSION, 0x3C));
-            tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_LOWID_USERS, registry.lowIdCount()));
-            tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_UDP_FLAGS, 0x01 | 0x08 | 0x10 | 0x100 | 0x400));
-            tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_UDP_KEY, getUdpKey()));
-            tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_UDP_KEY_IP,
-                    ClientState.ipToInt(publicIp)));
-            tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_TCP_OBFUSCATION_PORT, config.port()));
-            tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_UDPPORTOBFUSCATION, config.port()));
-
-            // Respond with the port, public IP and a Tag list (legacy format used by many servers/clients)
-            ByteBuffer resp = ByteBuffer.allocate(4096).order(ByteOrder.LITTLE_ENDIAN);
-            resp.put(Packet.PROTOCOL_ED2K);
-            resp.put((byte) 0xA3); // OP_SERVER_DESC_RES
-            resp.putShort((short) config.port());
-            resp.putInt(ClientState.ipToInt(publicIp));
-            org.jemule.protocol.Tag.writeList(resp, tags);
-            resp.flip();
-
-            byte[] outBuf = new byte[resp.remaining()];
-            resp.get(outBuf);
-            ds.send(new java.net.DatagramPacket(outBuf, outBuf.length, p.getAddress(), p.getPort()));
+            byte[] outDesc = buildServerDescPacket();
+            log.info("UDP send (DESC) {} bytes to {}:{} - {}", outDesc.length, p.getAddress(), p.getPort(), hex(outDesc, outDesc.length));
+            ds.send(new java.net.DatagramPacket(outDesc, outDesc.length, p.getAddress(), p.getPort()));
         } else if (opcode == (byte) 0x9A) { // OP_GLOBGETSOURCES
             if (p.getLength() < 18) return;
             log.debug("UDP Source Request from {}", p.getAddress());
@@ -429,6 +401,7 @@ public class Server {
             }
 
             byte[] outBuf = baos.toByteArray();
+            log.info("UDP send (SRCS) {} bytes to {}:{} - {}", outBuf.length, p.getAddress(), p.getPort(), hex(outBuf, outBuf.length));
             ds.send(new java.net.DatagramPacket(outBuf, outBuf.length, p.getAddress(), p.getPort()));
 
             // If there are IPv6-only sources, send a separate IPv6 response packet (new opcode 0x9C)
@@ -450,9 +423,60 @@ public class Server {
                     }
                     v6buf.putShort((short) s.port());
                 }
+                log.info("UDP send (SRCS_V6) {} bytes to {}:{} - {}", v6buf.position(), p.getAddress(), p.getPort(), hex(v6buf.array(), v6buf.position()));
                 ds.send(new java.net.DatagramPacket(v6buf.array(), v6buf.position(), p.getAddress(), p.getPort()));
             }
         }
+    }
+
+    // Hex dump helper for UDP debugging
+    private static String hex(byte[] data, int len) {
+        StringBuilder sb = new StringBuilder(len * 3);
+        for (int i = 0; i < Math.min(len, data.length); i++) {
+            sb.append(String.format("%02x ", data[i] & 0xFF));
+        }
+        return sb.toString().trim();
+    }
+
+    private byte[] buildServerDescPacket() {
+        String sName = "JEmuleServer (https://github.com/dagga/JEmuleServer/)";
+        String sVersion = Main.ESERVER_VERSION;
+        String sDesc = "NoPedo eMule Server";
+
+        int maxFiles = config.maxFiles();
+        int maxUsers = config.maxUsers();
+
+        java.util.List<org.jemule.protocol.Tag> tags = new java.util.ArrayList<>();
+        tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_STRING, org.jemule.protocol.Tag.NAME_SERVERNAME, sName));
+        tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_STRING, org.jemule.protocol.Tag.NAME_DESCRIPTION, sDesc));
+        tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_STRING, org.jemule.protocol.Tag.NAME_VERSION, sVersion));
+        tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_MAXUSERS, maxUsers));
+        tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_MAXFILES, maxFiles));
+        tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_MAX_USERS_V2, maxUsers));
+        tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_SOFT_FILES, maxFiles));
+        tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_HARD_FILES, maxFiles));
+        tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_PREFERENCE, 0));
+        tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_EMULE_VERSION, 0x3C));
+        tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_TCP_FLAGS, 0x01 | 0x08 | 0x10 | 0x80 | 0x100 | 0x400));
+        tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_SERVER_VERSION, 0x3C));
+        tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_LOWID_USERS, registry.lowIdCount()));
+        tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_UDP_FLAGS, 0x01 | 0x08 | 0x10 | 0x100 | 0x400));
+        tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_UDP_KEY, getUdpKey()));
+        tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_UDP_KEY_IP, ClientState.ipToInt(publicIp)));
+        tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_TCP_OBFUSCATION_PORT, config.port()));
+        tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_UDPPORTOBFUSCATION, config.port()));
+
+        ByteBuffer resp = ByteBuffer.allocate(4096).order(ByteOrder.LITTLE_ENDIAN);
+        resp.put(Packet.PROTOCOL_ED2K);
+        resp.put((byte) 0xA3);
+        resp.putShort((short) config.port());
+        resp.putInt(ClientState.ipToInt(publicIp));
+        org.jemule.protocol.Tag.writeList(resp, tags);
+        resp.flip();
+
+        byte[] outBuf = new byte[resp.remaining()];
+        resp.get(outBuf);
+        return outBuf;
     }
 
     /**
