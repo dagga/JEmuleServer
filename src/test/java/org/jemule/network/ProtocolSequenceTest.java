@@ -114,15 +114,19 @@ class ProtocolSequenceTest {
         Packet p1 = Packet.read(in, 4096);
         Packet p2 = Packet.read(in, 4096);
         Packet p3 = Packet.read(in, 4096);
-        Packet p4 = Packet.read(in, 4096);
-        Packet p5 = Packet.read(in, 4096);
+        Packet p_status = Packet.read(in, 4096);
+        Packet p_ask1 = Packet.read(in, 4096);
+        Packet p_ask2 = Packet.read(in, 4096);
+        Packet p_welcome = Packet.read(in, 4096);
 
         assertEquals(OpCode.SERVER_MESSAGE.value, p_ver.opcode());
         assertEquals(OpCode.SERVER_IDENT.value, p1.opcode());
         assertEquals(OpCode.ID_CHANGE.value, p2.opcode());
         assertEquals(OpCode.LOGIN_ACCEPTED.value, p3.opcode());
-        assertEquals(OpCode.SERVER_MESSAGE.value, p4.opcode());
-        assertEquals(OpCode.SERVER_STATUS.value, p5.opcode());
+        assertEquals(OpCode.SERVER_STATUS.value, p_status.opcode());
+        assertEquals(OpCode.ASK_SHARED_FILES.value, p_ask1.opcode());
+        assertEquals(OpCode.ASK_SHARED_FILES.value, p_ask2.opcode());
+        assertEquals(OpCode.SERVER_MESSAGE.value, p_welcome.opcode());
     }
 
     @Test
