@@ -147,6 +147,8 @@ public class LoginHandler {
         String serverVersion = Main.ESERVER_VERSION;
         String desc = "Experimental eMule Server";
 
+        sendServerMessage(context, out, "Welcome to JEmuleServer! Running server version " + serverVersion);
+
         int maxFiles = context.getConfig().maxFiles();
         int maxUsers = context.getConfig().maxUsers();
 
@@ -163,7 +165,6 @@ public class LoginHandler {
         List<Tag> tags = new ArrayList<>();
         tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_SERVERNAME, serverName));
         tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_DESCRIPTION, desc));
-        tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_VERSION, serverVersion)); // CT_VERSION (string)
         // ST_VERSION as uint32: (major<<16) | minor when possible
         int serverVersionInt = 0x003C0000; // fallback (ED2K version in high word)
         try {
@@ -271,7 +272,7 @@ public class LoginHandler {
             byte[] nameBytes = sName.getBytes(java.nio.charset.StandardCharsets.UTF_8);
             byte[] descBytes = sDesc.getBytes(java.nio.charset.StandardCharsets.UTF_8);
 
-            ByteBuffer descBuf = ByteBuffer.allocate(4 + nameBytes.length + descBytes.length).order(ByteOrder.LITTLE_ENDIAN);
+            ByteBuffer descBuf = ByteBuffer.allocate(2 + 2 + nameBytes.length + 2 + descBytes.length).order(ByteOrder.LITTLE_ENDIAN);
             descBuf.put(Packet.PROTOCOL_ED2K);
             descBuf.put((byte) 0xA3); // OP_SERVER_DESC_RES (old format)
             descBuf.putShort((short) nameBytes.length);

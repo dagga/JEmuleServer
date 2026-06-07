@@ -323,17 +323,23 @@ public class Server {
             if (p.getLength() < 6) return;
             log.debug("UDP Status Request from {}", p.getAddress());
 
-            // Response: [Protocol] [Opcode] [Challenge 4] [UserCount 4] [FileCount 4] [MaxUsers 4] [MaxFiles 4]
-            // Standard UDP response does NOT have a size field.
+            // Response: [Protocol] [Opcode] [Challenge 4][UserCount 4][FileCount 4][MaxUsers 4][SoftFiles 4][HardFiles 4][UDPFlags 4][LowIDUsers 4][UDPPort 2][TCPPort 2][ServerKey 4]
+            // Note: eMule client expects a fixed structure for OP_GLOBSERVSTATRES (0x97)
 
-            ByteBuffer resp = ByteBuffer.allocate(22).order(ByteOrder.LITTLE_ENDIAN);
+            ByteBuffer resp = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN);
             resp.put(Packet.PROTOCOL_ED2K);
             resp.put((byte) 0x97); // OP_GLOBSERVSTATRES
             resp.put(data, 2, 4); // Echo challenge
             resp.putInt(registry.size());
             resp.putInt(fileIndex.fileCount());
             resp.putInt(config.maxUsers());
-            resp.putInt(config.maxFiles());
+            resp.putInt(config.maxFiles()); // SoftFiles
+            resp.putInt(config.maxFiles()); // HardFiles
+            resp.putInt(0x01 | 0x08 | 0x10 | 0x100 | 0x400); // UDPFlags (matching LoginHandler)
+            resp.putInt(registry.lowIdCount()); // LowIDUsers
+            resp.putShort((short) (config.port() + 4)); // UDPPort (standard is TCP+4)
+            resp.putShort((short) config.port()); // TCPPort
+            resp.putInt(getUdpKey()); // ServerKey
             resp.flip();
             byte[] outStat = new byte[resp.remaining()];
             resp.get(outStat);
@@ -441,7 +447,7 @@ public class Server {
     private byte[] buildServerDescPacket() {
         String sName = "JEmuleServer (https://github.com/dagga/JEmuleServer/)";
         String sVersion = Main.ESERVER_VERSION;
-        String sDesc = "NoPedo eMule Server";
+        String sDesc = "Experimental eMule Server";
 
         int maxFiles = config.maxFiles();
         int maxUsers = config.maxUsers();
