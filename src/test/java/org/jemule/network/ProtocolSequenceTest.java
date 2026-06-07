@@ -110,22 +110,19 @@ class ProtocolSequenceTest {
         loginHandler.handleLogin(ctx, initial, out);
 
         ByteArrayInputStream in = new ByteArrayInputStream(out.toByteArray());
+        Packet p_ver = Packet.read(in, 4096);
         Packet p1 = Packet.read(in, 4096);
         Packet p2 = Packet.read(in, 4096);
         Packet p3 = Packet.read(in, 4096);
         Packet p4 = Packet.read(in, 4096);
         Packet p5 = Packet.read(in, 4096);
-        Packet p6 = Packet.read(in, 4096);
-        Packet p7 = Packet.read(in, 4096);
 
+        assertEquals(OpCode.SERVER_MESSAGE.value, p_ver.opcode());
         assertEquals(OpCode.SERVER_IDENT.value, p1.opcode());
         assertEquals(OpCode.ID_CHANGE.value, p2.opcode());
         assertEquals(OpCode.LOGIN_ACCEPTED.value, p3.opcode());
         assertEquals(OpCode.SERVER_MESSAGE.value, p4.opcode());
         assertEquals(OpCode.SERVER_STATUS.value, p5.opcode());
-        // ASK_SHARED_FILES sent twice (EMULE then ED2K)
-        assertEquals(OpCode.ASK_SHARED_FILES.value, p6.opcode());
-        assertEquals(OpCode.ASK_SHARED_FILES.value, p7.opcode());
     }
 
     @Test

@@ -52,6 +52,9 @@ public class LoginHandler {
             }
         });
 
+        // Send server version FIRST on its own line for eMule auto-detection
+        sendServerMessage(context, out, "server version 17.15");
+
         sendServerIdent(context, out);
         
         // --- Corrected ID_CHANGE packet construction matching eMule's expectations ---
@@ -73,11 +76,6 @@ public class LoginHandler {
         sendServerMessage(context, out, "Welcome to " + Main.VERSION + " (JEmuleServer)\n" +
                 "Your ID is: " + Integer.toUnsignedString(clientId) + "\n" +
                 "Enjoy the extended protocol support!");
-
-        sendServerStatus(context, out);
-        sendAskSharedFiles(context, out);
-
-        sendServerMessage(context, out, "Welcome to JEmuleServer! Running server version " + Main.ESERVER_VERSION);
 
         // Try to parse client's listening UDP/TCP port from the initial login packet and proactively send a UDP GLOBSERVSTATRES
         int clientUdpPort = -1;
@@ -255,6 +253,10 @@ public class LoginHandler {
             int tcpPort = context.getConfig().port();
             int udpKey = Server.getUdpKey();
 
+            // UDP Flags matching eMule's expectations
+            // 0x01=EXT_GETSOURCES, 0x08=NEWTAGS, 0x10=UNICODE, 0x80=UDPOBFUSCATION, 0x100=TCPOBFUSCATION, 0x40=LARGEFILES
+            int udpFlags = 0x01 | 0x08 | 0x10 | 0x40 | 0x80 | 0x100;
+
             ByteBuffer resp = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN);
             resp.putInt(0); // challenge == 0 (unsolicited)
             resp.putInt(users);
@@ -262,7 +264,7 @@ public class LoginHandler {
             resp.putInt(maxUsers);
             resp.putInt(maxFiles); // SoftFiles
             resp.putInt(maxFiles); // HardFiles
-            resp.putInt(0x01 | 0x08 | 0x10 | 0x100 | 0x400); // UDPFlags
+            resp.putInt(udpFlags);
             resp.putInt(lowIdUsers);
             resp.putShort((short) udpPort);
             resp.putShort((short) tcpPort);

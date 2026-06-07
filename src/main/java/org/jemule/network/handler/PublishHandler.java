@@ -31,19 +31,27 @@ public class PublishHandler {
                 int count = buf.getInt();
                 log.info("Detected binary PUBLISH format with {} files", count);
                 for (int i = 0; i < count; i++) {
+                    if (buf.remaining() < 16) break;
                     byte[] hashBytes = new byte[16];
                     buf.get(hashBytes);
 
                     if (op == OpCode.OFFER_FILES) {
-                        buf.getInt();   // FileID
-                        buf.getShort(); // FilePort
+                        if (buf.remaining() < 6) break;
+                        buf.getInt();   // FileID / ClientID
+                        buf.getShort(); // FilePort / ClientPort
                     }
 
                     StringBuilder sb = new StringBuilder();
                     for (byte b : hashBytes) sb.append(String.format("%02x", b));
                     String hash = sb.toString();
 
-                    List<Tag> tags = Tag.readList(buf);
+                    List<Tag> tags = null;
+                    try {
+                        tags = Tag.readList(buf);
+                    } catch (Exception e) {
+                        log.warn("Failed to read tags for file {}: {}", i, e.getMessage());
+                        break;
+                    }
                     String name = "";
                     long size = 0;
                     String type = "";
