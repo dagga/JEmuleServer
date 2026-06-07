@@ -73,6 +73,9 @@ public class LoginHandler {
 
         log.info("Logged in ID: {} (Sent 0x41, 0x40 and 0x1B)", clientId);
 
+        sendServerStatus(context, out);
+        sendAskSharedFiles(context, out);
+
         sendServerMessage(context, out, "Welcome to " + Main.VERSION + " (JEmuleServer)\n" +
                 "Your ID is: " + Integer.toUnsignedString(clientId) + "\n" +
                 "Enjoy the extended protocol support!");
