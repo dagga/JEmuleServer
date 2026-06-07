@@ -160,15 +160,11 @@ public class LoginHandler {
         int maxFiles = context.getConfig().maxFiles();
         int maxUsers = context.getConfig().maxUsers();
 
-        // TCP capability flags matching eMule SRV_TCPFLG_ constants:
-        // 0x01 = COMPRESSION, 0x08 = NEWTAGS, 0x10 = UNICODE,
-        // 0x80 = TYPETAGINTEGER, 0x100 = LARGEFILES, 0x400 = TCPOBFUSCATION
-        int tcpFlags = 0x01 | 0x08 | 0x10 | 0x80 | 0x100 | 0x400;
+        // TCP capability flags matching eMule SRV_TCPFLG_ constants
+        int tcpFlags = Tag.TCPFLG_COMPRESSION | Tag.TCPFLG_NEWTAGS | Tag.TCPFLG_UNICODE | Tag.TCPFLG_TYPETAGINTEGER | Tag.TCPFLG_LARGEFILES | Tag.TCPFLG_TCPOBFUSCATION;
 
-        // UDP capability flags matching eMule SRV_UDPFLG_ constants:
-        // 0x01 = EXT_GETSOURCES, 0x08 = NEWTAGS, 0x10 = UNICODE,
-        // 0x40 = LARGEFILES, 0x80 = UDPOBFUSCATION, 0x100 = TCPOBFUSCATION
-        int udpFlags = 0x01 | 0x08 | 0x10 | 0x40 | 0x80 | 0x100;
+        // UDP capability flags matching eMule SRV_UDPFLG_ constants
+        int udpFlags = Tag.UDPFLG_EXT_GETSOURCES | Tag.UDPFLG_NEWTAGS | Tag.UDPFLG_UNICODE | Tag.UDPFLG_LARGEFILES | Tag.UDPFLG_UDPOBFUSCATION | Tag.UDPFLG_TCPOBFUSCATION;
 
         List<Tag> tags = new ArrayList<>();
         tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_SERVERNAME, serverName));
@@ -251,8 +247,7 @@ public class LoginHandler {
             int udpKey = Server.getUdpKey();
 
             // UDP Flags matching eMule's expectations (from server.h)
-            // 0x01=EXT_GETSOURCES, 0x08=NEWTAGS, 0x10=UNICODE, 0x100=LARGEFILES, 0x200=UDPOBFUSCATION, 0x400=TCPOBFUSCATION
-            int udpFlags = 0x01 | 0x08 | 0x10 | 0x100 | 0x200 | 0x400;
+            int udpFlags = Tag.UDPFLG_EXT_GETSOURCES | Tag.UDPFLG_NEWTAGS | Tag.UDPFLG_UNICODE | Tag.UDPFLG_LARGEFILES | Tag.UDPFLG_UDPOBFUSCATION | Tag.UDPFLG_TCPOBFUSCATION;
 
             ByteBuffer resp = ByteBuffer.allocate(40).order(ByteOrder.LITTLE_ENDIAN);
             resp.putInt(0); // challenge == 0 (unsolicited)

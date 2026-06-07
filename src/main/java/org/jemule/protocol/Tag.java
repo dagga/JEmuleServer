@@ -32,12 +32,28 @@ public record Tag(byte type, String name, Object value) {
     public static final String NAME_LASTPING = "\u0090"; // ST_LASTPING
     public static final String NAME_VERSION = "\u0011"; // CT_VERSION (client/server short version tag)
     public static final String NAME_UDPFLAGS = "\u0092"; // ST_UDPFLAGS
-    public static final String NAME_AUXPORTSLIST = "\u0093"; // ST_AUXPORTSLIST
     public static final String NAME_LOWIDUSERS = "\u0094"; // ST_LOWIDUSERS
     public static final String NAME_UDPKEY = "\u0095"; // ST_UDPKEY
     public static final String NAME_UDPKEYIP = "\u0096"; // ST_UDPKEYIP
     public static final String NAME_TCPPORTOBFUSCATION = "\u0097"; // ST_TCPPORTOBFUSCATION
     public static final String NAME_UDPPORTOBFUSCATION = "\u0098"; // ST_UDPPORTOBFUSCATION
+    public static final String NAME_AUXPORTSLIST = "\u0093"; // ST_AUXPORTSLIST
+    
+    // Capability flags (from server.h)
+    public static final int TCPFLG_COMPRESSION = 0x01;
+    public static final int TCPFLG_NEWTAGS = 0x08;
+    public static final int TCPFLG_UNICODE = 0x10;
+    public static final int TCPFLG_TYPETAGINTEGER = 0x80;
+    public static final int TCPFLG_LARGEFILES = 0x100;
+    public static final int TCPFLG_TCPOBFUSCATION = 0x400;
+
+    public static final int UDPFLG_EXT_GETSOURCES = 0x01;
+    public static final int UDPFLG_NEWTAGS = 0x08;
+    public static final int UDPFLG_UNICODE = 0x10;
+    public static final int UDPFLG_LARGEFILES = 0x100;
+    public static final int UDPFLG_UDPOBFUSCATION = 0x200;
+    public static final int UDPFLG_TCPOBFUSCATION = 0x400;
+    public static final int UDPFLG_EXT_GETSOURCES2 = 0x20; // Added for reference
 
     // File Tags (FT_ from opcodes.h)
     public static final String NAME_FILENAME = "\u0001"; // FT_FILENAME (Note: same as NAME_SERVERNAME)
