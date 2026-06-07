@@ -21,8 +21,8 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class ServerTagsTest {
 
-    private static final int TCP_FLAGS = 0x01 | 0x08 | 0x10 | 0x80 | 0x100 | 0x400;
-    private static final int UDP_FLAGS = 0x01 | 0x08 | 0x10 | 0x100 | 0x400;
+    private static final int TCP_FLAGS = 0x01 | 0x08 | 0x10 | 0x40 | 0x80 | 0x100;
+    private static final int UDP_FLAGS = 0x01 | 0x08 | 0x10 | 0x40 | 0x80 | 0x100;
 
     static class CapturingDatagramSocket extends java.net.DatagramSocket {
         public final List<DatagramPacket> sent = new java.util.ArrayList<>();
@@ -128,7 +128,7 @@ class ServerTagsTest {
 
         Tag auxTag = findTag(tags, Tag.NAME_SERVER_VERSION);
         assertNotNull(auxTag, "Missing NAME_SERVER_VERSION tag");
-        assertEquals(0x3C, (int) auxTag.value());
+        assertEquals((17 << 16) | 15, (int) auxTag.value());
 
         Tag lowIdTag = findTag(tags, Tag.NAME_LOWID_USERS);
         assertNotNull(lowIdTag, "Missing NAME_LOWID_USERS tag (newly added)");
@@ -195,16 +195,13 @@ class ServerTagsTest {
         assertEquals(0x01, 1 << 0, "SRV_TCPFLG_COMPRESSION");
         assertEquals(0x08, 1 << 3, "SRV_TCPFLG_NEWTAGS");
         assertEquals(0x10, 1 << 4, "SRV_TCPFLG_UNICODE");
-        assertEquals(0x80, 1 << 7, "SRV_TCPFLG_TYPETAGINTEGER");
-        assertEquals(0x100, 1 << 8, "SRV_TCPFLG_LARGEFILES");
-        assertEquals(0x400, 1 << 10, "SRV_TCPFLG_TCPOBFUSCATION");
+        assertEquals(0x40, 1 << 6, "SRV_TCPFLG_LARGEFILES");
+        assertEquals(0x80, 1 << 7, "SRV_TCPFLG_UDPOBFUSCATION");
+        assertEquals(0x100, 1 << 8, "SRV_TCPFLG_TCPOBFUSCATION");
 
         // The 0x04 bit (1<<2) is NOT used by any standard eMule flag
         // and must NOT be set
         assertTrue((TCP_FLAGS & 0x04) == 0, "Bit 0x04 must NOT be set (no standard eMule flag)");
-
-        // RELATEDSEARCH (0x40) must NOT be set since not implemented
-        assertTrue((TCP_FLAGS & 0x40) == 0, "Bit 0x40 (RELATEDSEARCH) must NOT be set");
     }
 
     @Test
@@ -212,11 +209,12 @@ class ServerTagsTest {
         assertEquals(0x01, 1 << 0, "SRV_UDPFLG_EXT_GETSOURCES");
         assertEquals(0x08, 1 << 3, "SRV_UDPFLG_NEWTAGS");
         assertEquals(0x10, 1 << 4, "SRV_UDPFLG_UNICODE");
-        assertEquals(0x100, 1 << 8, "SRV_UDPFLG_LARGEFILES");
-        assertEquals(0x400, 1 << 10, "SRV_UDPFLG_TCPOBFUSCATION");
+        assertEquals(0x40, 1 << 6, "SRV_UDPFLG_LARGEFILES");
+        assertEquals(0x80, 1 << 7, "SRV_UDPFLG_UDPOBFUSCATION");
+        assertEquals(0x100, 1 << 8, "SRV_UDPFLG_TCPOBFUSCATION");
 
         assertTrue((UDP_FLAGS & 0x02) == 0, "Bit 0x02 (EXT_GETFILES) must NOT be set");
         assertTrue((UDP_FLAGS & 0x20) == 0, "Bit 0x20 (EXT_GETSOURCES2) must NOT be set");
-        assertTrue((UDP_FLAGS & 0x200) == 0, "Bit 0x200 (UDPOBFUSCATION) must NOT be set");
+        assertTrue((UDP_FLAGS & 0x200) == 0, "Bit 0x200 (???) must NOT be set");
     }
 }
