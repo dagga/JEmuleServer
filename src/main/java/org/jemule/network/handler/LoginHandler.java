@@ -71,7 +71,7 @@ public class LoginHandler {
         loginAccepted.putInt(clientId);
         new Packet(Packet.PROTOCOL_ED2K, OpCode.LOGIN_ACCEPTED.value, loginAccepted.array()).write(out, state.isZlibSupported());
 
-        log.info("Logged in ID: {} (Sent 0x40 and 0x1B)", clientId);
+        log.info("Logged in ID: {} (Sent 0x41, 0x40 and 0x1B)", clientId);
 
         sendServerMessage(context, out, "Welcome to " + Main.VERSION + " (JEmuleServer)\n" +
                 "Your ID is: " + Integer.toUnsignedString(clientId) + "\n" +
@@ -79,6 +79,8 @@ public class LoginHandler {
 
         sendServerStatus(context, out);
         sendAskSharedFiles(context, out);
+
+        sendServerMessage(context, out, "Welcome to JEmuleServer! Running server version " + Main.ESERVER_VERSION);
 
         // Try to parse client's listening UDP/TCP port from the initial login packet and proactively send a UDP GLOBSERVSTATRES
         int clientUdpPort = -1;
@@ -146,8 +148,6 @@ public class LoginHandler {
         String serverName = "JEmuleServer (https://github.com/dagga/JEmuleServer/)";
         String serverVersion = Main.ESERVER_VERSION;
         String desc = "Experimental eMule Server";
-
-        sendServerMessage(context, out, "Welcome to JEmuleServer! Running server version " + serverVersion);
 
         int maxFiles = context.getConfig().maxFiles();
         int maxUsers = context.getConfig().maxUsers();

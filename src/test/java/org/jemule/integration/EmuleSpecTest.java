@@ -77,7 +77,7 @@ public class EmuleSpecTest {
             boolean versionFound = false;
             boolean identFound = false;
 
-            for (int i = 0; i < 5; i++) { // Lire quelques paquets
+            for (int i = 0; i < 10; i++) { // Lire plus de paquets car le message de version est envoyé plus tard
                 Packet p = Packet.read(in, 1024 * 1024);
                 if (p.protocol() == Packet.PROTOCOL_ED2K) {
                     if (p.opcode() == 0x38) { // SERVER_MESSAGE
