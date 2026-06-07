@@ -236,17 +236,35 @@ public class LoginHandler {
     private void sendUdpStatusToClient(ClientContext context, java.net.InetAddress addr, int port) {
         // Build OP_GLOBSERVSTATRES
         try {
-            ByteBuffer resp = ByteBuffer.allocate(22).order(ByteOrder.LITTLE_ENDIAN);
-            resp.put(Packet.PROTOCOL_ED2K);
-            resp.put((byte) 0x97); // OP_GLOBSERVSTATRES
+            int users = context.getRegistry().size();
+            int files = context.getFileIndex().fileCount();
+            int maxUsers = context.getConfig().maxUsers();
+            int maxFiles = context.getConfig().maxFiles();
+            int lowIdUsers = context.getRegistry().lowIdCount();
+            int udpPort = context.getConfig().port() + 4;
+            int tcpPort = context.getConfig().port();
+            int udpKey = Server.getUdpKey();
+
+            ByteBuffer resp = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN);
             resp.putInt(0); // challenge == 0 (unsolicited)
-            resp.putInt(context.getRegistry().size());
-            resp.putInt(context.getFileIndex().fileCount());
-            resp.putInt(context.getConfig().maxUsers());
-            resp.putInt(context.getConfig().maxFiles());
+            resp.putInt(users);
+            resp.putInt(files);
+            resp.putInt(maxUsers);
+            resp.putInt(maxFiles); // SoftFiles
+            resp.putInt(maxFiles); // HardFiles
+            resp.putInt(0x01 | 0x08 | 0x10 | 0x100 | 0x400); // UDPFlags
+            resp.putInt(lowIdUsers);
+            resp.putShort((short) udpPort);
+            resp.putShort((short) tcpPort);
+            resp.putInt(udpKey);
             resp.flip();
-            byte[] globOut = new byte[resp.remaining()];
-            resp.get(globOut);
+            byte[] globData = new byte[resp.remaining()];
+            resp.get(globData);
+
+            ByteBuffer udpPkt = ByteBuffer.allocate(globData.length + 1).order(ByteOrder.LITTLE_ENDIAN);
+            udpPkt.put((byte) 0x97);
+            udpPkt.put(globData);
+            byte[] globOut = udpPkt.array();
 
             boolean sent = Server.sendUdpFromBoundPort(context.getConfig().port(), globOut, addr, port);
             if (!sent && context.getConfig().port() <= 0xFFFF - 4) sent = Server.sendUdpFromBoundPort(context.getConfig().port() + 4, globOut, addr, port);
