@@ -59,6 +59,7 @@ public class ClientHandler implements Runnable, ClientContext {
     private final FakeFileDetector fakeFileDetector;
     private final EventManager eventManager;
     private final ClientFactory clientFactory;
+    private final Server server;
     private ClientState state;
     private boolean obfuscated = false;
     private OutputStream wrappedOut;
@@ -69,6 +70,10 @@ public class ClientHandler implements Runnable, ClientContext {
     private final PacketProcessor packetProcessor = new PacketProcessor();
 
     public ClientHandler(Socket socket, ServerConfig config, ClientRegistry registry, FileIndex fileIndex, FloodProtector floodProtector, FakeFileDetector fakeFileDetector, EventManager eventManager, ClientFactory clientFactory) {
+        this(socket, config, registry, fileIndex, floodProtector, fakeFileDetector, eventManager, clientFactory, null);
+    }
+
+    public ClientHandler(Socket socket, ServerConfig config, ClientRegistry registry, FileIndex fileIndex, FloodProtector floodProtector, FakeFileDetector fakeFileDetector, EventManager eventManager, ClientFactory clientFactory, Server server) {
         this.socket = socket;
         this.config = config;
         this.registry = registry;
@@ -77,6 +82,7 @@ public class ClientHandler implements Runnable, ClientContext {
         this.fakeFileDetector = fakeFileDetector;
         this.eventManager = eventManager;
         this.clientFactory = clientFactory;
+        this.server = server;
     }
 
     /**
@@ -202,6 +208,7 @@ public class ClientHandler implements Runnable, ClientContext {
     @Override public FakeFileDetector getFakeFileDetector() { return fakeFileDetector; }
     @Override public EventManager getEventManager() { return eventManager; }
     @Override public ClientFactory getClientFactory() { return clientFactory; }
+    @Override public Server getServer() { return server; }
     @Override public ClientState getState() { return state; }
     @Override public void setState(ClientState s) { this.state = s; }
     @Override public OutputStream getWrappedOut() { return wrappedOut; }

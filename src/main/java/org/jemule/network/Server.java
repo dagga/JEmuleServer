@@ -228,7 +228,7 @@ public class Server {
                         continue;
                     }
                     c.setTcpNoDelay(true);
-                    executor.submit(new ClientHandler(c, config, registry, fileIndex, floodProtector, fakeFileDetector, eventManager, clientFactory));
+                    executor.submit(new ClientHandler(c, config, registry, fileIndex, floodProtector, fakeFileDetector, eventManager, clientFactory, this));
                 } catch (java.net.SocketTimeoutException e) {
                     // Just a timeout, go back to loop start and check 'running'
                 } catch (IOException e) {

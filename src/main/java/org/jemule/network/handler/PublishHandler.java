@@ -131,7 +131,7 @@ public class PublishHandler {
                 }
             }
         } catch (Exception e) {
-            log.warn("Failed to parse PUBLISH_FILES: {}", HandlerUtils.sanitize(e.getMessage()));
+            log.warn("Failed to parse PUBLISH_FILES: {}", HandlerUtils.sanitize(e.getMessage()), e);
         }
 
         new Packet(Packet.PROTOCOL_ED2K, OpCode.PUBLISH_ACK.value, new byte[0]).write(out, context.getState().isZlibSupported());

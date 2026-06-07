@@ -32,8 +32,8 @@ Pour remplir ces informations, le serveur doit implémenter les opcodes suivants
 ##### A. Protocole TCP (Connexion initiale)
 - **`OP_SERVERIDENT` (0x41)** : Envoyé lors de la connexion.
     - Contenu : `[Hash 16 octets][IP 4 octets][Port 2 octets][TagCount 4 octets][Tags...]`
-    - Tags recommandés : `ST_SERVERNAME` (0x01, String), `ST_DESCRIPTION` (0x0B, String).
-    - Note : JEmuleServer envoie ce paquet au tout début de la séquence de login.
+    - Tags recommandés : `ST_SERVERNAME` (0x01, String), `ST_DESCRIPTION` (0x0B, String), `ST_TCP_FLAGS` (0x91, Int), `ST_UDP_FLAGS` (0x97, Int).
+    - Note : JEmuleServer envoie ce paquet au tout début de la séquence de login et utilise l'IP publique auto-détectée pour plus de compatibilité.
 - **`OP_SERVERMESSAGE` (0x38)** : Utilisé pour la version.
     - Le client cherche la chaîne `"server version "` suivie du numéro de version (ex: `17.15`). 
     - JEmuleServer envoie ce message ("Welcome to JEmuleServer! Running server version X.Y") à la fin du handshake pour permettre l'auto-détection.

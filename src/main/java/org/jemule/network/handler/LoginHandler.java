@@ -53,7 +53,7 @@ public class LoginHandler {
         });
 
         sendServerIdent(context, out);
-
+        
         // --- Corrected ID_CHANGE packet construction matching eMule's expectations ---
         // eMule's ServerSocket.cpp expects: <NEW_ID 4>[<server_flags 4>]
         // Flags: 0x01=COMPRESSION, 0x08=NEWTAGS, 0x10=UNICODE, 0x80=TYPETAGINTEGER, 0x100=LARGEFILES, 0x400=TCPOBFUSCATION
@@ -141,6 +141,16 @@ public class LoginHandler {
     private void sendServerIdent(ClientContext context, OutputStream out) throws IOException {
         byte[] hash = new byte[16];
         int portInt = context.getConfig().port();
+        InetAddress publicIp = null;
+        if (context.getServer() != null) {
+            publicIp = context.getServer().getPublicIp();
+        } else {
+            try {
+                publicIp = InetAddress.getLocalHost();
+            } catch (Exception e) {
+                publicIp = InetAddress.getLoopbackAddress();
+            }
+        }
 
         String serverName = "JEmuleServer (https://github.com/dagga/JEmuleServer/)";
         String serverVersion = Main.ESERVER_VERSION;
@@ -179,14 +189,14 @@ public class LoginHandler {
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_LOWIDUSERS, context.getRegistry().lowIdCount())); // ST_LOWIDUSERS
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDPFLAGS, udpFlags)); // ST_UDPFLAGS
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDPKEY, org.jemule.network.Server.getUdpKey())); // ST_UDPKEY
-        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDPKEYIP, ClientState.ipToInt(context.getSocket().getLocalAddress()))); // ST_UDPKEYIP
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDPKEYIP, ClientState.ipToInt(publicIp))); // ST_UDPKEYIP
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_TCPPORTOBFUSCATION, portInt)); // ST_TCPPORTOBFUSCATION
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDPPORTOBFUSCATION, portInt)); // ST_UDPPORTOBFUSCATION
 
         ByteBuffer buf = ByteBuffer.allocate(4096).order(ByteOrder.LITTLE_ENDIAN);
         buf.put(hash);
 
-        byte[] addr = context.getSocket().getLocalAddress().getAddress();
+        byte[] addr = publicIp.getAddress();
         if (addr.length == 4) {
             buf.put(addr);
         } else {

@@ -6,6 +6,7 @@ import org.jemule.core.ClientRegistry;
 import org.jemule.core.ClientState;
 import org.jemule.core.FileIndex;
 import org.jemule.core.event.EventManager;
+import org.jemule.network.Server;
 import org.jemule.security.FakeFileDetector;
 import org.jemule.security.FloodProtector;
 
@@ -22,6 +23,7 @@ public interface ClientContext {
     FakeFileDetector getFakeFileDetector();
     EventManager getEventManager();
     ClientFactory getClientFactory();
+    default Server getServer() { return null; }
 
     ClientState getState();
     void setState(ClientState state);
