@@ -250,11 +250,11 @@ public class LoginHandler {
             int tcpPort = context.getConfig().port();
             int udpKey = Server.getUdpKey();
 
-            // UDP Flags matching eMule's expectations
-            // 0x01=EXT_GETSOURCES, 0x08=NEWTAGS, 0x10=UNICODE, 0x80=UDPOBFUSCATION, 0x100=TCPOBFUSCATION, 0x40=LARGEFILES
-            int udpFlags = 0x01 | 0x08 | 0x10 | 0x40 | 0x80 | 0x100;
+            // UDP Flags matching eMule's expectations (from server.h)
+            // 0x01=EXT_GETSOURCES, 0x08=NEWTAGS, 0x10=UNICODE, 0x100=LARGEFILES, 0x200=UDPOBFUSCATION, 0x400=TCPOBFUSCATION
+            int udpFlags = 0x01 | 0x08 | 0x10 | 0x100 | 0x200 | 0x400;
 
-            ByteBuffer resp = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN);
+            ByteBuffer resp = ByteBuffer.allocate(40).order(ByteOrder.LITTLE_ENDIAN);
             resp.putInt(0); // challenge == 0 (unsolicited)
             resp.putInt(users);
             resp.putInt(files);
@@ -270,8 +270,9 @@ public class LoginHandler {
             byte[] globData = new byte[resp.remaining()];
             resp.get(globData);
 
-            ByteBuffer udpPkt = ByteBuffer.allocate(globData.length + 1).order(ByteOrder.LITTLE_ENDIAN);
-            udpPkt.put((byte) 0x97);
+            ByteBuffer udpPkt = ByteBuffer.allocate(globData.length + 2).order(ByteOrder.LITTLE_ENDIAN);
+            udpPkt.put(Packet.PROTOCOL_ED2K); // 0xE3
+            udpPkt.put((byte) 0x97); // OP_GLOBSERVSTATRES
             udpPkt.put(globData);
             byte[] globOut = udpPkt.array();
 

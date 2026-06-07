@@ -49,7 +49,7 @@ public class PublishHandler {
                     try {
                         tags = Tag.readList(buf);
                     } catch (Exception e) {
-                        log.warn("Failed to read tags for file {}: {}", i, e.getMessage());
+                        log.warn("Failed to read tags for file {}: {}", i, e.getClass().getSimpleName() + (e.getMessage() != null ? ": " + e.getMessage() : ""));
                         break;
                     }
                     String name = "";
