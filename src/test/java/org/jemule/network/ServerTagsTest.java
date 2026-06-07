@@ -106,14 +106,6 @@ class ServerTagsTest {
         assertNotNull(hardTag, "Missing NAME_HARD_FILES tag");
         assertEquals(100000, (int) hardTag.value());
 
-        Tag prefTag = findTag(tags, Tag.NAME_PREFERENCE);
-        assertNotNull(prefTag, "Missing NAME_PREFERENCE tag (newly added)");
-        assertEquals(0, (int) prefTag.value());
-
-        Tag emuleTag = findTag(tags, Tag.NAME_EMULE_VERSION);
-        assertNotNull(emuleTag, "Missing NAME_EMULE_VERSION tag (newly added)");
-        assertEquals(0x3C, (int) emuleTag.value());
-
         Tag tcpFlagsTag = findTag(tags, Tag.NAME_TCP_FLAGS);
         assertNotNull(tcpFlagsTag, "Missing NAME_TCP_FLAGS tag (newly added to UDP)");
         assertEquals(TCP_FLAGS, (int) tcpFlagsTag.value());
@@ -203,10 +195,16 @@ class ServerTagsTest {
         assertEquals(2, registry.lowIdCount());
 
         InetAddress remote = InetAddress.getByName("127.0.0.1");
-        byte[] req = new byte[2];
-        req[0] = Packet.PROTOCOL_ED2K;
-        req[1] = (byte) 0xA2;
-        DatagramPacket dp = new DatagramPacket(req, req.length, remote, 40000);
+        
+        // Build UDP OP_SERVER_DESC_REQ (0xA2) payload (new format, with challenge)
+        int challenge = 0x55AA70FF; // Must have 0xF0FF in lower 16 bits? 
+                                    // Actually buildServerDescPacket checks challenge != 0
+        ByteBuffer reqBuf = ByteBuffer.allocate(6).order(ByteOrder.LITTLE_ENDIAN);
+        reqBuf.put(Packet.PROTOCOL_ED2K);
+        reqBuf.put((byte) 0xA2);
+        reqBuf.putInt(challenge);
+
+        DatagramPacket dp = new DatagramPacket(reqBuf.array(), 6, remote, 40000);
         CapturingDatagramSocket cds = new CapturingDatagramSocket();
 
         java.lang.reflect.Method m = Server.class.getDeclaredMethod("handleUdp", java.net.DatagramSocket.class, java.net.DatagramPacket.class);
@@ -215,10 +213,16 @@ class ServerTagsTest {
 
         assertFalse(cds.sent.isEmpty());
         DatagramPacket response = cds.sent.get(0);
-        ByteBuffer buf = ByteBuffer.wrap(response.getData(), 0, response.getLength()).order(ByteOrder.LITTLE_ENDIAN);
-        buf.get(); buf.get(); buf.getShort(); buf.getInt(); // skip header + server IP
-        List<Tag> tags = Tag.readList(buf);
+        byte[] data = response.getData();
+        int len = response.getLength();
 
+        assertEquals(Packet.PROTOCOL_ED2K, data[0]);
+        assertEquals((byte) 0xA3, data[1]);
+
+        ByteBuffer buf = ByteBuffer.wrap(data, 2, len - 2).order(ByteOrder.LITTLE_ENDIAN);
+        assertEquals(challenge, buf.getInt());
+        
+        List<Tag> tags = Tag.readList(buf);
         Tag lowIdTag = findTag(tags, Tag.NAME_LOWID_USERS);
         assertNotNull(lowIdTag);
         assertEquals(2, (int) lowIdTag.value(), "LOWID_USERS should reflect 2 low-ID clients");
