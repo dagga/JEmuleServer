@@ -167,20 +167,14 @@ public class LoginHandler {
 
         // UDP capability flags matching eMule SRV_UDPFLG_ constants:
         // 0x01 = EXT_GETSOURCES, 0x08 = NEWTAGS, 0x10 = UNICODE,
-        // 0x100 = LARGEFILES, 0x400 = TCPOBFUSCATION
-        int udpFlags = 0x01 | 0x08 | 0x10 | 0x100 | 0x400;
+        // 0x40 = LARGEFILES, 0x80 = UDPOBFUSCATION, 0x100 = TCPOBFUSCATION
+        int udpFlags = 0x01 | 0x08 | 0x10 | 0x40 | 0x80 | 0x100;
 
         List<Tag> tags = new ArrayList<>();
         tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_SERVERNAME, serverName));
         tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_DESCRIPTION, desc));
         // ST_VERSION as uint32: (major<<16) | minor when possible
-        int serverVersionInt = 0x003C0000; // fallback (ED2K version in high word)
-        try {
-            String[] v = serverVersion.split("\\.");
-            int maj = Integer.parseInt(v[0]);
-            int min = v.length > 1 ? Integer.parseInt(v[1]) : 0;
-            serverVersionInt = (maj << 16) | (min & 0xFFFF);
-        } catch (Exception ignored) {}
+        int serverVersionInt = (17 << 16) | (15 & 0xFFFF);
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SERVER_VERSION, serverVersionInt)); // ST_VERSION numeric (major<<16|minor)
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_TCP_FLAGS, tcpFlags));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_MAXUSERS, maxUsers)); // ST_MAXUSERS
