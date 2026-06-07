@@ -40,7 +40,6 @@ class ServerTagsTest {
     void testUdpDescriptionResponseContainsAllExpectedTags() throws Exception {
         EventManager em = new EventManager();
         ClientFactory cf = new ClientFactory();
-        FileIndex fi = new FileIndex(null, em);
         ServerConfig config = new ServerConfig(
                 14662, 1000000, 300, 50, 50000, 100000, 100, 200,
                 null, null, false, 50f, 10, 60, 1800, 120, null
@@ -49,12 +48,15 @@ class ServerTagsTest {
 
         InetAddress remote = InetAddress.getByName("127.0.0.1");
 
-        // Build UDP OP_SERVER_DESC_REQ (0xA2) payload
-        byte[] req = new byte[2];
-        req[0] = Packet.PROTOCOL_ED2K;
-        req[1] = (byte) 0xA2;
+        // Build UDP OP_SERVER_DESC_REQ (0xA2) payload with challenge
+        // New format challenge must have 0xF0FF in lower 16 bits
+        int challenge = 0x1234F0FF;
+        ByteBuffer reqBuf = ByteBuffer.allocate(6).order(ByteOrder.LITTLE_ENDIAN);
+        reqBuf.put(Packet.PROTOCOL_ED2K);
+        reqBuf.put((byte) 0xA2);
+        reqBuf.putInt(challenge);
 
-        DatagramPacket dp = new DatagramPacket(req, req.length, remote, 40000);
+        DatagramPacket dp = new DatagramPacket(reqBuf.array(), 6, remote, 40000);
         CapturingDatagramSocket cds = new CapturingDatagramSocket();
 
         java.lang.reflect.Method m = Server.class.getDeclaredMethod("handleUdp", java.net.DatagramSocket.class, java.net.DatagramPacket.class);
@@ -69,19 +71,17 @@ class ServerTagsTest {
         assertEquals(Packet.PROTOCOL_ED2K, data[0]);
         assertEquals((byte) 0xA3, data[1]);
 
-        // Parse response: [Protocol 1] [Opcode 1] [Port 2] [IP 4] [Tags...]
+        // Parse response (New Format): [Protocol 1] [Opcode 1] [Challenge 4] [Tags...]
         ByteBuffer buf = ByteBuffer.wrap(data, 0, len).order(ByteOrder.LITTLE_ENDIAN);
         buf.get(); // protocol
         buf.get(); // opcode
-        int port = Short.toUnsignedInt(buf.getShort());
-        assertEquals(14662, port);
-        buf.getInt(); // skip server IP
+        assertEquals(challenge, buf.getInt());
 
         List<Tag> tags = Tag.readList(buf);
 
         // Verify all expected tags are present
-        Tag nameTag = findTag(tags, Tag.NAME_NAME);
-        assertNotNull(nameTag, "Missing NAME_NAME tag");
+        Tag nameTag = findTag(tags, Tag.NAME_SERVERNAME);
+        assertNotNull(nameTag, "Missing NAME_SERVERNAME tag");
         assertEquals(Tag.TYPE_STRING, nameTag.type());
         assertTrue(((String) nameTag.value()).contains("JEmuleServer"));
 
@@ -89,22 +89,14 @@ class ServerTagsTest {
         assertNotNull(descTag, "Missing NAME_DESCRIPTION tag");
         assertEquals(Tag.TYPE_STRING, descTag.type());
 
-        Tag verTag = findTag(tags, Tag.NAME_VERSION);
-        assertNotNull(verTag, "Missing NAME_VERSION tag");
-        assertEquals(Tag.TYPE_STRING, verTag.type());
-        assertEquals(Main.ESERVER_VERSION, verTag.value());
+        Tag verTag = findTag(tags, Tag.NAME_SERVER_VERSION);
+        assertNotNull(verTag, "Missing NAME_SERVER_VERSION tag");
+        assertEquals(Tag.TYPE_INTEGER, verTag.type());
+        assertEquals((17 << 16) | 15, (int) verTag.value());
 
-        Tag maxUsersTag = findTag(tags, Tag.NAME_MAX_USERS);
-        assertNotNull(maxUsersTag, "Missing NAME_MAX_USERS tag");
+        Tag maxUsersTag = findTag(tags, Tag.NAME_MAXUSERS);
+        assertNotNull(maxUsersTag, "Missing NAME_MAXUSERS tag");
         assertEquals(50000, (int) maxUsersTag.value());
-
-        Tag maxFilesTag = findTag(tags, Tag.NAME_MAX_FILES);
-        assertNotNull(maxFilesTag, "Missing NAME_MAX_FILES tag");
-        assertEquals(100000, (int) maxFilesTag.value());
-
-        Tag maxUsersV2Tag = findTag(tags, Tag.NAME_MAX_USERS_V2);
-        assertNotNull(maxUsersV2Tag, "Missing NAME_MAX_USERS_V2 tag");
-        assertEquals(50000, (int) maxUsersV2Tag.value());
 
         Tag softTag = findTag(tags, Tag.NAME_SOFT_FILES);
         assertNotNull(softTag, "Missing NAME_SOFT_FILES tag");
@@ -126,10 +118,6 @@ class ServerTagsTest {
         assertNotNull(tcpFlagsTag, "Missing NAME_TCP_FLAGS tag (newly added to UDP)");
         assertEquals(TCP_FLAGS, (int) tcpFlagsTag.value());
 
-        Tag auxTag = findTag(tags, Tag.NAME_SERVER_VERSION);
-        assertNotNull(auxTag, "Missing NAME_SERVER_VERSION tag");
-        assertEquals((17 << 16) | 15, (int) auxTag.value());
-
         Tag lowIdTag = findTag(tags, Tag.NAME_LOWID_USERS);
         assertNotNull(lowIdTag, "Missing NAME_LOWID_USERS tag (newly added)");
         assertEquals(Tag.TYPE_INTEGER, lowIdTag.type());
@@ -138,6 +126,53 @@ class ServerTagsTest {
         Tag udpFlagsTag = findTag(tags, Tag.NAME_UDP_FLAGS);
         assertNotNull(udpFlagsTag, "Missing NAME_UDP_FLAGS tag (newly added)");
         assertEquals(UDP_FLAGS, (int) udpFlagsTag.value());
+    }
+
+    @Test
+    void testUdpDescriptionResponseOldFormat() throws Exception {
+        EventManager em = new EventManager();
+        ClientFactory cf = new ClientFactory();
+        ServerConfig config = new ServerConfig(
+                14662, 1000000, 300, 50, 50000, 100000, 100, 200,
+                null, null, false, 50f, 10, 60, 1800, 120, null
+        );
+        Server server = new Server(config, cf);
+
+        InetAddress remote = InetAddress.getByName("127.0.0.1");
+
+        // Build UDP OP_SERVER_DESC_REQ (0xA2) payload (old format, no challenge)
+        byte[] req = new byte[2];
+        req[0] = Packet.PROTOCOL_ED2K;
+        req[1] = (byte) 0xA2;
+
+        DatagramPacket dp = new DatagramPacket(req, req.length, remote, 40000);
+        CapturingDatagramSocket cds = new CapturingDatagramSocket();
+
+        java.lang.reflect.Method m = Server.class.getDeclaredMethod("handleUdp", java.net.DatagramSocket.class, java.net.DatagramPacket.class);
+        m.setAccessible(true);
+        m.invoke(server, cds, dp);
+
+        assertFalse(cds.sent.isEmpty(), "Expected at least one UDP response");
+        DatagramPacket response = cds.sent.get(0);
+        byte[] data = response.getData();
+        int len = response.getLength();
+
+        assertEquals(Packet.PROTOCOL_ED2K, data[0]);
+        assertEquals((byte) 0xA3, data[1]);
+
+        // Parse response (Old Format): [Protocol 1] [Opcode 1] [NameLen 2] [Name] [DescLen 2] [Desc]
+        ByteBuffer buf = ByteBuffer.wrap(data, 2, len - 2).order(ByteOrder.LITTLE_ENDIAN);
+        int nameLen = Short.toUnsignedInt(buf.getShort());
+        byte[] nameBytes = new byte[nameLen];
+        buf.get(nameBytes);
+        String name = new String(nameBytes, java.nio.charset.StandardCharsets.UTF_8);
+        assertTrue(name.contains("JEmuleServer"));
+
+        int descLen = Short.toUnsignedInt(buf.getShort());
+        byte[] descBytes = new byte[descLen];
+        buf.get(descBytes);
+        String desc = new String(descBytes, java.nio.charset.StandardCharsets.UTF_8);
+        assertTrue(desc.contains("Experimental"));
     }
 
     @Test

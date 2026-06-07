@@ -324,9 +324,9 @@ public class Server {
             log.debug("UDP Status Request from {}", p.getAddress());
 
             // Response: [Protocol] [Opcode] [Challenge 4][UserCount 4][FileCount 4][MaxUsers 4][SoftFiles 4][HardFiles 4][UDPFlags 4][LowIDUsers 4][UDPPort 2][TCPPort 2][ServerKey 4]
-            // Note: eMule client expects a fixed structure for OP_GLOBSERVSTATRES (0x97)
+            // Total data size: 4+4+4+4+4+4+4+4+2+2+4 = 40 bytes. Packet size: 1+1+40 = 42 bytes.
 
-            ByteBuffer resp = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN);
+            ByteBuffer resp = ByteBuffer.allocate(42).order(ByteOrder.LITTLE_ENDIAN);
             resp.put(Packet.PROTOCOL_ED2K);
             resp.put((byte) 0x97); // OP_GLOBSERVSTATRES
             resp.put(data, 2, 4); // Echo challenge
@@ -342,18 +342,20 @@ public class Server {
             resp.putShort((short) config.port()); // TCPPort
             resp.putInt(getUdpKey()); // ServerKey
             resp.flip();
-            byte[] outStat = new byte[resp.remaining()];
-            resp.get(outStat);
+            byte[] outStat = resp.array();
             log.info("UDP send (STAT) {} bytes to {}:{} - {}", outStat.length, p.getAddress(), p.getPort(), hex(outStat, outStat.length));
             ds.send(new java.net.DatagramPacket(outStat, outStat.length, p.getAddress(), p.getPort()));
 
             // Not sending server description here to avoid race with subsequent UDP requests (e.g. GET_SOURCES)
             // If needed, client should request OP_SERVER_DESC_REQ (0xA2) which is handled below.
         } else if (opcode == (byte) 0xA2) { // OP_SERVER_DESC_REQ
-            if (p.getLength() < 2) return;
             log.debug("UDP Description Request from {}", p.getAddress());
+            int challenge = 0;
+            if (p.getLength() >= 6) {
+                challenge = ByteBuffer.wrap(data, 2, 4).order(ByteOrder.LITTLE_ENDIAN).getInt();
+            }
 
-            byte[] outDesc = buildServerDescPacket();
+            byte[] outDesc = buildServerDescPacket(challenge);
             log.info("UDP send (DESC) {} bytes to {}:{} - {}", outDesc.length, p.getAddress(), p.getPort(), hex(outDesc, outDesc.length));
             ds.send(new java.net.DatagramPacket(outDesc, outDesc.length, p.getAddress(), p.getPort()));
         } else if (opcode == (byte) 0x9A) { // OP_GLOBGETSOURCES
@@ -445,9 +447,8 @@ public class Server {
         return sb.toString().trim();
     }
 
-    private byte[] buildServerDescPacket() {
+    private byte[] buildServerDescPacket(int challenge) {
         String sName = "JEmuleServer (https://github.com/dagga/JEmuleServer/)";
-        String sVersion = Main.ESERVER_VERSION;
         String sDesc = "Experimental eMule Server";
 
         int maxFiles = config.maxFiles();
@@ -456,14 +457,9 @@ public class Server {
         java.util.List<org.jemule.protocol.Tag> tags = new java.util.ArrayList<>();
         tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_STRING, org.jemule.protocol.Tag.NAME_SERVERNAME, sName));
         tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_STRING, org.jemule.protocol.Tag.NAME_DESCRIPTION, sDesc));
-        tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_STRING, org.jemule.protocol.Tag.NAME_VERSION, sVersion));
         tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_MAXUSERS, maxUsers));
-        tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_MAXFILES, maxFiles));
-        tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_MAX_USERS_V2, maxUsers));
         tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_SOFT_FILES, maxFiles));
         tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_HARD_FILES, maxFiles));
-        tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_PREFERENCE, 0));
-        tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_EMULE_VERSION, 0x3C));
         tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_TCP_FLAGS, 0x01 | 0x08 | 0x10 | 0x80 | 0x100 | 0x400));
         tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_SERVER_VERSION, (17 << 16) | 15));
         tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_LOWID_USERS, registry.lowIdCount()));
@@ -475,12 +471,24 @@ public class Server {
 
         ByteBuffer resp = ByteBuffer.allocate(4096).order(ByteOrder.LITTLE_ENDIAN);
         resp.put(Packet.PROTOCOL_ED2K);
-        resp.put((byte) 0xA3);
-        resp.putShort((short) config.port());
-        resp.putInt(ClientState.ipToInt(publicIp));
-        org.jemule.protocol.Tag.writeList(resp, tags);
-        resp.flip();
+        resp.put((byte) 0xA3); // OP_SERVER_DESC_RES
 
+        if (challenge != 0) {
+            // New format: <challenge 4><taglist>
+            // Note: challenge must have 0xF0FF in the lower 16 bits to be recognized as "new format" by eMule
+            resp.putInt(challenge);
+            org.jemule.protocol.Tag.writeList(resp, tags);
+        } else {
+            // Old format: <name_len 2><name><desc_len 2><desc>
+            byte[] nameBytes = sName.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            byte[] descBytes = sDesc.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            resp.putShort((short) nameBytes.length);
+            resp.put(nameBytes);
+            resp.putShort((short) descBytes.length);
+            resp.put(descBytes);
+        }
+
+        resp.flip();
         byte[] outBuf = new byte[resp.remaining()];
         resp.get(outBuf);
         return outBuf;
