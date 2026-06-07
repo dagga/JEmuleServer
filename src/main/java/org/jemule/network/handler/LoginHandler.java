@@ -54,17 +54,14 @@ public class LoginHandler {
 
         sendServerIdent(context, out);
 
-        // --- Corrected ID_CHANGE packet construction ---
-        // Format: <NEW_ID 4><server_flags 4><primary_tcp_port 4 (unused)><client_IP_address 4><obfuscation_port 4 (optional)>
-        // Total 20 bytes when obfuscation port is included
-        int serverFlags = 0x01 | 0x08 | 0x10 | 0x80 | 0x100 | 0x400 | (0x3C << 16); // TCP flags with version in high word
+        // --- Corrected ID_CHANGE packet construction matching eMule's expectations ---
+        // eMule's ServerSocket.cpp expects: <NEW_ID 4>[<server_flags 4>]
+        // Flags: 0x01=COMPRESSION, 0x08=NEWTAGS, 0x10=UNICODE, 0x80=TYPETAGINTEGER, 0x100=LARGEFILES, 0x400=TCPOBFUSCATION
+        int serverFlags = 0x01 | 0x08 | 0x10 | 0x80 | 0x100 | 0x400;
 
-        ByteBuffer idChange = ByteBuffer.allocate(20).order(ByteOrder.LITTLE_ENDIAN);
+        ByteBuffer idChange = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN);
         idChange.putInt(clientId);
         idChange.putInt(serverFlags);
-        idChange.putInt(context.getConfig().port()); // primary_tcp_port (4 bytes)
-        idChange.putInt(ClientState.ipToInt(context.getSocket().getLocalAddress())); // client_IP_address (server's IP)
-        idChange.putInt(context.getConfig().port()); // obfuscation port (advertised for TCP obfuscation)
         new Packet(Packet.PROTOCOL_ED2K, OpCode.ID_CHANGE.value, idChange.array()).write(out, state.isZlibSupported());
 
         ByteBuffer loginAccepted = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN);

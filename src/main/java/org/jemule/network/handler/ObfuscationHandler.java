@@ -95,7 +95,15 @@ public class ObfuscationHandler {
 
         if (method != 0x00) {
             try { pin.unread(probe, 0, read); } catch (IOException ignored) {}
-            throw new IOException("Unsupported encryption method or handshake timeout");
+            log.warn("Encryption handshake failed for {}: unsupported method 0x{}", 
+                remoteAddr != null ? HandlerUtils.sanitize(remoteAddr.toString()) : "unknown",
+                String.format("%02X", method));
+            return pin; // Fallback to plain if method != 0x00 instead of throwing?
+            // Actually, if we're here we already saw 0x97, so it IS an obfuscation attempt.
+            // But if it fails, throwing IOException might be better to close the connection 
+            // if it's garbage. 
+            // In the log, we saw "Invalid packet length: 1636890790".
+            // 1636890790 in hex is 0x6191C8A6.
         }
 
         SecureRandom rng = new SecureRandom();

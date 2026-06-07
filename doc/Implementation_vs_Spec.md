@@ -17,8 +17,8 @@ Fichiers inspectés (référence):
 
 1) Diagramme: Connexion Client-Serveur (Login)
 - Spec: Client -> OP_LOGINREQUEST, Server -> OP_SERVERIDENT, OP_IDCHANGE (si besoin), OP_SERVERMESSAGE, OP_SERVERSTATUS, (optionnel) OP_SERVERLIST
-- Implémentation: `LoginHandler.handleLogin` envoie `sendServerIdent` (SERVER_IDENT), ensuite ID_CHANGE (0x40), LOGIN_ACCEPTED (0x1B), SERVER_MESSAGE (0x38), SERVER_STATUS (0x34) et ASK_SHARED_FILES (OP_ASKSHAREDFILES via PROTOCOL_EMULE puis PROTOCOL_ED2K)
-- Conclusion: Conforme au diagramme. Code: src/main/java/org/jemule/network/handler/LoginHandler.java (sendServerIdent, lines around 51-66). 
+- Implémentation: `LoginHandler.handleLogin` envoie `sendServerIdent` (0x41) comme premier paquet, ensuite ID_CHANGE (0x40), LOGIN_ACCEPTED (0x1B), et enfin `OP_SERVERMESSAGE` (0x38) contenant la version du serveur pour l'auto-détection eMule.
+- Conclusion: Conforme au diagramme et optimisé pour la détection de version eMule.
 
 2) Diagramme: Recherche de Fichiers (Search)
 - Spec: OP_SEARCHREQUEST -> OP_SEARCHRESULT, possible OP_QUERY_MORE_RESULT
@@ -28,7 +28,7 @@ Fichiers inspectés (référence):
 3) Diagramme: Demande et Obtention de Sources (GetSources)
 - Spec (TCP): OP_GETSOURCES -> OP_FOUNDSOURCES
 - Implémentation (TCP): `SourceHandler.handleGetSources` et renvoi via `Packet` FOUND_SOURCES/SOURCES_RESULT_OBFU.
-- Implémentation (UDP): `Server.handleUdp` gère OP_GLOBGETSOURCES (0x9A) et renvoie OP_GLOBFOUNDSOURCES (0x9B) et extension IPv6 (0x9C).
+- Implémentation (UDP): `Server.handleUdp` gère OP_GLOBGETSOURCES (0x9A) et renvoie OP_GLOBFOUNDSOURCES (0x9B) ainsi que OP_GLOBSERVSTATRES (0x97) avec une structure fixe de 44 octets pour la conformité eMule.
 - Conclusion: Conforme pour TCP et UDP. Code: src/main/java/org/jemule/network/handler/SourceHandler.java and src/main/java/org/jemule/network/Server.java (handleUdp)
 
 4) Diagramme: Transfert de Fichier (Client-Client)

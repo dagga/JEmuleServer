@@ -274,4 +274,29 @@ class PacketTest {
         byte[] differentNonce = {0x01, 0x02, 0x03, 0x05};
         assertFalse(Obfuscation.isReplay(differentNonce), "Different nonce should not be a replay");
     }
+    @Test
+    void testTagUint64() {
+        ByteBuffer buf = ByteBuffer.allocate(100).order(ByteOrder.LITTLE_ENDIAN);
+        long largeValue = 0x1234567890ABCDEFL;
+        Tag tag = new Tag(Tag.TYPE_UINT64, "large", largeValue);
+        tag.write(buf);
+        buf.flip();
+        Tag read = Tag.read(buf);
+        assertEquals(Tag.TYPE_UINT64, read.type());
+        assertEquals("large", read.name());
+        assertEquals(largeValue, read.value());
+    }
+
+    @Test
+    void testTagIdUint64() {
+        ByteBuffer buf = ByteBuffer.allocate(100).order(ByteOrder.LITTLE_ENDIAN);
+        long largeValue = 0xDEADC0DEBAADF00DL;
+        Tag tag = new Tag(Tag.TYPE_UINT64, "\u0088", largeValue); // ST_SOFTFILES as ID
+        tag.write(buf);
+        buf.flip();
+        Tag read = Tag.read(buf);
+        assertEquals(Tag.TYPE_UINT64, read.type());
+        assertEquals("\u0088", read.name());
+        assertEquals(largeValue, read.value());
+    }
 }

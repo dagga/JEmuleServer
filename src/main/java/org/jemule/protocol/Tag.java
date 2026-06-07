@@ -15,6 +15,7 @@ public record Tag(byte type, String name, Object value) {
     public static final byte TYPE_BLOB = (byte) 0x07;
     public static final byte TYPE_INT16 = (byte) 0x08;
     public static final byte TYPE_INT8 = (byte) 0x09;
+    public static final byte TYPE_UINT64 = (byte) 0x14;
 
     // Server Tags (ST_ from opcodes.h)
     public static final String NAME_SERVERNAME = "\u0001"; // ST_SERVERNAME
@@ -101,6 +102,7 @@ public record Tag(byte type, String name, Object value) {
             }
             case TYPE_INT16 -> buf.putShort(((Number) value).shortValue());
             case TYPE_INT8 -> buf.put(((Number) value).byteValue());
+            case TYPE_UINT64 -> buf.putLong(((Number) value).longValue());
             default -> throw new IllegalArgumentException("Unknown tag type: 0x" + String.format("%02X", type));
         }
     }
@@ -144,6 +146,7 @@ public record Tag(byte type, String name, Object value) {
             }
             case TYPE_INT16 -> value = buf.getShort();
             case TYPE_INT8 -> value = buf.get();
+            case TYPE_UINT64 -> value = buf.getLong();
             default -> throw new IllegalArgumentException("Unknown tag type: 0x" + String.format("%02X", type));
         }
         return new Tag(type, name, value);

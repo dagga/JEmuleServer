@@ -52,8 +52,13 @@ public class PublishHandler {
                         // Replaced switch with if-else if to avoid "constant string expression required" error
                         if (t.name().equals(Tag.NAME_FILENAME)) {
                             name = (String) t.value();
-                        } else if (t.name().equals(Tag.NAME_FILESIZE)) {
-                            size = ((Number) t.value()).longValue();
+                        } else if (t.name().equals(Tag.NAME_FILESIZE) || t.name().equals(Tag.NAME_FILESIZE_HI)) {
+                            long val = ((Number) t.value()).longValue();
+                            if (t.name().equals(Tag.NAME_FILESIZE_HI)) {
+                                size = (val << 32) | (size & 0xFFFFFFFFL);
+                            } else {
+                                size = (size & 0xFFFFFFFF00000000L) | (val & 0xFFFFFFFFL);
+                            }
                         } else if (t.name().equals(Tag.NAME_FILETYPE)) {
                             type = (String) t.value();
                         }

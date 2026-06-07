@@ -76,8 +76,9 @@ public class EmuleSpecTest {
             // On attend OP_SERVERMESSAGE (0x38) et OP_SERVERIDENT (0x41)
             boolean versionFound = false;
             boolean identFound = false;
+            boolean idChangeFound = false;
 
-            for (int i = 0; i < 10; i++) { // Lire plus de paquets car le message de version est envoyé plus tard
+            for (int i = 0; i < 15; i++) { // Lire plus de paquets car le message de version est envoyé plus tard
                 Packet p = Packet.read(in, 1024 * 1024);
                 if (p.protocol() == Packet.PROTOCOL_ED2K) {
                     if (p.opcode() == 0x38) { // SERVER_MESSAGE
@@ -96,13 +97,23 @@ public class EmuleSpecTest {
                         
                         assertTrue(tags.stream().anyMatch(t -> t.name().equals(Tag.NAME_SERVERNAME)), "ST_SERVERNAME manquant");
                         assertTrue(tags.stream().anyMatch(t -> t.name().equals(Tag.NAME_DESCRIPTION)), "ST_DESCRIPTION manquant");
+                    } else if (p.opcode() == 0x40) { // ID_CHANGE
+                        idChangeFound = true;
+                        // On attend 8 octets de données (ID + Flags)
+                        assertEquals(8, p.data().length, "OP_IDCHANGE doit contenir exactement 8 octets de données");
+                        ByteBuffer buf = ByteBuffer.wrap(p.data()).order(ByteOrder.LITTLE_ENDIAN);
+                        int newId = buf.getInt();
+                        int flags = buf.getInt();
+                        // Vérifier que le bit LARGEFILES (0x100) est présent
+                        assertTrue((flags & 0x100) != 0, "Bit LARGEFILES (0x100) manquant dans OP_IDCHANGE");
                     }
                 }
-                if (versionFound && identFound) break;
+                if (versionFound && identFound && idChangeFound) break;
             }
 
             assertTrue(versionFound, "Message de version 'server version' non trouvé");
             assertTrue(identFound, "Paquet OP_SERVERIDENT non trouvé");
+            assertTrue(idChangeFound, "Paquet OP_IDCHANGE non trouvé");
         }
     }
 
