@@ -93,6 +93,7 @@ public class ServerIntegrationTest {
             login.write(out, false);
 
             // Read the handshake sequence and verify order/content (tolerates EOF)
+            Packet p_ver = readPacketOrEOF(in);
             Packet p1 = readPacketOrEOF(in);
             Packet p2 = readPacketOrEOF(in);
             Packet p3 = readPacketOrEOF(in);
@@ -100,6 +101,11 @@ public class ServerIntegrationTest {
             Packet p5 = readPacketOrEOF(in);
             Packet p6 = readPacketOrEOF(in);
             Packet p7 = readPacketOrEOF(in);
+
+            Assertions.assertNotNull(p_ver, "Connection closed before SERVER_MESSAGE (version)");
+            Assertions.assertEquals(Packet.PROTOCOL_ED2K, p_ver.protocol());
+            Assertions.assertEquals(OpCode.SERVER_MESSAGE.value, p_ver.opcode());
+            Assertions.assertTrue(new String(p_ver.data()).contains("server version 17.15"));
 
             Assertions.assertNotNull(p1, "Connection closed before SERVER_IDENT");
             Assertions.assertEquals(Packet.PROTOCOL_ED2K, p1.protocol());
@@ -256,8 +262,8 @@ public class ServerIntegrationTest {
             Packet login = new Packet(Packet.PROTOCOL_ED2K, OpCode.LOGIN_REQUEST.value, new byte[0]);
             login.write(out, false);
 
-            // Read handshake (skip to get past initial packets)
-            for (int i = 0; i < 7; i++) {
+            // Read handshake (skip to get past initial packets: Version, Ident, IDChange, LoginAccepted, ServerMsg, ServerStatus, AskSharedx2)
+            for (int i = 0; i < 8; i++) {
                 readPacketOrEOF(in);
             }
 
