@@ -30,7 +30,7 @@ public record Tag(byte type, String name, Object value) {
     public static final String NAME_SOFTFILES = "\u0088"; // ST_SOFTFILES
     public static final String NAME_HARDFILES = "\u0089"; // ST_HARDFILES
     public static final String NAME_LASTPING = "\u0090"; // ST_LASTPING
-    public static final String NAME_VERSION = "\u0011"; // CT_VERSION (client/server short version tag)
+    public static final String NAME_SERVER_VERSION = "\u0091"; // ST_VERSION
     public static final String NAME_UDPFLAGS = "\u0092"; // ST_UDPFLAGS
     public static final String NAME_LOWIDUSERS = "\u0094"; // ST_LOWIDUSERS
     public static final String NAME_UDPKEY = "\u0095"; // ST_UDPKEY
@@ -63,12 +63,9 @@ public record Tag(byte type, String name, Object value) {
     public static final String NAME_FILEFORMAT = "\u0004"; // FT_FILEFORMAT
     public static final String NAME_SOURCES = "\u0015"; // FT_SOURCES
 
-    // Client/Server Capability Tags (CT_ from opcodes.h)
     public static final String NAME_TCP_FLAGS = "\u0020"; // CT_SERVER_FLAGS
     public static final String NAME_CLIENT_VERSION = "\u0011"; // CT_VERSION
     public static final String NAME_EMULE_VERSION = "\u00FB"; // CT_EMULE_VERSION
-    public static final String NAME_MAX_USERS_V2 = "\u0087"; // CT_MAX_USERS_V2 (Same as ST_MAXUSERS, but used in Server.java)
-    public static final String NAME_SERVER_VERSION = "\u0091"; // CT_SERVER_VERSION (Same as ST_VERSION, but used in Server.java)
 
     // Backward-compatible aliases for older naming conventions (underscored names)
     public static final String NAME_NAME = NAME_SERVERNAME; // alias for NAME_SERVERNAME

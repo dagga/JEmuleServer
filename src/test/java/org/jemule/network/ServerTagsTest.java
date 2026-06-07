@@ -110,13 +110,13 @@ class ServerTagsTest {
         assertNotNull(tcpFlagsTag, "Missing NAME_TCP_FLAGS tag (newly added to UDP)");
         assertEquals(TCP_FLAGS, (int) tcpFlagsTag.value());
 
-        Tag lowIdTag = findTag(tags, Tag.NAME_LOWID_USERS);
-        assertNotNull(lowIdTag, "Missing NAME_LOWID_USERS tag (newly added)");
+        Tag lowIdTag = findTag(tags, Tag.NAME_LOWIDUSERS);
+        assertNotNull(lowIdTag, "Missing NAME_LOWIDUSERS tag (newly added)");
         assertEquals(Tag.TYPE_INTEGER, lowIdTag.type());
         assertEquals(0, (int) lowIdTag.value()); // No clients registered
 
-        Tag udpFlagsTag = findTag(tags, Tag.NAME_UDP_FLAGS);
-        assertNotNull(udpFlagsTag, "Missing NAME_UDP_FLAGS tag (newly added)");
+        Tag udpFlagsTag = findTag(tags, Tag.NAME_UDPFLAGS);
+        assertNotNull(udpFlagsTag, "Missing NAME_UDPFLAGS tag (newly added)");
         assertEquals(UDP_FLAGS, (int) udpFlagsTag.value());
     }
 
@@ -223,9 +223,9 @@ class ServerTagsTest {
         assertEquals(challenge, buf.getInt());
         
         List<Tag> tags = Tag.readList(buf);
-        Tag lowIdTag = findTag(tags, Tag.NAME_LOWID_USERS);
+        Tag lowIdTag = findTag(tags, Tag.NAME_LOWIDUSERS);
         assertNotNull(lowIdTag);
-        assertEquals(2, (int) lowIdTag.value(), "LOWID_USERS should reflect 2 low-ID clients");
+        assertEquals(2, (int) lowIdTag.value(), "LOWIDUSERS should reflect 2 low-ID clients");
     }
 
     @Test

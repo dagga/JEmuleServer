@@ -169,16 +169,15 @@ public class LoginHandler {
         List<Tag> tags = new ArrayList<>();
         tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_SERVERNAME, serverName));
         tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_DESCRIPTION, desc));
-        // ST_VERSION as uint32: (major<<16) | minor when possible
-        int serverVersionInt = (17 << 16) | (15 & 0xFFFF);
-        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SERVER_VERSION, serverVersionInt)); // ST_VERSION numeric (major<<16|minor)
+        // ST_VERSION as uint32: (major<<16) | minor
+        int serverVersionInt = (17 << 16) | 15;
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SERVER_VERSION, serverVersionInt));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_TCP_FLAGS, tcpFlags));
-        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_MAXUSERS, maxUsers)); // ST_MAXUSERS
-        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOFTFILES, maxFiles)); // ST_SOFTFILES
-        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_HARDFILES, maxFiles)); // ST_HARDFILES
-        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_PREFERENCE, 0));
-        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_LOWIDUSERS, context.getRegistry().lowIdCount())); // ST_LOWIDUSERS
-        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDPFLAGS, udpFlags)); // ST_UDPFLAGS
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_MAXUSERS, maxUsers));
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOFTFILES, maxFiles));
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_HARDFILES, maxFiles));
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_LOWIDUSERS, context.getRegistry().lowIdCount()));
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDPFLAGS, udpFlags));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDPKEY, org.jemule.network.Server.getUdpKey())); // ST_UDPKEY
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDPKEYIP, ClientState.ipToInt(publicIp))); // ST_UDPKEYIP
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_TCPPORTOBFUSCATION, portInt)); // ST_TCPPORTOBFUSCATION

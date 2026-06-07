@@ -231,18 +231,18 @@ class PacketTest {
         assertEquals("\u000B", Tag.NAME_DESCRIPTION, "ST_DESCRIPTION = 0x0B");
         assertEquals("\u000E", Tag.NAME_PREFERENCE, "ST_PREFERENCE = 0x0E");
         assertEquals("\u000F", Tag.NAME_PORT, "ST_PORT = 0x0F");
-        assertEquals("\u0011", Tag.NAME_VERSION, "CT_VERSION = 0x11");
+        assertEquals("\u0011", Tag.NAME_CLIENT_VERSION, "CT_VERSION = 0x11");
 
         // Extended server tags (0x80-0x99 range)
-        assertEquals("\u0087", Tag.NAME_MAX_USERS_V2, "ST_MAXUSERS_V2 = 0x87");
+        assertEquals("\u0087", Tag.NAME_MAXUSERS, "ST_MAXUSERS = 0x87");
         assertEquals("\u0088", Tag.NAME_SOFT_FILES, "ST_SOFTFILES = 0x88");
         assertEquals("\u0089", Tag.NAME_HARD_FILES, "ST_HARDFILES = 0x89");
         assertEquals("\u0090", Tag.NAME_LASTPING, "ST_LASTPING = 0x90");
         assertEquals("\u0091", Tag.NAME_SERVER_VERSION, "ST_VERSION = 0x91");
         assertEquals("\u0087", Tag.NAME_MAX_USERS, "ST_MAXUSERS = 0x87");
         assertEquals("\u0089", Tag.NAME_MAX_FILES, "ST_MAXFILES = 0x89");
-        assertEquals("\u0094", Tag.NAME_LOWID_USERS, "ST_LOWIDUSERS = 0x94");
-        assertEquals("\u0092", Tag.NAME_UDP_FLAGS, "ST_UDPFLAGS = 0x92");
+        assertEquals("\u0094", Tag.NAME_LOWIDUSERS, "ST_LOWIDUSERS = 0x94");
+        assertEquals("\u0092", Tag.NAME_UDPFLAGS, "ST_UDPFLAGS = 0x92");
         assertEquals("\u0095", Tag.NAME_UDP_KEY, "ST_UDPKEY = 0x95");
         assertEquals("\u0096", Tag.NAME_UDP_KEY_IP, "ST_UDPKEYIP = 0x96");
         assertEquals("\u0097", Tag.NAME_TCP_OBFUSCATION_PORT, "ST_TCPPORTOBFUSCATION = 0x97");
