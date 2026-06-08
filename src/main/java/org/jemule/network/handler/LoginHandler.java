@@ -161,7 +161,7 @@ public class LoginHandler {
         int maxUsers = context.getConfig().maxUsers();
 
         // TCP capability flags matching eMule SRV_TCPFLG_ constants
-        int tcpFlags = Tag.TCPFLG_COMPRESSION | Tag.TCPFLG_NEWTAGS | Tag.TCPFLG_UNICODE | Tag.TCPFLG_TYPETAGINTEGER | Tag.TCPFLG_LARGEFILES | Tag.TCPFLG_TCPOBFUSCATION;
+        int tcpFlags = Tag.TCPFLG_COMPRESSION | Tag.TCPFLG_NEWTAGS | Tag.TCPFLG_UNICODE | Tag.TCPFLG_TYPETAGINTEGER | Tag.TCPFLG_LARGEFILES | Tag.UDPFLG_UDPOBFUSCATION | Tag.TCPFLG_TCPOBFUSCATION;
 
         // UDP capability flags matching eMule SRV_UDPFLG_ constants
         int udpFlags = Tag.UDPFLG_EXT_GETSOURCES | Tag.UDPFLG_NEWTAGS | Tag.UDPFLG_UNICODE | Tag.UDPFLG_LARGEFILES | Tag.UDPFLG_UDPOBFUSCATION | Tag.UDPFLG_TCPOBFUSCATION;
@@ -170,7 +170,7 @@ public class LoginHandler {
         tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_SERVERNAME, serverName));
         tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_DESCRIPTION, desc));
         // ST_VERSION as uint32: (major<<16) | minor
-        int serverVersionInt = (17 << 16) | 15;
+        int serverVersionInt = 17;
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SERVER_VERSION, serverVersionInt));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_TCP_FLAGS, tcpFlags));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_MAXUSERS, maxUsers));

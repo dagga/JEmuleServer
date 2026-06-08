@@ -322,7 +322,8 @@ public class Server {
         byte opcode = data[1];
         if (opcode == (byte) 0x96) { // OP_GLOBSERVSTATREQ
             if (p.getLength() < 6) return;
-            log.debug("UDP Status Request from {}", p.getAddress());
+            int challenge = ByteBuffer.wrap(data, 2, 4).order(ByteOrder.LITTLE_ENDIAN).getInt();
+            log.debug("UDP Status Request (0x96) from {} with challenge 0x{}", p.getAddress(), Integer.toHexString(challenge));
 
             // Response: [Protocol] [Opcode] [Challenge 4][UserCount 4][FileCount 4][MaxUsers 4][SoftFiles 4][HardFiles 4][UDPFlags 4][LowIDUsers 4][UDPPort 2][TCPPort 2][ServerKey 4]
             // Total data size: 4+4+4+4+4+4+4+4+2+2+4 = 40 bytes. Packet size: 1+1+40 = 42 bytes.
@@ -330,7 +331,7 @@ public class Server {
             ByteBuffer resp = ByteBuffer.allocate(42).order(ByteOrder.LITTLE_ENDIAN);
             resp.put(Packet.PROTOCOL_ED2K);
             resp.put((byte) 0x97); // OP_GLOBSERVSTATRES
-            resp.put(data, 2, 4); // Echo challenge
+            resp.putInt(challenge); // Echo challenge
             resp.putInt(registry.size());
             resp.putInt(fileIndex.fileCount());
             resp.putInt(config.maxUsers());
@@ -351,11 +352,11 @@ public class Server {
             // Not sending server description here to avoid race with subsequent UDP requests (e.g. GET_SOURCES)
             // If needed, client should request OP_SERVER_DESC_REQ (0xA2) which is handled below.
         } else if (opcode == (byte) 0xA2) { // OP_SERVER_DESC_REQ
-            log.debug("UDP Description Request from {}", p.getAddress());
             int challenge = 0;
             if (p.getLength() >= 6) {
                 challenge = ByteBuffer.wrap(data, 2, 4).order(ByteOrder.LITTLE_ENDIAN).getInt();
             }
+            log.debug("UDP Description Request (0xA2) from {} with challenge 0x{}", p.getAddress(), Integer.toHexString(challenge));
 
             byte[] outDesc = buildServerDescPacket(challenge);
             log.info("UDP send (DESC) {} bytes to {}:{} - {}", outDesc.length, p.getAddress(), p.getPort(), hex(outDesc, outDesc.length));
