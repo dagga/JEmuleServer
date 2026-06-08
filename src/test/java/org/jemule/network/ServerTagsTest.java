@@ -197,8 +197,7 @@ class ServerTagsTest {
         InetAddress remote = InetAddress.getByName("127.0.0.1");
         
         // Build UDP OP_SERVER_DESC_REQ (0xA2) payload (new format, with challenge)
-        int challenge = 0x55AA70FF; // Must have 0xF0FF in lower 16 bits? 
-                                    // Actually buildServerDescPacket checks challenge != 0
+        int challenge = 0x55AAF0FF; // Must have 0xF0FF in lower 16 bits
         ByteBuffer reqBuf = ByteBuffer.allocate(6).order(ByteOrder.LITTLE_ENDIAN);
         reqBuf.put(Packet.PROTOCOL_ED2K);
         reqBuf.put((byte) 0xA2);

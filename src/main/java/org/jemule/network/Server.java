@@ -377,43 +377,43 @@ public class Server {
             java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
             java.io.DataOutputStream dos = new java.io.DataOutputStream(baos);
 
-            // Protocol + opcode
-            dos.writeByte(Packet.PROTOCOL_ED2K);
-            dos.writeByte(0x9B); // OP_GLOBFOUNDSOURCES
+        // Protocol + opcode
+        dos.writeByte(Packet.PROTOCOL_ED2K);
+        dos.writeByte(0x9B); // OP_GLOBFOUNDSOURCES
 
-            // Hash
-            dos.write(hashBytes);
+        // Hash
+        dos.write(hashBytes);
 
-            // Separate IPv4-mappable and IPv6-only sources
-            List<org.jemule.core.ClientState> ipv4List = new java.util.ArrayList<>();
-            List<org.jemule.core.ClientState> ipv6List = new java.util.ArrayList<>();
-            for (var s : sources) {
-                byte[] addr = s.address().getAddress();
-                if (addr.length == 4) ipv4List.add(s);
-                else if (addr.length == 16) {
-                    boolean isV4Mapped = true;
-                    for (int i = 0; i < 10; i++)
-                        if (addr[i] != 0) {
-                            isV4Mapped = false;
-                            break;
-                        }
-                    if (isV4Mapped && addr[10] == (byte) 0xFF && addr[11] == (byte) 0xFF) ipv4List.add(s);
-                    else ipv6List.add(s);
-                } else {
-                    ipv6List.add(s);
-                }
+        // Separate IPv4-mappable and IPv6-only sources
+        List<org.jemule.core.ClientState> ipv4List = new java.util.ArrayList<>();
+        List<org.jemule.core.ClientState> ipv6List = new java.util.ArrayList<>();
+        for (var s : sources) {
+            byte[] addr = s.address().getAddress();
+            if (addr.length == 4) ipv4List.add(s);
+            else if (addr.length == 16) {
+                boolean isV4Mapped = true;
+                for (int i = 0; i < 10; i++)
+                    if (addr[i] != 0) {
+                        isV4Mapped = false;
+                        break;
+                    }
+                if (isV4Mapped && addr[10] == (byte) 0xFF && addr[11] == (byte) 0xFF) ipv4List.add(s);
+                else ipv6List.add(s);
+            } else {
+                ipv6List.add(s);
             }
+        }
 
-            // IPv4 section (legacy)
-            dos.writeByte((byte) Math.min(ipv4List.size(), 255));
-            for (var s : ipv4List) {
-                dos.writeInt(ClientState.ipToInt(s.address()));
-                dos.writeShort((short) s.port());
-            }
+        // IPv4 section (legacy)
+        dos.writeByte((byte) Math.min(ipv4List.size(), 255));
+        for (var s : ipv4List) {
+            dos.writeInt(ClientState.ipToInt(s.address()));
+            dos.writeShort((short) s.port());
+        }
 
-            byte[] outBuf = baos.toByteArray();
-            log.info("UDP send (SRCS) {} bytes to {}:{} - {}", outBuf.length, p.getAddress(), p.getPort(), hex(outBuf, outBuf.length));
-            ds.send(new java.net.DatagramPacket(outBuf, outBuf.length, p.getAddress(), p.getPort()));
+        byte[] outBuf = baos.toByteArray();
+        log.info("UDP send (SRCS) {} bytes to {}:{} - {}", outBuf.length, p.getAddress(), p.getPort(), hex(outBuf, outBuf.length));
+        ds.send(new java.net.DatagramPacket(outBuf, outBuf.length, p.getAddress(), p.getPort()));
 
             // If there are IPv6-only sources, send a separate IPv6 response packet (new opcode 0x9C)
             if (!ipv6List.isEmpty()) {
@@ -478,7 +478,7 @@ public class Server {
         resp.put(Packet.PROTOCOL_ED2K);
         resp.put((byte) 0xA3); // OP_SERVER_DESC_RES
 
-        if (challenge != 0) {
+        if (challenge != 0 && (challenge & 0xFFFF) == 0xF0FF) {
             // New format: <challenge 4><taglist>
             // Note: challenge must have 0xF0FF in the lower 16 bits to be recognized as "new format" by eMule
             resp.putInt(challenge);
