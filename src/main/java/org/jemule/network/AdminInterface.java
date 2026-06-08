@@ -112,9 +112,9 @@ public class AdminInterface implements Runnable {
             }
             String type = client.isHighId() ? "HighID" : "LowID";
             long uptime = (now - client.connectedAt()) / 1000;
-            System.out.printf("%-15s | %-10d | %-10s | %-8d | %ds%n",
+            System.out.printf("%-15s | %-10s | %-10s | %-8d | %ds%n",
                     client.address().getHostAddress(),
-                    client.clientId(),
+                    Long.toUnsignedString(client.clientId()),
                     type,
                     client.publishedFilesCount().get(),
                     uptime);

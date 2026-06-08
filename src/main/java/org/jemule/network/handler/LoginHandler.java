@@ -29,7 +29,7 @@ public class LoginHandler {
         byte[] data = initialPacket.data();
         log.info("Handling login request, data size: {} bytes", data.length);
 
-        int clientId = ByteBuffer.wrap(context.getSocket().getInetAddress().getAddress()).order(ByteOrder.LITTLE_ENDIAN).getInt();
+        long clientId = ClientState.ipToLong(context.getSocket().getInetAddress());
 
         ClientState state = context.getClientFactory().createClient(context.getSocket().getInetAddress(), context.getSocket().getPort(), clientId);
         context.setState(state);
@@ -63,12 +63,12 @@ public class LoginHandler {
         int serverFlags = 0x01 | 0x08 | 0x10 | 0x80 | 0x100 | 0x400;
 
         ByteBuffer idChange = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN);
-        idChange.putInt(clientId);
+        idChange.putInt((int) clientId);
         idChange.putInt(serverFlags);
         new Packet(Packet.PROTOCOL_ED2K, OpCode.ID_CHANGE.value, idChange.array()).write(out, state.isZlibSupported());
 
         ByteBuffer loginAccepted = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN);
-        loginAccepted.putInt(clientId);
+        loginAccepted.putInt((int) clientId);
         new Packet(Packet.PROTOCOL_ED2K, OpCode.LOGIN_ACCEPTED.value, loginAccepted.array()).write(out, state.isZlibSupported());
 
         log.info("Logged in ID: {} (Sent 0x41, 0x40 and 0x1B)", clientId);
@@ -76,8 +76,9 @@ public class LoginHandler {
         sendServerStatus(context, out);
         sendAskSharedFiles(context, out);
 
+        log.info("Your ID is: " + Long.toUnsignedString(clientId));
         sendServerMessage(context, out, "Welcome to " + Main.VERSION + " (JEmuleServer)\n" +
-                "Your ID is: " + Integer.toUnsignedString(clientId) + "\n" +
+                "Your ID is: " + Long.toUnsignedString(clientId) + "\n" +
                 "Enjoy the extended protocol support!");
 
         // Try to parse client's listening UDP/TCP port from the initial login packet and proactively send a UDP GLOBSERVSTATRES
@@ -87,9 +88,9 @@ public class LoginHandler {
             if (inBuf.remaining() >= 22) { // 16(hash) + 4(id) + 2(port)
                 byte[] clientHash = new byte[16];
                 inBuf.get(clientHash);
-                int idFromPacket = inBuf.getInt();
+                long idFromPacket = Integer.toUnsignedLong(inBuf.getInt());
                 clientUdpPort = Short.toUnsignedInt(inBuf.getShort());
-                log.info("Parsed client listening port from login packet: {} (id from packet: {})", clientUdpPort, Integer.toUnsignedString(idFromPacket));
+                log.info("Parsed client listening port from login packet: {} (id from packet: {})", clientUdpPort, Long.toUnsignedString(idFromPacket));
             } else {
                 log.debug("Login packet too short to extract client listening port (len={})", inBuf.remaining());
             }
@@ -180,7 +181,7 @@ public class LoginHandler {
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_LOWIDUSERS, context.getRegistry().lowIdCount()));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDPFLAGS, udpFlags));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDPKEY, org.jemule.network.Server.getUdpKey())); // ST_UDPKEY
-        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDPKEYIP, ClientState.ipToInt(publicIp))); // ST_UDPKEYIP
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDPKEYIP, (int) ClientState.ipToLong(publicIp))); // ST_UDPKEYIP
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_TCPPORTOBFUSCATION, portInt)); // ST_TCPPORTOBFUSCATION
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDPPORTOBFUSCATION, portInt)); // ST_UDPPORTOBFUSCATION
 

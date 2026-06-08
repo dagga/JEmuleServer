@@ -1,6 +1,7 @@
 package org.jemule.tools;
 
 import org.jemule.Main;
+import org.jemule.core.ClientState;
 import org.jemule.protocol.Tag;
 
 import java.net.InetAddress;
@@ -40,8 +41,8 @@ public class ServerIdentDumper {
         buf.put(hash);
 
         byte[] addr = InetAddress.getLoopbackAddress().getAddress();
-        if (addr.length == 4) buf.put(addr);
-        else buf.put(new byte[]{127,0,0,1});
+        int ip = (int) ClientState.ipToLong(InetAddress.getLoopbackAddress());
+        buf.putInt(ip);
 
         buf.put((byte) ((port >> 8) & 0xFF));
         buf.put((byte) (port & 0xFF));

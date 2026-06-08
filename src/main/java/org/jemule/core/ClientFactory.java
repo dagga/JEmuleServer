@@ -31,7 +31,7 @@ import java.util.concurrent.atomic.AtomicLong;
 public class ClientFactory {
     private static final Logger log = LoggerFactory.getLogger(ClientFactory.class);
 
-    public ClientState createClient(InetAddress address, int port, int clientId) {
+    public ClientState createClient(InetAddress address, int port, long clientId) {
         if (address == null) {
             throw new IllegalArgumentException("Client address cannot be null");
         }

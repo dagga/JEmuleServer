@@ -65,7 +65,7 @@ public class SourceHandler {
         dos.write(hashBytes);
         dos.writeByte((byte) Math.min(sources.size(), 255));
         for (var s : sources) {
-            dos.writeInt(ClientState.ipToInt(s.address()));
+            dos.writeInt((int) ClientState.ipToLong(s.address()));
             dos.writeShort((short) s.port());
         }
 
@@ -89,7 +89,7 @@ public class SourceHandler {
             return;
         }
 
-        int targetId = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN).getInt();
+        long targetId = Integer.toUnsignedLong(ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN).getInt());
         log.info("Client {} requested callback to ID: {}", context.getState().clientId(), targetId);
 
         ClientState targetClient = context.getRegistry().get(targetId);
@@ -99,7 +99,7 @@ public class SourceHandler {
         }
 
         ByteBuffer relayData = ByteBuffer.allocate(6).order(ByteOrder.LITTLE_ENDIAN);
-        relayData.putInt(ClientState.ipToInt(context.getState().address()));
+        relayData.putInt((int) ClientState.ipToLong(context.getState().address()));
         relayData.putShort(Short.reverseBytes((short) context.getState().port()));
 
         Packet callbackPacket = new Packet(Packet.PROTOCOL_ED2K, OpCode.CALLBACK.value, relayData.array());

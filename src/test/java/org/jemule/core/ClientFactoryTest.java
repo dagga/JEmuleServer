@@ -29,7 +29,7 @@ class ClientFactoryTest {
         ClientFactory factory = new ClientFactory();
         InetAddress addr = InetAddress.getLoopbackAddress();
         int port = 4662;
-        int clientId = 12345;
+        long clientId = 12345L;
 
         ClientState state = factory.createClient(addr, port, clientId);
 
@@ -46,15 +46,15 @@ class ClientFactoryTest {
         ClientFactory factory = new ClientFactory();
         
         assertThrows(IllegalArgumentException.class, () -> 
-            factory.createClient(null, 4662, 12345)
+            factory.createClient(null, 4662, 12345L)
         );
 
         assertThrows(IllegalArgumentException.class, () -> 
-            factory.createClient(InetAddress.getLoopbackAddress(), 0, 12345)
+            factory.createClient(InetAddress.getLoopbackAddress(), 0, 12345L)
         );
 
         assertThrows(IllegalArgumentException.class, () -> 
-            factory.createClient(InetAddress.getLoopbackAddress(), 70000, 12345)
+            factory.createClient(InetAddress.getLoopbackAddress(), 70000, 12345L)
         );
     }
 }

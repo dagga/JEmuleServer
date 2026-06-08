@@ -103,7 +103,7 @@ class CallbackTest {
         int ip = payload.getInt();
         short port = payload.getShort();
 
-        assertEquals(ClientState.ipToInt(state1.address()), ip);
+        assertEquals((int) ClientState.ipToLong(state1.address()), ip);
         assertEquals((short) state1.port(), Short.reverseBytes(port));
     }
 }

@@ -9,7 +9,7 @@ import java.util.function.Consumer;
 public class ClientRegistry {
     private final ConcurrentHashMap<Integer, ClientState> connections = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Integer, Consumer<Packet>> messengers = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<Integer, Set<Integer>> clientIdIndex = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Long, Set<Integer>> clientIdIndex = new ConcurrentHashMap<>();
 
     public void add(ClientState s, Consumer<Packet> messenger) {
         connections.put(s.connectionId(), s);
@@ -27,7 +27,7 @@ public class ClientRegistry {
         }
     }
 
-    public ClientState get(int clientId) {
+    public ClientState get(long clientId) {
         Set<Integer> set = clientIdIndex.get(clientId);
         if (set == null || set.isEmpty()) return null;
         for (Integer connId : set) {
@@ -37,7 +37,7 @@ public class ClientRegistry {
         return null;
     }
 
-    public void sendTo(int targetId, Packet p) {
+    public void sendTo(long targetId, Packet p) {
         Set<Integer> connIds = clientIdIndex.get(targetId);
         if (connIds == null) return;
         for (Integer connId : connIds) {

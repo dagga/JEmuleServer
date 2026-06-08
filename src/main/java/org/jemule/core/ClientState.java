@@ -32,14 +32,14 @@ public final class ClientState {
     private final int connectionId;
     private final InetAddress address;
     private final int port;
-    private final int clientId;
+    private final long clientId;
     private final long connectedAt;
     private final AtomicLong lastActivity;
     private final AtomicInteger publishedFilesCount = new AtomicInteger(0);
     private boolean zlibSupported = false;
     private List<FileMetadata> pendingSearchResults;
 
-    public ClientState(InetAddress address, int port, int clientId, long connectedAt, AtomicLong lastActivity) {
+    public ClientState(InetAddress address, int port, long clientId, long connectedAt, AtomicLong lastActivity) {
         this.connectionId = nextConnectionId.getAndIncrement();
         this.address = requireNonNull(address);
         this.port = port;
@@ -51,7 +51,7 @@ public final class ClientState {
     public int connectionId() { return connectionId; }
     public InetAddress address() { return address; }
     public int port() { return port; }
-    public int clientId() { return clientId; }
+    public long clientId() { return clientId; }
     public long connectedAt() { return connectedAt; }
     public AtomicLong lastActivity() { return lastActivity; }
 
@@ -63,11 +63,11 @@ public final class ClientState {
     public List<FileMetadata> getPendingSearchResults() { return pendingSearchResults; }
     public void setPendingSearchResults(List<FileMetadata> results) { this.pendingSearchResults = results; }
 
-    public static int ipToInt(InetAddress addr) {
+    public static long ipToLong(InetAddress addr) {
         byte[] b = addr.getAddress();
         // If IPv4 (4 bytes) -> convert normally (little-endian expected by protocol)
         if (b.length == 4) {
-            return ((b[3] & 0xFF) << 24) | ((b[2] & 0xFF) << 16) | ((b[1] & 0xFF) << 8) | (b[0] & 0xFF);
+            return (long) ((b[3] & 0xFF) << 24 | (b[2] & 0xFF) << 16 | (b[1] & 0xFF) << 8 | (b[0] & 0xFF)) & 0xFFFFFFFFL;
         }
         // If IPv6 and IPv4-mapped (::ffff:0:0/96), use the last 4 bytes
         if (b.length == 16) {
@@ -79,7 +79,7 @@ public final class ClientState {
                 }
             if (isV4Mapped && b[10] == (byte) 0xFF && b[11] == (byte) 0xFF) {
                 int off = 12;
-                return ((b[off + 3] & 0xFF) << 24) | ((b[off + 2] & 0xFF) << 16) | ((b[off + 1] & 0xFF) << 8) | (b[off] & 0xFF);
+                return (long) ((b[off + 3] & 0xFF) << 24 | (b[off + 2] & 0xFF) << 16 | (b[off + 1] & 0xFF) << 8 | (b[off] & 0xFF)) & 0xFFFFFFFFL;
             }
         }
         // Fallback: return 0 (unspecified) when IPv6 address cannot be encoded in 4 bytes
@@ -87,6 +87,6 @@ public final class ClientState {
     }
 
     public boolean isHighId() {
-        return clientId > 0x00FFFFFF;
+        return clientId > 0x00FFFFFFL;
     }
 }

@@ -91,7 +91,7 @@ public class EmuleSpecTest {
                         ByteBuffer buf = ByteBuffer.wrap(p.data()).order(ByteOrder.LITTLE_ENDIAN);
                         byte[] hash = new byte[16];
                         buf.get(hash);
-                        int ip = buf.getInt();
+                        int ip = (int) buf.getInt();
                         int port = buf.getShort() & 0xFFFF;
                         List<Tag> tags = Tag.readList(buf);
                         
