@@ -21,7 +21,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class ServerTagsTest {
 
-    private static final int TCP_FLAGS = 0x01 | 0x08 | 0x10 | 0x80 | 0x100 | 0x400;
+    private static final int TCP_FLAGS = 0x01 | 0x08 | 0x10 | 0x80 | 0x100 | 0x200 | 0x400;
     private static final int UDP_FLAGS = 0x01 | 0x08 | 0x10 | 0x100 | 0x200 | 0x400;
 
     static class CapturingDatagramSocket extends java.net.DatagramSocket {
@@ -91,20 +91,23 @@ class ServerTagsTest {
 
         Tag verTag = findTag(tags, Tag.NAME_SERVER_VERSION);
         assertNotNull(verTag, "Missing NAME_SERVER_VERSION tag");
-        assertEquals(Tag.TYPE_STRING, verTag.type());
-        assertEquals("17", (String) verTag.value());
+        assertEquals(Tag.TYPE_INTEGER, verTag.type());
+        assertEquals(17, (int) verTag.value());
 
         Tag maxUsersTag = findTag(tags, Tag.NAME_MAXUSERS);
         assertNotNull(maxUsersTag, "Missing NAME_MAXUSERS tag");
-        assertEquals(50000, (int) maxUsersTag.value());
+        assertEquals(Tag.TYPE_STRING, maxUsersTag.type());
+        assertEquals("50000", (String) maxUsersTag.value());
 
         Tag softTag = findTag(tags, Tag.NAME_SOFT_FILES);
         assertNotNull(softTag, "Missing NAME_SOFT_FILES tag");
-        assertEquals(1000000, (int) softTag.value());
+        assertEquals(Tag.TYPE_STRING, softTag.type());
+        assertEquals("1000000", (String) softTag.value());
 
         Tag hardTag = findTag(tags, Tag.NAME_HARD_FILES);
         assertNotNull(hardTag, "Missing NAME_HARD_FILES tag");
-        assertEquals(2000000, (int) hardTag.value());
+        assertEquals(Tag.TYPE_STRING, hardTag.type());
+        assertEquals("2000000", (String) hardTag.value());
 
         Tag tcpFlagsTag = findTag(tags, Tag.NAME_TCP_FLAGS);
         assertNotNull(tcpFlagsTag, "Missing NAME_TCP_FLAGS tag (newly added to UDP)");

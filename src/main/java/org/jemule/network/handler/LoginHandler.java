@@ -163,20 +163,23 @@ public class LoginHandler {
 
         // TCP capability flags matching eMule SRV_TCPFLG_ constants
         int tcpFlags = Tag.TCPFLG_COMPRESSION | Tag.TCPFLG_NEWTAGS | Tag.TCPFLG_UNICODE | Tag.TCPFLG_TYPETAGINTEGER | Tag.TCPFLG_LARGEFILES | Tag.UDPFLG_UDPOBFUSCATION | Tag.TCPFLG_TCPOBFUSCATION;
+        // Add 0x200 (UDP Obfuscation support) to TCP flags as well so the client knows we support it
+        tcpFlags |= 0x200;
 
         // UDP capability flags matching eMule SRV_UDPFLG_ constants
         int udpFlags = Tag.UDPFLG_EXT_GETSOURCES | Tag.UDPFLG_NEWTAGS | Tag.UDPFLG_UNICODE | Tag.UDPFLG_LARGEFILES | Tag.UDPFLG_UDPOBFUSCATION | Tag.UDPFLG_TCPOBFUSCATION;
 
         List<Tag> tags = new ArrayList<>();
         // Important: Standard Lugdunum/eMule servers often send critical stats first
-        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_MAXUSERS, maxUsers));
-        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOFTFILES, 1000000));
-        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_HARDFILES, 2000000));
+        // Note: Using TYPE_STRING for limits as some eMule clients expect strings for display
+        tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_MAXUSERS, String.valueOf(maxUsers)));
+        tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_SOFTFILES, "1000000"));
+        tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_HARDFILES, "2000000"));
         
         tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_SERVERNAME, serverName));
         tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_DESCRIPTION, desc));
-        // ST_VERSION as string for better compatibility
-        tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_SERVER_VERSION, "17"));
+        // ST_VERSION as integer for standard compliance
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SERVER_VERSION, 17));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_TCP_FLAGS, tcpFlags));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_LOWIDUSERS, context.getRegistry().lowIdCount()));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDPFLAGS, udpFlags));
