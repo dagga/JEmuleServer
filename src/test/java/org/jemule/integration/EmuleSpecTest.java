@@ -104,11 +104,11 @@ public class EmuleSpecTest {
 
                         Tag softFilesTag = tags.stream().filter(t -> t.name().equals(Tag.NAME_SOFTFILES)).findFirst().orElse(null);
                         assertNotNull(softFilesTag, "ST_SOFTFILES manquant");
-                        assertEquals(100000, (int) softFilesTag.value());
+                        assertEquals(1000000, (int) softFilesTag.value());
 
                         Tag hardFilesTag = tags.stream().filter(t -> t.name().equals(Tag.NAME_HARDFILES)).findFirst().orElse(null);
                         assertNotNull(hardFilesTag, "ST_HARDFILES manquant");
-                        assertEquals(100000, (int) hardFilesTag.value());
+                        assertEquals(2000000, (int) hardFilesTag.value());
 
                         Tag udpFlagsTag = tags.stream().filter(t -> t.name().equals(Tag.NAME_UDPFLAGS)).findFirst().orElse(null);
                         assertNotNull(udpFlagsTag, "ST_UDPFLAGS manquant");
@@ -183,8 +183,8 @@ public class EmuleSpecTest {
             
             assertEquals(TEST_PORT, tcpPort, "Le port TCP dans le paquet UDP est incorrect");
             assertEquals(5000, maxUsers, "MaxUsers incorrect dans OP_GLOBSERVSTATRES");
-            assertEquals(100000, softFiles, "SoftFiles incorrect dans OP_GLOBSERVSTATRES");
-            assertEquals(100000, hardFiles, "HardFiles incorrect dans OP_GLOBSERVSTATRES");
+            assertEquals(1000000, softFiles, "SoftFiles incorrect dans OP_GLOBSERVSTATRES");
+            assertEquals(2000000, hardFiles, "HardFiles incorrect dans OP_GLOBSERVSTATRES");
             assertTrue((udpFlags & 0x200) != 0, "Drapeau UDPOBFUSCATION (0x200) manquant dans OP_GLOBSERVSTATRES");
             assertTrue((udpFlags & 0x400) != 0, "Drapeau TCPOBFUSCATION (0x400) manquant dans OP_GLOBSERVSTATRES");
         }

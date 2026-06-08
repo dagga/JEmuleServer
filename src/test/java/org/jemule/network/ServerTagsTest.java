@@ -100,11 +100,11 @@ class ServerTagsTest {
 
         Tag softTag = findTag(tags, Tag.NAME_SOFT_FILES);
         assertNotNull(softTag, "Missing NAME_SOFT_FILES tag");
-        assertEquals(100000, (int) softTag.value());
+        assertEquals(1000000, (int) softTag.value());
 
         Tag hardTag = findTag(tags, Tag.NAME_HARD_FILES);
         assertNotNull(hardTag, "Missing NAME_HARD_FILES tag");
-        assertEquals(100000, (int) hardTag.value());
+        assertEquals(2000000, (int) hardTag.value());
 
         Tag tcpFlagsTag = findTag(tags, Tag.NAME_TCP_FLAGS);
         assertNotNull(tcpFlagsTag, "Missing NAME_TCP_FLAGS tag (newly added to UDP)");

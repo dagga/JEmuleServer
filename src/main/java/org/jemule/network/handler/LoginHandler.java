@@ -169,8 +169,8 @@ public class LoginHandler {
         List<Tag> tags = new ArrayList<>();
         // Important: Standard Lugdunum/eMule servers often send critical stats first
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_MAXUSERS, maxUsers));
-        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOFTFILES, maxFiles));
-        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_HARDFILES, maxFiles));
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOFTFILES, 1000000));
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_HARDFILES, 2000000));
         
         tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_SERVERNAME, serverName));
         tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_DESCRIPTION, desc));
@@ -256,8 +256,8 @@ public class LoginHandler {
             resp.putInt(users);
             resp.putInt(files);
             resp.putInt(maxUsers);
-            resp.putInt(maxFiles); // SoftFiles
-            resp.putInt(maxFiles); // HardFiles
+            resp.putInt(1000000); // SoftFiles (Standard Lugdunum value)
+            resp.putInt(2000000); // HardFiles (Standard Lugdunum value)
             resp.putInt(udpFlags);
             resp.putInt(lowIdUsers);
             resp.putShort((short) udpPort);
