@@ -246,6 +246,7 @@ public class Server {
         java.util.Set<Integer> ports = new java.util.LinkedHashSet<>();
         ports.add(config.port());
         if (config.port() <= 0xFFFF - 4) ports.add(config.port() + 4);
+        if (config.port() <= 0xFFFF - 12) ports.add(config.port() + 12);
 
         for (int port : ports) {
             final int bindPort = port;
@@ -315,7 +316,16 @@ public class Server {
         byte[] data = p.getData();
         byte[] recv = java.util.Arrays.copyOfRange(data, 0, p.getLength());
         log.info("UDP recv {} bytes from {}:{} - {}", p.getLength(), p.getAddress(), p.getPort(), hex(recv, recv.length));
-        if ((data[0] & 0xFF) != (Packet.PROTOCOL_ED2K & 0xFF)) return;
+        
+        // Handle potentially obfuscated UDP packet
+        if ((data[0] & 0xFF) != (Packet.PROTOCOL_ED2K & 0xFF) && 
+            (data[0] & 0xFF) != (Packet.PROTOCOL_EMULE & 0xFF)) {
+            // For now, if we don't recognize the protocol, we check if it's on the obfuscation port
+            if (ds.getLocalPort() == config.port() + 12) {
+                 log.debug("Received potential obfuscated UDP packet on port {}, but UDP obfuscation is not fully implemented yet.", ds.getLocalPort());
+            }
+            return;
+        }
 
         // Spec says UDP packets are: [Protocol] [Opcode] [Data...]
         // [0xE3] [0x96] [Challenge 4 bytes] -> Total 6 bytes
@@ -461,13 +471,14 @@ public class Server {
         int udpFlags = Tag.UDPFLG_EXT_GETSOURCES | Tag.UDPFLG_NEWTAGS | Tag.UDPFLG_UNICODE | Tag.UDPFLG_LARGEFILES | Tag.UDPFLG_UDPOBFUSCATION | Tag.UDPFLG_TCPOBFUSCATION;
 
         java.util.List<org.jemule.protocol.Tag> tags = new java.util.ArrayList<>();
-        tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_STRING, org.jemule.protocol.Tag.NAME_SERVERNAME, sName));
-        tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_STRING, org.jemule.protocol.Tag.NAME_DESCRIPTION, sDesc));
         tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_MAXUSERS, maxUsers));
         tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_SOFTFILES, maxFiles));
         tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_HARDFILES, maxFiles));
+
+        tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_STRING, org.jemule.protocol.Tag.NAME_SERVERNAME, sName));
+        tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_STRING, org.jemule.protocol.Tag.NAME_DESCRIPTION, sDesc));
         tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_TCP_FLAGS, tcpFlags));
-        tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_SERVER_VERSION, (17 << 16) | 15));
+        tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_STRING, org.jemule.protocol.Tag.NAME_SERVER_VERSION, "17"));
         tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_LOWIDUSERS, registry.lowIdCount()));
         tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_UDPFLAGS, udpFlags));
         tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_UDP_KEY, getUdpKey()));

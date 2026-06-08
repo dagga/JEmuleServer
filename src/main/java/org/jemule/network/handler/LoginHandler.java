@@ -167,15 +167,16 @@ public class LoginHandler {
         int udpFlags = Tag.UDPFLG_EXT_GETSOURCES | Tag.UDPFLG_NEWTAGS | Tag.UDPFLG_UNICODE | Tag.UDPFLG_LARGEFILES | Tag.UDPFLG_UDPOBFUSCATION | Tag.UDPFLG_TCPOBFUSCATION;
 
         List<Tag> tags = new ArrayList<>();
-        tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_SERVERNAME, serverName));
-        tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_DESCRIPTION, desc));
-        // ST_VERSION as uint32: (major<<16) | minor
-        int serverVersionInt = 17;
-        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SERVER_VERSION, serverVersionInt));
-        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_TCP_FLAGS, tcpFlags));
+        // Important: Standard Lugdunum/eMule servers often send critical stats first
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_MAXUSERS, maxUsers));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOFTFILES, maxFiles));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_HARDFILES, maxFiles));
+        
+        tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_SERVERNAME, serverName));
+        tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_DESCRIPTION, desc));
+        // ST_VERSION as string for better compatibility
+        tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_SERVER_VERSION, "17"));
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_TCP_FLAGS, tcpFlags));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_LOWIDUSERS, context.getRegistry().lowIdCount()));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDPFLAGS, udpFlags));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDPKEY, org.jemule.network.Server.getUdpKey())); // ST_UDPKEY
@@ -248,7 +249,9 @@ public class LoginHandler {
             // UDP Flags matching eMule's expectations (from server.h)
             int udpFlags = Tag.UDPFLG_EXT_GETSOURCES | Tag.UDPFLG_NEWTAGS | Tag.UDPFLG_UNICODE | Tag.UDPFLG_LARGEFILES | Tag.UDPFLG_UDPOBFUSCATION | Tag.UDPFLG_TCPOBFUSCATION;
 
-            ByteBuffer resp = ByteBuffer.allocate(40).order(ByteOrder.LITTLE_ENDIAN);
+            ByteBuffer resp = ByteBuffer.allocate(42).order(ByteOrder.LITTLE_ENDIAN);
+            resp.put(Packet.PROTOCOL_ED2K);
+            resp.put((byte) 0x97); // OP_GLOBSERVSTATRES
             resp.putInt(0); // challenge == 0 (unsolicited)
             resp.putInt(users);
             resp.putInt(files);
@@ -261,14 +264,8 @@ public class LoginHandler {
             resp.putShort((short) tcpPort);
             resp.putInt(udpKey);
             resp.flip();
-            byte[] globData = new byte[resp.remaining()];
-            resp.get(globData);
-
-            ByteBuffer udpPkt = ByteBuffer.allocate(globData.length + 2).order(ByteOrder.LITTLE_ENDIAN);
-            udpPkt.put(Packet.PROTOCOL_ED2K); // 0xE3
-            udpPkt.put((byte) 0x97); // OP_GLOBSERVSTATRES
-            udpPkt.put(globData);
-            byte[] globOut = udpPkt.array();
+            byte[] globOut = new byte[resp.remaining()];
+            resp.get(globOut);
 
             boolean sent = Server.sendUdpFromBoundPort(context.getConfig().port(), globOut, addr, port);
             if (!sent && context.getConfig().port() <= 0xFFFF - 4) sent = Server.sendUdpFromBoundPort(context.getConfig().port() + 4, globOut, addr, port);

@@ -91,8 +91,8 @@ class ServerTagsTest {
 
         Tag verTag = findTag(tags, Tag.NAME_SERVER_VERSION);
         assertNotNull(verTag, "Missing NAME_SERVER_VERSION tag");
-        assertEquals(Tag.TYPE_INTEGER, verTag.type());
-        assertEquals((17 << 16) | 15, (int) verTag.value());
+        assertEquals(Tag.TYPE_STRING, verTag.type());
+        assertEquals("17", (String) verTag.value());
 
         Tag maxUsersTag = findTag(tags, Tag.NAME_MAXUSERS);
         assertNotNull(maxUsersTag, "Missing NAME_MAXUSERS tag");
