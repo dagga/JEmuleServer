@@ -71,8 +71,13 @@ public class ObfuscationHandler {
         if (markerPos == -1 || markerPos < 5) { // Needs at least 1 byte (any) + 4 bytes (nonce) before 0x97
             if (log.isDebugEnabled() && read > 0) {
                 StringBuilder sb = new StringBuilder();
-                for (int i = 0; i < Math.min(read, 32); i++) sb.append(String.format("%02X ", fullProbe[i]));
+                for (int i = 0; i < Math.min(read, 64); i++) sb.append(String.format("%02X ", fullProbe[i]));
                 log.debug("Obfuscation marker 0x97 not found in first {} bytes: {}", read, sb.toString().trim());
+            }
+            // If the first byte was not a known protocol, we should probably fail here instead of falling back
+            // to standard packet reading which will certainly fail with "Invalid packet length".
+            if (firstByte != (Packet.PROTOCOL_ED2K & 0xFF) && firstByte != (Packet.PROTOCOL_EMULE & 0xFF) && firstByte != (Packet.PROTOCOL_ZLIB & 0xFF)) {
+                throw new IOException(String.format("Invalid protocol or failed obfuscation handshake (first byte: 0x%02X)", firstByte));
             }
             pin.unread(fullProbe, 0, read);
             return pin;
