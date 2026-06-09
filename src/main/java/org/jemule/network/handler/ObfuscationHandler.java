@@ -40,37 +40,51 @@ public class ObfuscationHandler {
         int markerPos = -1;
         // eMule handshake: [random(1)] [clientNonce(4)] [padding(0-15)] [0x97]
         // But some implementations or versions might vary.
-        // We'll look for 0x97 in the first bytes we read.
-        for (int i = read - 1; i >= 0; i--) {
-            if ((probe[i] & 0xFF) == 0x97) {
-                markerPos = i;
+        // We'll read up to 64 bytes to be safe, as some clients might send more padding.
+        int maxProbe = 64;
+        byte[] fullProbe = new byte[maxProbe];
+        System.arraycopy(probe, 0, fullProbe, 0, read);
+        
+        // Read more bytes (blocking) up to maxProbe to find the 0x97 marker
+        while (read < maxProbe) {
+            int r = pin.read(fullProbe, read, 1);
+            if (r == -1) break;
+            read += r;
+            int b = fullProbe[read - 1] & 0xFF;
+            if (b == 0x97 && read >= 5) { // ensure we have at least 1 + 4 before marker
+                markerPos = read - 1;
                 break;
             }
+            // Fast path: if we already have a full ED2K header pattern by chance (very unlikely here), we'd have returned earlier.
         }
 
         if (markerPos == -1) {
-            // Marker not found in first 6 bytes, maybe more padding?
-            int more = Math.min(in.available(), 15);
-            if (more > 0) {
-                byte[] extra = new byte[read + more];
-                System.arraycopy(probe, 0, extra, 0, read);
-                int extraRead = pin.read(extra, read, more);
-                if (extraRead > 0) {
-                    read += extraRead;
-                    probe = extra;
-                    for (int i = read - 1; i >= 0; i--) {
-                        if ((probe[i] & 0xFF) == 0x97) {
-                            markerPos = i;
-                            break;
-                        }
-                    }
+            // Fallback scan (in case marker was earlier in buffer)
+            for (int i = 0; i < read; i++) {
+                if ((fullProbe[i] & 0xFF) == 0x97 && i >= 5) {
+                    markerPos = i;
+                    break;
                 }
             }
         }
 
-        if (markerPos < 5) { // Needs at least 1 byte (any) + 4 bytes (nonce) before 0x97
-            pin.unread(probe, 0, read);
+        if (markerPos == -1 || markerPos < 5) { // Needs at least 1 byte (any) + 4 bytes (nonce) before 0x97
+            if (log.isDebugEnabled() && read > 0) {
+                StringBuilder sb = new StringBuilder();
+                for (int i = 0; i < Math.min(read, 32); i++) sb.append(String.format("%02X ", fullProbe[i]));
+                log.debug("Obfuscation marker 0x97 not found in first {} bytes: {}", read, sb.toString().trim());
+            }
+            pin.unread(fullProbe, 0, read);
             return pin;
+        }
+
+        probe = fullProbe; // Use the full buffer for further processing
+
+        // Push back everything AFTER the marker so the next read returns the encrypted method byte
+        int afterLen = read - (markerPos + 1);
+        if (afterLen > 0) {
+            pin.unread(probe, markerPos + 1, afterLen);
+            read -= afterLen; // logical position for our local buffer
         }
 
         SocketAddress remoteAddr = context.getSocket().getRemoteSocketAddress();
