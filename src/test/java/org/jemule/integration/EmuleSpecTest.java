@@ -43,19 +43,27 @@ public class EmuleSpecTest {
         });
         serverThread.start();
         // Attendre que le serveur démarre
-        try { Thread.sleep(1000); } catch (InterruptedException e) {}
+        try { Thread.sleep(1500); } catch (InterruptedException e) {}
     }
 
     @AfterAll
     static void tearDown() {
-        server.stop();
-        serverThread.interrupt();
+        if (server != null) {
+            server.stop();
+        }
+        if (serverThread != null) {
+            serverThread.interrupt();
+        }
+        // Allow time for ports to be released
+        try { Thread.sleep(500); } catch (InterruptedException e) {}
     }
 
     @Test
     @DisplayName("Vérification de la conformité TCP (ServerIdent et Version)")
     void testTcpHandshakeConformity() throws IOException {
-        try (Socket socket = new Socket("127.0.0.1", TEST_PORT)) {
+        try (Socket socket = new Socket()) {
+            socket.setSoTimeout(5000);
+            socket.connect(new java.net.InetSocketAddress("127.0.0.1", TEST_PORT), 5000);
             OutputStream out = socket.getOutputStream();
             InputStream in = socket.getInputStream();
 
