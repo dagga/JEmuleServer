@@ -19,6 +19,7 @@
 
 package org.jemule.network;
 
+import org.jemule.network.handler.HandlerUtils; // Import added for debugging
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -66,20 +67,26 @@ public record Packet(byte protocol, byte opcode, byte[] data) {
     public static Packet read(InputStream in, int maxPacketSize) throws IOException {
         byte[] header = in.readNBytes(HEADER_SIZE);
         if (header.length < HEADER_SIZE) {
-            StringBuilder sb = new StringBuilder();
-            for (byte b : header) sb.append(String.format("%02X ", b));
-            throw new EOFException("Incomplete header (received " + header.length + " bytes: " + sb.toString().trim() + ")");
+            if (log.isDebugEnabled()) {
+                log.debug("Incomplete header received: {} bytes. Raw: {}", header.length, HandlerUtils.bytesToHex(header));
+            }
+            throw new EOFException("Incomplete header (received " + header.length + " bytes)");
         }
 
         ByteBuffer buf = ByteBuffer.wrap(header).order(ByteOrder.LITTLE_ENDIAN);
         byte protocol = buf.get();
-        int length = buf.getInt(); // Length field encodes payload size + 1 (opcode)
+        int length = buf.getInt(); // Corrected: Length field encodes payload size only
         byte opcode = buf.get();
 
-        if (length < 1 || length > maxPacketSize) // length must be at least 1 (opcode only)
+        if (log.isDebugEnabled()) {
+            log.debug("Reading packet header: Raw={} Proto=0x{} Length={} Opcode=0x{}",
+                    HandlerUtils.bytesToHex(header), String.format("%02X", protocol & 0xFF), length, String.format("%02X", opcode & 0xFF));
+        }
+
+        if (length < 0 || length > maxPacketSize) // Corrected: length can be 0 for empty payloads
             throw new IOException("Invalid packet length: " + length);
 
-        int payloadLength = length - 1; // payload size (length includes opcode)
+        int payloadLength = length; // Corrected: payload size is directly 'length'
         byte[] payload = in.readNBytes(payloadLength);
         if (payload.length < payloadLength) {
             // Build a short hex preview of what we did receive for diagnostics
@@ -112,7 +119,7 @@ public record Packet(byte protocol, byte opcode, byte[] data) {
 
         ByteBuffer buf = ByteBuffer.allocate(HEADER_SIZE + payload.length).order(ByteOrder.LITTLE_ENDIAN);
         buf.put(proto);
-        buf.putInt(payload.length + 1); // length is payload + 1 (opcode)
+        buf.putInt(payload.length); // Corrected: length is payload size only
         buf.put(opcode);
         buf.put(payload);
         out.write(buf.array());
