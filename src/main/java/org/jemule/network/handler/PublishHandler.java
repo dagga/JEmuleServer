@@ -9,9 +9,11 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.OutputStream;
+import java.nio.BufferUnderflowException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.List;
 
 public class PublishHandler {
@@ -27,16 +29,28 @@ public class PublishHandler {
 
         try {
             ByteBuffer buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN);
-            if (data[0] < 32) {
-                int count = buf.getInt();
+            if (data[0] < 32) { // Heuristic to guess if it's binary format
+                int count = 0;
+                try {
+                    count = buf.getInt();
+                } catch (BufferUnderflowException e) {
+                    log.warn("Failed to read file count from PUBLISH packet: {}", e.getMessage());
+                    return;
+                }
                 log.info("Detected binary PUBLISH format with {} files", count);
                 for (int i = 0; i < count; i++) {
-                    if (buf.remaining() < 16) break;
+                    if (buf.remaining() < 16) {
+                        log.warn("Buffer underflow before reading hash for file {}. Remaining: {}", i, buf.remaining());
+                        break;
+                    }
                     byte[] hashBytes = new byte[16];
                     buf.get(hashBytes);
 
                     if (op == OpCode.OFFER_FILES) {
-                        if (buf.remaining() < 6) break;
+                        if (buf.remaining() < 6) {
+                            log.warn("Buffer underflow before reading client ID/Port for file {}. Remaining: {}", i, buf.remaining());
+                            break;
+                        }
                         buf.getInt();   // FileID / ClientID
                         buf.getShort(); // FilePort / ClientPort
                     }
@@ -47,7 +61,16 @@ public class PublishHandler {
 
                     List<Tag> tags = null;
                     try {
+                        if (log.isDebugEnabled()) {
+                            log.debug("Before reading tags for file {}: buf.position={}, buf.remaining={}, raw_data={}",
+                                    i, buf.position(), buf.remaining(), HandlerUtils.bytesToHex(Arrays.copyOfRange(data, buf.position(), data.length)));
+                        }
                         tags = Tag.readList(buf);
+                    } catch (BufferUnderflowException e) {
+                        log.warn("BufferUnderflowException while reading tags for file {}. Raw data around error: {}",
+                                i, HandlerUtils.bytesToHex(Arrays.copyOfRange(data, Math.max(0, buf.position() - 32), Math.min(data.length, buf.position() + 32))));
+                        log.warn("Failed to read tags for file {}: {}", i, e.getMessage());
+                        break;
                     } catch (Exception e) {
                         log.warn("Failed to read tags for file {}: {}", i, e.getClass().getSimpleName() + (e.getMessage() != null ? ": " + e.getMessage() : ""));
                         break;
@@ -57,16 +80,12 @@ public class PublishHandler {
                     String type = "";
 
                     for (Tag t : tags) {
-                        // Replaced switch with if-else if to avoid "constant string expression required" error
                         if (t.name().equals(Tag.NAME_FILENAME)) {
                             name = String.valueOf(t.value());
-                        } else if (t.name().equals(Tag.NAME_FILESIZE) || t.name().equals(Tag.NAME_FILESIZE_HI)) {
-                            long val = ((Number) t.value()).longValue();
-                            if (t.name().equals(Tag.NAME_FILESIZE_HI)) {
-                                size = (val << 32) | (size & 0xFFFFFFFFL);
-                            } else {
-                                size = (size & 0xFFFFFFFF00000000L) | (val & 0xFFFFFFFFL);
-                            }
+                        } else if (t.name().equals(Tag.NAME_FILESIZE)) {
+                            size = ((Number) t.value()).longValue();
+                        } else if (t.name().equals(Tag.NAME_FILESIZE_HI)) { // Handle high part of 64-bit size
+                            size = (size & 0xFFFFFFFFL) | (((Number) t.value()).longValue() << 32);
                         } else if (t.name().equals(Tag.NAME_FILETYPE)) {
                             type = String.valueOf(t.value());
                         }
