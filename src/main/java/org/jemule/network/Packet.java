@@ -75,7 +75,7 @@ public record Packet(byte protocol, byte opcode, byte[] data) {
 
         ByteBuffer buf = ByteBuffer.wrap(header).order(ByteOrder.LITTLE_ENDIAN);
         byte protocol = buf.get();
-        int length = buf.getInt(); // Corrected: Length field encodes payload size only
+        int length = buf.getInt(); // Length field encodes payload size + 1 (opcode)
         byte opcode = buf.get();
 
         if (log.isDebugEnabled()) {
@@ -83,10 +83,10 @@ public record Packet(byte protocol, byte opcode, byte[] data) {
                     HandlerUtils.bytesToHex(header), String.format("%02X", protocol & 0xFF), length, String.format("%02X", opcode & 0xFF));
         }
 
-        if (length < 0 || length > maxPacketSize) // Corrected: length can be 0 for empty payloads
+        if (length < 1 || length > maxPacketSize) // length must be at least 1 (opcode only)
             throw new IOException("Invalid packet length: " + length);
 
-        int payloadLength = length; // Corrected: payload size is directly 'length'
+        int payloadLength = length - 1; // payload size (length includes opcode)
         byte[] payload = in.readNBytes(payloadLength);
         if (payload.length < payloadLength) {
             // Build a short hex preview of what we did receive for diagnostics
@@ -119,7 +119,7 @@ public record Packet(byte protocol, byte opcode, byte[] data) {
 
         ByteBuffer buf = ByteBuffer.allocate(HEADER_SIZE + payload.length).order(ByteOrder.LITTLE_ENDIAN);
         buf.put(proto);
-        buf.putInt(payload.length); // Corrected: length is payload size only
+        buf.putInt(payload.length + 1); // length is payload + 1 (opcode)
         buf.put(opcode);
         buf.put(payload);
         out.write(buf.array());
