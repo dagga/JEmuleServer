@@ -250,9 +250,16 @@ public record Tag(byte type, String name, Object value) {
         if (log.isDebugEnabled()) {
             log.debug("Tag.readList: Reading {} tags, buf.position={}, buf.remaining={}", count, buf.position(), buf.remaining());
         }
-        if (count < 0 || count > 1000) { // Safety limit
-             log.warn("Tag.readList: Invalid tag count: {}", count);
+        if (count < 0 || count > 50000) { // Increased safety limit, eMule packets can be large but not infinite
+             log.warn("Tag.readList: Invalid tag count: {}. Buffer position: {}, remaining: {}", count, buf.position(), buf.remaining());
              return new ArrayList<>();
+        }
+        
+        // Final sanity check: if count * minimal_tag_size > remaining, it's definitely invalid
+        // Minimal tag is 1 (type/id) + 1 (id byte) + value (could be 0 for empty string, but usually at least 1)
+        if (count > 0 && count > buf.remaining()) {
+            log.warn("Tag.readList: Tag count {} exceeds remaining buffer bytes {}", count, buf.remaining());
+            return new ArrayList<>();
         }
 
         List<Tag> tags = new ArrayList<>(count);

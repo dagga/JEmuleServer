@@ -222,13 +222,28 @@ public class ObfuscationHandler {
             
             // Consume the Sync bytes that the client sends after g^b
             // requester sync: <MagicValue 4><EncryptionMethodsSupported 1><EncryptionMethodPreferred 1><PaddingLen 1><RandomBytes PaddingLen>
-            byte[] syncHeader = new byte[4];
-            int syncRead = encryptedIn.read(syncHeader);
-            if (syncRead == 4) {
-                int syncMagic = java.nio.ByteBuffer.wrap(syncHeader).getInt();
-                if (syncMagic != MAGICVALUE_SYNC) {
-                    log.warn("DH sync magic mismatch: expected 0x{}, got 0x{}", Integer.toHexString(MAGICVALUE_SYNC), Integer.toHexString(syncMagic));
+            // Note: client might delay this until first payload, but here it should be at the start of encryptedIn.
+            // We search for MAGICVALUE_SYNC in the first 256 bytes to be robust.
+            boolean syncFound = false;
+            for (int i = 0; i < 256; i++) {
+                int val = encryptedIn.read();
+                if (val == -1) break;
+                if (val == ((MAGICVALUE_SYNC >> 24) & 0xFF)) {
+                    int b2 = encryptedIn.read();
+                    if (b2 == ((MAGICVALUE_SYNC >> 16) & 0xFF)) {
+                        int b3 = encryptedIn.read();
+                        if (b3 == ((MAGICVALUE_SYNC >> 8) & 0xFF)) {
+                            int b4 = encryptedIn.read();
+                            if (b4 == (MAGICVALUE_SYNC & 0xFF)) {
+                                syncFound = true;
+                                break;
+                            }
+                        }
+                    }
                 }
+            }
+
+            if (syncFound) {
                 int meths = encryptedIn.read();
                 int pref = encryptedIn.read();
                 int padLen = encryptedIn.read();
@@ -236,6 +251,8 @@ public class ObfuscationHandler {
                     encryptedIn.readNBytes(padLen);
                 }
                 log.debug("Consumed DH Sync from client: meths={}, pref={}, pad={}", meths, pref, padLen);
+            } else {
+                log.warn("DH sync magic NOT found in first 256 bytes from {}", remoteAddr);
             }
 
             context.setObfuscated(true);

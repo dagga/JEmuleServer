@@ -66,6 +66,12 @@ public class PublishHandler {
                                     i, buf.position(), buf.remaining(), HandlerUtils.bytesToHex(Arrays.copyOfRange(data, buf.position(), data.length)));
                         }
                         tags = Tag.readList(buf);
+                        if (tags.isEmpty() && i < count - 1) {
+                            // If we failed to read any tags for a file in the middle of a multi-file packet, 
+                            // we are probably misaligned and cannot reliably continue.
+                            log.warn("Empty tag list read for file {}/{} - alignment likely lost", i + 1, count);
+                            break;
+                        }
                     } catch (BufferUnderflowException e) {
                         log.warn("BufferUnderflowException while reading tags for file {}. Raw data around error: {}",
                                 i, HandlerUtils.bytesToHex(Arrays.copyOfRange(data, Math.max(0, buf.position() - 32), Math.min(data.length, buf.position() + 32))));
