@@ -96,22 +96,18 @@ class ServerTagsTest {
 
         Tag maxUsersTag = findTag(tags, Tag.NAME_MAXUSERS);
         assertNotNull(maxUsersTag, "Missing NAME_MAXUSERS tag");
-        assertEquals(Tag.TYPE_STRING, maxUsersTag.type());
-        assertEquals("50000", (String) maxUsersTag.value());
+        assertEquals(Tag.TYPE_INTEGER, maxUsersTag.type());
+        assertEquals(50000, ((Number) maxUsersTag.value()).intValue());
 
         Tag softTag = findTag(tags, Tag.NAME_SOFT_FILES);
         assertNotNull(softTag, "Missing NAME_SOFT_FILES tag");
-        assertEquals(Tag.TYPE_STRING, softTag.type());
-        assertEquals("1000000", (String) softTag.value());
+        assertEquals(Tag.TYPE_INTEGER, softTag.type());
+        assertEquals(1000000, ((Number) softTag.value()).intValue());
 
         Tag hardTag = findTag(tags, Tag.NAME_HARD_FILES);
         assertNotNull(hardTag, "Missing NAME_HARD_FILES tag");
-        assertEquals(Tag.TYPE_STRING, hardTag.type());
-        assertEquals("2000000", (String) hardTag.value());
-
-        Tag tcpFlagsTag = findTag(tags, Tag.NAME_TCP_FLAGS);
-        assertNotNull(tcpFlagsTag, "Missing NAME_TCP_FLAGS tag (newly added to UDP)");
-        assertEquals(TCP_FLAGS, (int) tcpFlagsTag.value());
+        assertEquals(Tag.TYPE_INTEGER, hardTag.type());
+        assertEquals(2000000, ((Number) hardTag.value()).intValue());
 
         Tag lowIdTag = findTag(tags, Tag.NAME_LOWIDUSERS);
         assertNotNull(lowIdTag, "Missing NAME_LOWIDUSERS tag (newly added)");

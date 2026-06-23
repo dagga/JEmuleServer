@@ -173,15 +173,14 @@ public class LoginHandler {
         List<Tag> tags = new ArrayList<>();
         // Important: Standard Lugdunum/eMule servers often send critical stats first
         // Note: Using TYPE_STRING for limits as some eMule clients expect strings for display
-        tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_MAXUSERS, String.valueOf(maxUsers)));
-        tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_SOFTFILES, "1000000"));
-        tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_HARDFILES, "2000000"));
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_MAXUSERS, maxUsers));
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOFTFILES, 1000000));
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_HARDFILES, 2000000));
         
         tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_SERVERNAME, serverName));
         tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_DESCRIPTION, desc));
         // ST_VERSION as integer for standard compliance
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SERVER_VERSION, 17));
-        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_TCP_FLAGS, tcpFlags));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_LOWIDUSERS, context.getRegistry().lowIdCount()));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDPFLAGS, udpFlags));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDPKEY, org.jemule.network.Server.getUdpKey())); // ST_UDPKEY
