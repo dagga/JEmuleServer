@@ -108,15 +108,15 @@ public class EmuleSpecTest {
 
                         Tag maxUsersTag = tags.stream().filter(t -> t.name().equals(Tag.NAME_MAXUSERS)).findFirst().orElse(null);
                         assertNotNull(maxUsersTag, "ST_MAXUSERS manquant");
-                        assertEquals("5000", (String) maxUsersTag.value());
+                        assertEquals(5000, ((Number) maxUsersTag.value()).intValue());
 
                         Tag softFilesTag = tags.stream().filter(t -> t.name().equals(Tag.NAME_SOFTFILES)).findFirst().orElse(null);
                         assertNotNull(softFilesTag, "ST_SOFTFILES manquant");
-                        assertEquals("1000000", (String) softFilesTag.value());
+                        assertEquals(1000000, ((Number) softFilesTag.value()).intValue());
 
                         Tag hardFilesTag = tags.stream().filter(t -> t.name().equals(Tag.NAME_HARDFILES)).findFirst().orElse(null);
                         assertNotNull(hardFilesTag, "ST_HARDFILES manquant");
-                        assertEquals("2000000", (String) hardFilesTag.value());
+                        assertEquals(2000000, ((Number) hardFilesTag.value()).intValue());
 
                         Tag udpFlagsTag = tags.stream().filter(t -> t.name().equals(Tag.NAME_UDPFLAGS)).findFirst().orElse(null);
                         assertNotNull(udpFlagsTag, "ST_UDPFLAGS manquant");
