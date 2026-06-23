@@ -162,9 +162,7 @@ public class LoginHandler {
         int maxUsers = context.getConfig().maxUsers();
 
         // TCP capability flags matching eMule SRV_TCPFLG_ constants
-        int tcpFlags = Tag.TCPFLG_COMPRESSION | Tag.TCPFLG_NEWTAGS | Tag.TCPFLG_UNICODE | Tag.TCPFLG_TYPETAGINTEGER | Tag.TCPFLG_LARGEFILES | Tag.UDPFLG_UDPOBFUSCATION | Tag.TCPFLG_TCPOBFUSCATION;
-        // Add 0x200 (UDP Obfuscation support) to TCP flags as well so the client knows we support it
-        tcpFlags |= 0x200;
+        int tcpFlags = Tag.TCPFLG_COMPRESSION | Tag.TCPFLG_NEWTAGS | Tag.TCPFLG_UNICODE | Tag.TCPFLG_TYPETAGINTEGER | Tag.TCPFLG_LARGEFILES | Tag.TCPFLG_UDPOBFUSCATION | Tag.TCPFLG_TCPOBFUSCATION;
 
         // UDP capability flags matching eMule SRV_UDPFLG_ constants
         int udpFlags = Tag.UDPFLG_EXT_GETSOURCES | Tag.UDPFLG_NEWTAGS | Tag.UDPFLG_UNICODE | Tag.UDPFLG_LARGEFILES | Tag.UDPFLG_UDPOBFUSCATION | Tag.UDPFLG_TCPOBFUSCATION;
