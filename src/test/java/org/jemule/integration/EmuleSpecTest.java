@@ -125,13 +125,20 @@ public class EmuleSpecTest {
                         assertTrue((udpFlagsVal & 0x400) != 0, "Drapeau TCPOBFUSCATION (0x400) manquant dans ST_UDPFLAGS");
                     } else if (p.opcode() == 0x40) { // ID_CHANGE
                         idChangeFound = true;
-                        // On attend 8 octets de données (ID + Flags)
-                        assertEquals(8, p.data().length, "OP_IDCHANGE doit contenir exactement 8 octets de données");
+                        // On attend maintenant 20 octets de données (ID + Flags + Padding + ReportedIP + ObfPort)
+                        // Précédemment on attendait 8 octets. eMule accepte les deux mais préfère 20.
+                        assertTrue(p.data().length >= 8, "OP_IDCHANGE doit contenir au moins 8 octets de données");
                         ByteBuffer buf = ByteBuffer.wrap(p.data()).order(ByteOrder.LITTLE_ENDIAN);
                         int newId = buf.getInt();
                         int flags = buf.getInt();
                         // Vérifier que le bit LARGEFILES (0x100) est présent
                         assertTrue((flags & 0x100) != 0, "Bit LARGEFILES (0x100) manquant dans OP_IDCHANGE");
+                        if (p.data().length >= 20) {
+                            int pad = buf.getInt();
+                            int reportedIp = buf.getInt();
+                            int obfPort = buf.getInt();
+                            assertTrue(obfPort > 0, "Port d'obfuscation manquant ou nul dans OP_IDCHANGE");
+                        }
                     }
                 }
                 if (versionFound && identFound && idChangeFound) break;

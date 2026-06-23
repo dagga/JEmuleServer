@@ -58,13 +58,16 @@ public class LoginHandler {
         sendServerIdent(context, out);
         
         // --- Corrected ID_CHANGE packet construction matching eMule's expectations ---
-        // eMule's ServerSocket.cpp expects: <NEW_ID 4>[<server_flags 4>]
-        // Flags: 0x01=COMPRESSION, 0x08=NEWTAGS, 0x10=UNICODE, 0x80=TYPETAGINTEGER, 0x100=LARGEFILES, 0x400=TCPOBFUSCATION
-        int serverFlags = 0x01 | 0x08 | 0x10 | 0x80 | 0x100 | 0x400;
+        // eMule's ServerSocket.cpp expects: <NEW_ID 4>[<server_flags 4>][<pad 4>][<reported_ip 4>][<obf_tcp_port 4>]
+        // Flags: 0x01=COMPRESSION, 0x08=NEWTAGS, 0x10=UNICODE, 0x80=TYPETAGINTEGER, 0x100=LARGEFILES, 0x200=UDPOBFUSCATION, 0x400=TCPOBFUSCATION
+        int serverFlags = Tag.TCPFLG_COMPRESSION | Tag.TCPFLG_NEWTAGS | Tag.TCPFLG_UNICODE | Tag.TCPFLG_TYPETAGINTEGER | Tag.TCPFLG_LARGEFILES | Tag.TCPFLG_UDPOBFUSCATION | Tag.TCPFLG_TCPOBFUSCATION;
 
-        ByteBuffer idChange = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN);
+        ByteBuffer idChange = ByteBuffer.allocate(20).order(ByteOrder.LITTLE_ENDIAN);
         idChange.putInt((int) clientId);
         idChange.putInt(serverFlags);
+        idChange.putInt(0); // padding/reserved
+        idChange.putInt((int) clientId); // Server-reported IP (using clientId as it usually matches)
+        idChange.putInt(context.getConfig().port()); // Obfuscation TCP Port
         new Packet(Packet.PROTOCOL_ED2K, OpCode.ID_CHANGE.value, idChange.array()).write(out, state.isZlibSupported());
 
         ByteBuffer loginAccepted = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN);
