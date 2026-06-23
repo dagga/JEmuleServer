@@ -186,6 +186,7 @@ public class LoginHandler {
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_TCPPORTOBFUSCATION, portInt)); // ST_TCPPORTOBFUSCATION
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDPPORTOBFUSCATION, portInt + 12)); // ST_UDPPORTOBFUSCATION (port + 12)
         tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_AUXPORTSLIST, String.valueOf(portInt + 12))); // ST_AUXPORTSLIST
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDP_OBFUSCATION_PORT, portInt + 12)); // Ensure ST_UDP_OBFUSCATION_PORT is set too
 
         ByteBuffer buf = ByteBuffer.allocate(4096).order(ByteOrder.LITTLE_ENDIAN);
         buf.put(hash);

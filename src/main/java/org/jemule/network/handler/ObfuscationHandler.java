@@ -85,16 +85,22 @@ public class ObfuscationHandler {
         if (markerPos == -1 && read >= 1 + PRIMESIZE_BYTES) dhMode = true;
 
         if (!dhMode && (markerPos == -1 || markerPos < 5)) { // Needs at least 1 byte (any) + 4 bytes (nonce) before 0x97
-            if (log.isDebugEnabled() && read > 0) {
-                StringBuilder sb = new StringBuilder();
-                for (int i = 0; i < Math.min(read, 64); i++) sb.append(String.format("%02X ", fullProbe[i]));
-                log.debug("Obfuscation marker 0x97 not found in first {} bytes: {}", read, sb.toString().trim());
+            // If it's not DH mode and we don't have a marker, check if it's a server connection
+            // Servers should generally favor DH if it's not a standard protocol.
+            if (read >= 1 + PRIMESIZE_BYTES) {
+                dhMode = true;
+            } else {
+                if (log.isDebugEnabled() && read > 0) {
+                    StringBuilder sb = new StringBuilder();
+                    for (int i = 0; i < Math.min(read, 64); i++) sb.append(String.format("%02X ", fullProbe[i]));
+                    log.debug("Obfuscation marker 0x97 not found and not enough for DH. First {} bytes: {}", read, sb.toString().trim());
+                }
+                if (firstByte != (Packet.PROTOCOL_ED2K & 0xFF) && firstByte != (Packet.PROTOCOL_EMULE & 0xFF) && firstByte != (Packet.PROTOCOL_ZLIB & 0xFF)) {
+                    throw new IOException(String.format("Invalid protocol or failed obfuscation handshake (first byte: 0x%02X)", firstByte));
+                }
+                pin.unread(fullProbe, 0, read);
+                return pin;
             }
-            if (firstByte != (Packet.PROTOCOL_ED2K & 0xFF) && firstByte != (Packet.PROTOCOL_EMULE & 0xFF) && firstByte != (Packet.PROTOCOL_ZLIB & 0xFF)) {
-                throw new IOException(String.format("Invalid protocol or failed obfuscation handshake (first byte: 0x%02X)", firstByte));
-            }
-            pin.unread(fullProbe, 0, read);
-            return pin;
         }
 
         probe = fullProbe; // Use the full buffer for further processing
@@ -102,62 +108,66 @@ public class ObfuscationHandler {
         SocketAddress remoteAddr = context.getSocket().getRemoteSocketAddress();
 
         if (!dhMode) {
-            // simplified marker-based server obfuscation (existing behavior)
-            // Push back everything AFTER the marker so the next read returns the encrypted method byte
-            int afterLen = read - (markerPos + 1);
-            if (afterLen > 0) {
-                pin.unread(probe, markerPos + 1, afterLen);
-                read -= afterLen; // logical position for our local buffer
+            if (markerPos != -1 && markerPos >= 5 && read < 1 + PRIMESIZE_BYTES) {
+                // simplified marker-based server obfuscation (existing behavior)
+                // Push back everything AFTER the marker so the next read returns the encrypted method byte
+                int afterLen = read - (markerPos + 1);
+                if (afterLen > 0) {
+                    pin.unread(probe, markerPos + 1, afterLen);
+                    read -= afterLen; // logical position for our local buffer
+                }
+
+                log.info("Detected obfuscated handshake (marker at {}) from {}", markerPos, remoteAddr != null ? HandlerUtils.sanitize(remoteAddr.toString()) : "unknown");
+
+                // The 4 bytes BEFORE the marker are the client random nonce
+                byte[] clientRandom = new byte[4];
+                System.arraycopy(probe, markerPos - 4, clientRandom, 0, 4);
+
+                // eMule Server Obfuscation uses 0x97 as magic
+                byte[] magic = {(byte) 0x97};
+
+                // Keys are MD5(magic + clientRandom)
+                byte[] key = Obfuscation.md5(magic, clientRandom);
+                Obfuscation.RC4 receiveRC4 = new Obfuscation.RC4(key);
+                Obfuscation.RC4 sendRC4 = new Obfuscation.RC4(key);
+
+                // DISCARD first 1024 bytes of RC4 stream (standard eMule obfuscation)
+                receiveRC4.crypt(new byte[1024]);
+                sendRC4.crypt(new byte[1024]);
+
+                InputStream encryptedIn = new ObfuscatedInputStream(pin, receiveRC4);
+
+                // After 0x97, client sends its encryption method (0x00 for Obfuscation)
+                // This is ALREADY ENCRYPTED.
+                int method = encryptedIn.read();
+                if (method != 0x00) {
+                    log.warn("Obfuscation failed for {}: invalid method 0x{}",
+                            remoteAddr != null ? HandlerUtils.sanitize(remoteAddr.toString()) : "unknown",
+                            String.format("%02X", method));
+                    // We can't really unread because we've started decrypting
+                    throw new IOException("Invalid obfuscation method: " + method);
+                }
+
+                // Server responds with its own handshake: [padLen(1)] [random(padLen)] [0x00]
+                SecureRandom rng = new SecureRandom();
+                int serverPadLen = rng.nextInt(16);
+                byte[] serverHandshake = new byte[1 + serverPadLen + 1];
+                rng.nextBytes(serverHandshake);
+                serverHandshake[0] = (byte) serverPadLen;
+                serverHandshake[serverHandshake.length - 1] = 0x00; // method 0x00
+
+                byte[] encryptedResponse = serverHandshake.clone();
+                sendRC4.crypt(encryptedResponse);
+                out.write(encryptedResponse);
+                out.flush();
+
+                log.info("Obfuscation handshake complete for {}", remoteAddr != null ? HandlerUtils.sanitize(remoteAddr.toString()) : "unknown");
+                context.setObfuscated(true);
+                context.setWrappedOut(new ObfuscatedOutputStream(out, sendRC4));
+                return encryptedIn;
+            } else {
+                dhMode = true;
             }
-
-            log.info("Detected obfuscated handshake (marker at {}) from {}", markerPos, remoteAddr != null ? HandlerUtils.sanitize(remoteAddr.toString()) : "unknown");
-
-            // The 4 bytes BEFORE the marker are the client random nonce
-            byte[] clientRandom = new byte[4];
-            System.arraycopy(probe, markerPos - 4, clientRandom, 0, 4);
-
-            // eMule Server Obfuscation uses 0x97 as magic
-            byte[] magic = {(byte) 0x97};
-
-            // Keys are MD5(magic + clientRandom)
-            byte[] key = Obfuscation.md5(magic, clientRandom);
-            Obfuscation.RC4 receiveRC4 = new Obfuscation.RC4(key);
-            Obfuscation.RC4 sendRC4 = new Obfuscation.RC4(key);
-
-            // DISCARD first 1024 bytes of RC4 stream (standard eMule obfuscation)
-            receiveRC4.crypt(new byte[1024]);
-            sendRC4.crypt(new byte[1024]);
-
-            InputStream encryptedIn = new ObfuscatedInputStream(pin, receiveRC4);
-
-            // After 0x97, client sends its encryption method (0x00 for Obfuscation)
-            // This is ALREADY ENCRYPTED.
-            int method = encryptedIn.read();
-            if (method != 0x00) {
-                log.warn("Obfuscation failed for {}: invalid method 0x{}",
-                    remoteAddr != null ? HandlerUtils.sanitize(remoteAddr.toString()) : "unknown",
-                    String.format("%02X", method));
-                // We can't really unread because we've started decrypting
-                throw new IOException("Invalid obfuscation method: " + method);
-            }
-
-            // Server responds with its own handshake: [padLen(1)] [random(padLen)] [0x00]
-            SecureRandom rng = new SecureRandom();
-            int serverPadLen = rng.nextInt(16);
-            byte[] serverHandshake = new byte[1 + serverPadLen + 1];
-            rng.nextBytes(serverHandshake);
-            serverHandshake[0] = (byte) serverPadLen;
-            serverHandshake[serverHandshake.length - 1] = 0x00; // method 0x00
-
-            byte[] encryptedResponse = serverHandshake.clone();
-            sendRC4.crypt(encryptedResponse);
-            out.write(encryptedResponse);
-            out.flush();
-
-            log.info("Obfuscation handshake complete for {}", remoteAddr != null ? HandlerUtils.sanitize(remoteAddr.toString()) : "unknown");
-            context.setObfuscated(true);
-            context.setWrappedOut(new ObfuscatedOutputStream(out, sendRC4));
-            return encryptedIn;
         }
 
         // --- DH-mode handling ---
