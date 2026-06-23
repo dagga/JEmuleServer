@@ -219,6 +219,25 @@ public class ObfuscationHandler {
 
             // Wrap input and output with RC4 streams for subsequent communication
             InputStream encryptedIn = new ObfuscatedInputStream(pin, receiveRC4);
+            
+            // Consume the Sync bytes that the client sends after g^b
+            // requester sync: <MagicValue 4><EncryptionMethodsSupported 1><EncryptionMethodPreferred 1><PaddingLen 1><RandomBytes PaddingLen>
+            byte[] syncHeader = new byte[4];
+            int syncRead = encryptedIn.read(syncHeader);
+            if (syncRead == 4) {
+                int syncMagic = java.nio.ByteBuffer.wrap(syncHeader).getInt();
+                if (syncMagic != MAGICVALUE_SYNC) {
+                    log.warn("DH sync magic mismatch: expected 0x{}, got 0x{}", Integer.toHexString(MAGICVALUE_SYNC), Integer.toHexString(syncMagic));
+                }
+                int meths = encryptedIn.read();
+                int pref = encryptedIn.read();
+                int padLen = encryptedIn.read();
+                if (padLen > 0) {
+                    encryptedIn.readNBytes(padLen);
+                }
+                log.debug("Consumed DH Sync from client: meths={}, pref={}, pad={}", meths, pref, padLen);
+            }
+
             context.setObfuscated(true);
             context.setWrappedOut(new ObfuscatedOutputStream(out, sendRC4));
             log.info("DH obfuscation handshake complete for {}", remoteAddr != null ? HandlerUtils.sanitize(remoteAddr.toString()) : "unknown");

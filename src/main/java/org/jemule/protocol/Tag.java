@@ -134,17 +134,30 @@ public record Tag(byte type, String name, Object value) {
             log.debug("Tag.read: Entering, buf.position={}, buf.remaining={}", buf.position(), buf.remaining());
         }
 
+        if (buf.remaining() < 1) {
+            throw new IllegalArgumentException("Cannot read tag: buffer empty");
+        }
+
         byte rawType = buf.get();
         boolean isId = (rawType & 0x80) != 0;
         byte type = (byte) (rawType & 0x7F);
 
         String name;
         if (isId) {
+            if (buf.remaining() < 1) {
+                throw new IllegalArgumentException("Cannot read tag name: buffer underflow (expected 1 byte for ID)");
+            }
             name = String.valueOf((char) (buf.get() & 0xFF));
         } else {
+            if (buf.remaining() < 2) {
+                throw new IllegalArgumentException("Cannot read tag name length: buffer underflow");
+            }
             int nameLen = Short.toUnsignedInt(buf.getShort());
             if (log.isDebugEnabled()) {
                 log.debug("Tag.read: Reading name, nameLen={}, buf.position={}, buf.remaining={}", nameLen, buf.position(), buf.remaining());
+            }
+            if (nameLen < 0 || nameLen > buf.remaining()) {
+                throw new IllegalArgumentException("Invalid tag name length: " + nameLen + " (remaining: " + buf.remaining() + ")");
             }
             byte[] nameBytes = new byte[nameLen];
             buf.get(nameBytes);
@@ -156,37 +169,68 @@ public record Tag(byte type, String name, Object value) {
             log.debug("Tag.read: Name='{}', Type=0x{}, buf.position={}, buf.remaining={}", name, String.format("%02X", type & 0xFF), buf.position(), buf.remaining());
         }
 
-        switch (type) {
-            case TYPE_STRING -> {
-                int valLen = Short.toUnsignedInt(buf.getShort());
-                if (log.isDebugEnabled()) {
-                    log.debug("Tag.read: Reading string value, valLen={}, buf.position={}, buf.remaining={}", valLen, buf.position(), buf.remaining());
+        try {
+            switch (type) {
+                case TYPE_STRING -> {
+                    if (buf.remaining() < 2) throw new IllegalArgumentException("Buffer underflow reading string length for tag " + name);
+                    int valLen = Short.toUnsignedInt(buf.getShort());
+                    if (log.isDebugEnabled()) {
+                        log.debug("Tag.read: Reading string value, valLen={}, buf.position={}, buf.remaining={}", valLen, buf.position(), buf.remaining());
+                    }
+                    if (valLen < 0 || valLen > buf.remaining()) {
+                        throw new IllegalArgumentException("Invalid tag string length: " + valLen + " (remaining: " + buf.remaining() + ") for tag " + name);
+                    }
+                    byte[] valBytes = new byte[valLen];
+                    buf.get(valBytes);
+                    value = new String(valBytes, StandardCharsets.UTF_8);
                 }
-                byte[] valBytes = new byte[valLen];
-                buf.get(valBytes);
-                value = new String(valBytes, StandardCharsets.UTF_8);
-            }
-            case TYPE_INTEGER -> value = buf.getInt();
-            case TYPE_FLOAT -> value = buf.getFloat();
-            case TYPE_BOOL, TYPE_BOOL_ALT -> value = buf.get() != 0;
-            case TYPE_BLOB -> {
-                int blobLen = buf.getInt();
-                if (log.isDebugEnabled()) {
-                    log.debug("Tag.read: Reading blob value, blobLen={}, buf.position={}, buf.remaining={}", blobLen, buf.position(), buf.remaining());
+                case TYPE_INTEGER -> {
+                    if (buf.remaining() < 4) throw new IllegalArgumentException("Buffer underflow reading integer for tag " + name);
+                    value = buf.getInt();
                 }
-                byte[] blob = new byte[blobLen];
-                buf.get(blob);
-                value = blob;
+                case TYPE_FLOAT -> {
+                    if (buf.remaining() < 4) throw new IllegalArgumentException("Buffer underflow reading float for tag " + name);
+                    value = buf.getFloat();
+                }
+                case TYPE_BOOL, TYPE_BOOL_ALT -> {
+                    if (buf.remaining() < 1) throw new IllegalArgumentException("Buffer underflow reading boolean for tag " + name);
+                    value = buf.get() != 0;
+                }
+                case TYPE_BLOB -> {
+                    if (buf.remaining() < 4) throw new IllegalArgumentException("Buffer underflow reading blob length for tag " + name);
+                    int blobLen = buf.getInt();
+                    if (log.isDebugEnabled()) {
+                        log.debug("Tag.read: Reading blob value, blobLen={}, buf.position={}, buf.remaining={}", blobLen, buf.position(), buf.remaining());
+                    }
+                    if (blobLen < 0 || blobLen > buf.remaining()) {
+                        throw new IllegalArgumentException("Invalid tag blob length: " + blobLen + " (remaining: " + buf.remaining() + ") for tag " + name);
+                    }
+                    byte[] blob = new byte[blobLen];
+                    buf.get(blob);
+                    value = blob;
+                }
+                case TYPE_HASH -> {
+                    if (buf.remaining() < 16) throw new IllegalArgumentException("Buffer underflow reading hash for tag " + name);
+                    byte[] hash = new byte[16];
+                    buf.get(hash);
+                    value = hash;
+                }
+                case TYPE_INT16 -> {
+                    if (buf.remaining() < 2) throw new IllegalArgumentException("Buffer underflow reading int16 for tag " + name);
+                    value = buf.getShort();
+                }
+                case TYPE_INT8 -> {
+                    if (buf.remaining() < 1) throw new IllegalArgumentException("Buffer underflow reading int8 for tag " + name);
+                    value = buf.get();
+                }
+                case TYPE_UINT64 -> {
+                    if (buf.remaining() < 8) throw new IllegalArgumentException("Buffer underflow reading uint64 for tag " + name);
+                    value = buf.getLong();
+                }
+                default -> throw new IllegalArgumentException("Unknown tag type: 0x" + String.format("%02X", type) + " for tag " + name);
             }
-            case TYPE_HASH -> {
-                byte[] hash = new byte[16];
-                buf.get(hash);
-                value = hash;
-            }
-            case TYPE_INT16 -> value = buf.getShort();
-            case TYPE_INT8 -> value = buf.get();
-            case TYPE_UINT64 -> value = buf.getLong();
-            default -> throw new IllegalArgumentException("Unknown tag type: 0x" + String.format("%02X", type));
+        } catch (java.nio.BufferUnderflowException e) {
+            throw new IllegalArgumentException("Unexpected buffer underflow for tag " + name + " (type 0x" + String.format("%02X", type) + ")", e);
         }
         if (log.isDebugEnabled()) {
             log.debug("Tag.read: Exiting, Tag='{}', Value='{}', buf.position={}, buf.remaining={}", name, value, buf.position(), buf.remaining());
@@ -198,16 +242,30 @@ public record Tag(byte type, String name, Object value) {
         if (log.isDebugEnabled()) {
             log.debug("Tag.readList: Entering, buf.position={}, buf.remaining={}", buf.position(), buf.remaining());
         }
+        if (buf.remaining() < 4) {
+            log.warn("Tag.readList: Buffer too small for count (remaining: {})", buf.remaining());
+            return new ArrayList<>();
+        }
         int count = buf.getInt();
         if (log.isDebugEnabled()) {
             log.debug("Tag.readList: Reading {} tags, buf.position={}, buf.remaining={}", count, buf.position(), buf.remaining());
         }
+        if (count < 0 || count > 1000) { // Safety limit
+             log.warn("Tag.readList: Invalid tag count: {}", count);
+             return new ArrayList<>();
+        }
+
         List<Tag> tags = new ArrayList<>(count);
         for (int i = 0; i < count; i++) {
-            tags.add(read(buf));
+            try {
+                tags.add(read(buf));
+            } catch (Exception e) {
+                log.warn("Tag.readList: Error reading tag {} of {}: {}. Stopping list read.", i, count, e.getMessage());
+                break;
+            }
         }
         if (log.isDebugEnabled()) {
-            log.debug("Tag.readList: Exiting, read {} tags, buf.position={}, buf.remaining={}", count, buf.position(), buf.remaining());
+            log.debug("Tag.readList: Exiting, read {} tags, buf.position={}, buf.remaining={}", tags.size(), buf.position(), buf.remaining());
         }
         return tags;
     }

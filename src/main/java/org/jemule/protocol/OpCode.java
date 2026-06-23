@@ -27,6 +27,7 @@ public enum OpCode {
     CLIENT_LOGIN((byte) 0x1A), // This might be an old/alternative login? Usually 0x01 is used.
     LOGIN_ACCEPTED((byte) 0x1B),
     ID_CHANGE((byte) 0x40),         // Lugdunum extension: ID Change (confirm HighID)
+    ID_CHANGE_V2((byte) 0x23),      // OP_IDCHG (0x23) for 0xE3 protocol
     SEARCH_REQUEST((byte) 0x16),
     SEARCH_RESULT((byte) 0x33),     // Conformité spec : 0x33 (au lieu de 0x64)
     GET_SOURCES((byte) 0x19),       // Conformité spec : 0x19 (au lieu de 0x15)
@@ -68,6 +69,10 @@ public enum OpCode {
             // Avoid collision if same byte used in different protocols
             if (protocol == (byte) 0xE3) {
                 if (op == EMULE_INFO || op == EMULE_INFO_ACK || op == GET_SOURCES_OBFU || op == ASK_SHARED_FILES) continue;
+                if (op == ID_CHANGE) continue; // 0x40 in 0xE3 is something else (or handled by ID_CHANGE_V2)
+            }
+            if (protocol == (byte) 0xC5) {
+                if (op == ID_CHANGE_V2) continue;
             }
             if (op.value == b) return op;
         }

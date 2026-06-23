@@ -38,9 +38,18 @@ public class PacketProcessor {
             case COMPRESSED_PART -> handleCompressedPart(context, p.data(), out);
             case FOUND_SOURCES, SOURCES_RESULT_OBFU -> handleSourcesResult(context, p, out);
             case GET_SERVER_LIST -> sendServerList(context, out);
+            case ID_CHANGE, ID_CHANGE_V2 -> handleIdChange(context, p.data());
             case DISCONNECT -> handleDisconnect(context);
             default -> log.debug("Unhandled: {} (Proto: 0x{})", op, String.format("%02X", p.protocol()));
         }
+    }
+
+    private void handleIdChange(ClientContext context, byte[] data) {
+        int newId = 0;
+        if (data != null && data.length >= 4) {
+            newId = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN).getInt();
+        }
+        log.info("Client {} received ID change (new ID: {})", context.getState().clientId(), Integer.toUnsignedLong(newId));
     }
 
     private void handleDisconnect(ClientContext context) throws IOException {
