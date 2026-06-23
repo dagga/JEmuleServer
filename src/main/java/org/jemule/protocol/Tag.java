@@ -76,6 +76,7 @@ public record Tag(byte type, String name, Object value) {
     public static final int TCPFLG_UNICODE = 0x10;
     public static final int TCPFLG_TYPETAGINTEGER = 0x80;
     public static final int TCPFLG_LARGEFILES = 0x100;
+    public static final int TCPFLG_UDPOBFUSCATION = 0x200;
     public static final int TCPFLG_TCPOBFUSCATION = 0x400;
 
     public static final int UDPFLG_EXT_GETSOURCES = 0x01;

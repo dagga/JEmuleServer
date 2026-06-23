@@ -224,21 +224,55 @@ public class ObfuscationHandler {
             // requester sync: <MagicValue 4><EncryptionMethodsSupported 1><EncryptionMethodPreferred 1><PaddingLen 1><RandomBytes PaddingLen>
             // Note: client might delay this until first payload, but here it should be at the start of encryptedIn.
             // We search for MAGICVALUE_SYNC in the first 256 bytes to be robust.
+            // If the first bytes look like a standard packet (0xE3, 0xC5, 0xD4), we skip sync searching.
             boolean syncFound = false;
-            for (int i = 0; i < 256; i++) {
-                int val = encryptedIn.read();
-                if (val == -1) break;
-                if (val == ((MAGICVALUE_SYNC >> 24) & 0xFF)) {
-                    int b2 = encryptedIn.read();
-                    if (b2 == ((MAGICVALUE_SYNC >> 16) & 0xFF)) {
-                        int b3 = encryptedIn.read();
-                        if (b3 == ((MAGICVALUE_SYNC >> 8) & 0xFF)) {
-                            int b4 = encryptedIn.read();
-                            if (b4 == (MAGICVALUE_SYNC & 0xFF)) {
-                                syncFound = true;
-                                break;
+            int firstVal = encryptedIn.read();
+            if (firstVal != -1) {
+                if (firstVal == (Packet.PROTOCOL_ED2K & 0xFF) || firstVal == (Packet.PROTOCOL_EMULE & 0xFF) || firstVal == (Packet.PROTOCOL_ZLIB & 0xFF)) {
+                    log.debug("First byte 0x{} looks like protocol start, skipping DH sync search", Integer.toHexString(firstVal));
+                    PushbackInputStream epin = new PushbackInputStream(encryptedIn, 1024);
+                    epin.unread(firstVal);
+                    encryptedIn = epin;
+                } else if (firstVal == 0x97) {
+                    log.debug("First byte is 0x97, might be simplified obfuscation method in DH mode or sync start");
+                    // Continue search
+                    int val = firstVal;
+                    for (int i = 0; i < 256; i++) {
+                        if (val == -1) break;
+                        if (val == ((MAGICVALUE_SYNC >> 24) & 0xFF)) {
+                            int b2 = encryptedIn.read();
+                            if (b2 == ((MAGICVALUE_SYNC >> 16) & 0xFF)) {
+                                int b3 = encryptedIn.read();
+                                if (b3 == ((MAGICVALUE_SYNC >> 8) & 0xFF)) {
+                                    int b4 = encryptedIn.read();
+                                    if (b4 == (MAGICVALUE_SYNC & 0xFF)) {
+                                        syncFound = true;
+                                        break;
+                                    }
+                                }
                             }
                         }
+                        val = encryptedIn.read();
+                    }
+                } else {
+                    // Search for MAGICVALUE_SYNC starting with the byte we already read
+                    int val = firstVal;
+                    for (int i = 0; i < 256; i++) {
+                        if (val == -1) break;
+                        if (val == ((MAGICVALUE_SYNC >> 24) & 0xFF)) {
+                            int b2 = encryptedIn.read();
+                            if (b2 == ((MAGICVALUE_SYNC >> 16) & 0xFF)) {
+                                int b3 = encryptedIn.read();
+                                if (b3 == ((MAGICVALUE_SYNC >> 8) & 0xFF)) {
+                                    int b4 = encryptedIn.read();
+                                    if (b4 == (MAGICVALUE_SYNC & 0xFF)) {
+                                        syncFound = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        val = encryptedIn.read();
                     }
                 }
             }
