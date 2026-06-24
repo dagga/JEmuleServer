@@ -60,6 +60,7 @@ public class Server {
     private final FakeFileDetector fakeFileDetector;
     private final ExecutorService executor;
     private final DatabaseManager db;
+    private final byte[] serverHash = new byte[16];
     private static final int GLOBAL_UDP_KEY = new java.util.Random().nextInt();
 
     // Map of UDP sockets bound by startUdpResponder so other components can send via the same source port
@@ -93,6 +94,10 @@ public class Server {
     private final AdminInterface admin;
     private final InetAddress publicIp;
     private volatile boolean running = true;
+
+    public byte[] getServerHash() {
+        return serverHash;
+    }
 
     /**
      * Initializes the server with configuration and core components.
@@ -135,6 +140,17 @@ public class Server {
         this.fileIndex = new FileIndex(db, eventManager);
         this.admin = new AdminInterface(this, registry, fileIndex, ipFilter, fakeFileDetector);
         this.publicIp = resolvePublicIp(config.publicIp());
+
+        // Generate a stable server hash based on public IP and port
+        byte[] ipPort = (publicIp.getHostAddress() + ":" + config.port()).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        byte[] md5;
+        try {
+            java.security.MessageDigest digest = java.security.MessageDigest.getInstance("MD5");
+            md5 = digest.digest(ipPort);
+        } catch (java.security.NoSuchAlgorithmException e) {
+            md5 = new byte[16];
+        }
+        System.arraycopy(md5, 0, serverHash, 0, 16);
     }
 
     private static InetAddress resolvePublicIp(String configIp) {
@@ -348,6 +364,7 @@ public class Server {
             resp.putInt(1000000); // SoftFiles (Standard Lugdunum value)
             resp.putInt(2000000); // HardFiles (Standard Lugdunum value)
         // UDP Flags (matching server.h)
+        // Includes SRV_UDPFLG_TCPOBFUSCATION (0x400) which is essential for client-side obfuscation display
         int udpFlags = Tag.UDPFLG_EXT_GETSOURCES | Tag.UDPFLG_NEWTAGS | Tag.UDPFLG_UNICODE | Tag.UDPFLG_LARGEFILES | Tag.UDPFLG_UDPOBFUSCATION | Tag.UDPFLG_TCPOBFUSCATION;
         resp.putInt(udpFlags); 
             resp.putInt(registry.lowIdCount()); // LowIDUsers
@@ -471,6 +488,7 @@ public class Server {
         int udpFlags = Tag.UDPFLG_EXT_GETSOURCES | Tag.UDPFLG_NEWTAGS | Tag.UDPFLG_UNICODE | Tag.UDPFLG_LARGEFILES | Tag.UDPFLG_UDPOBFUSCATION | Tag.UDPFLG_TCPOBFUSCATION;
 
         java.util.List<org.jemule.protocol.Tag> tags = new java.util.ArrayList<>();
+        tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_HASH, "\u0011", getServerHash())); // ST_SERVERHASH (mapped to version tag ID in some contexts, but usually hash is first)
         tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_MAXUSERS, maxUsers));
         tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_SOFTFILES, 1000000));
         tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_HARDFILES, 2000000));

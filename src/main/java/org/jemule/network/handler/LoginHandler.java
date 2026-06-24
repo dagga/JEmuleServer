@@ -145,6 +145,9 @@ public class LoginHandler {
 
     private void sendServerIdent(ClientContext context, OutputStream out) throws IOException {
         byte[] hash = new byte[16];
+        if (context.getServer() != null) {
+            System.arraycopy(context.getServer().getServerHash(), 0, hash, 0, 16);
+        }
         int portInt = context.getConfig().port();
         InetAddress publicIp = null;
         if (context.getServer() != null) {
@@ -165,12 +168,15 @@ public class LoginHandler {
         int maxUsers = context.getConfig().maxUsers();
 
         // TCP capability flags matching eMule SRV_TCPFLG_ constants
+        // Note: We include UDPOBFUSCATION (0x200) and TCPOBFUSCATION (0x400)
         int tcpFlags = Tag.TCPFLG_COMPRESSION | Tag.TCPFLG_NEWTAGS | Tag.TCPFLG_UNICODE | Tag.TCPFLG_TYPETAGINTEGER | Tag.TCPFLG_LARGEFILES | Tag.TCPFLG_UDPOBFUSCATION | Tag.TCPFLG_TCPOBFUSCATION;
 
         // UDP capability flags matching eMule SRV_UDPFLG_ constants
+        // Note: We include TCPOBFUSCATION (0x400) in UDP flags as well, as eMule checks it there too
         int udpFlags = Tag.UDPFLG_EXT_GETSOURCES | Tag.UDPFLG_NEWTAGS | Tag.UDPFLG_UNICODE | Tag.UDPFLG_LARGEFILES | Tag.UDPFLG_UDPOBFUSCATION | Tag.UDPFLG_TCPOBFUSCATION;
 
         List<Tag> tags = new ArrayList<>();
+        tags.add(new Tag(Tag.TYPE_HASH, "\u0011", hash)); // Send hash as a tag too for extra visibility
         // Important: Standard Lugdunum/eMule servers often send critical stats first
         // Note: Using TYPE_STRING for limits as some eMule clients expect strings for display
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_MAXUSERS, maxUsers));
