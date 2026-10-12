@@ -106,7 +106,10 @@ public class ClientHandler implements Runnable, ClientContext {
             Packet p = Packet.read(in, config.maxPacketSize());
             validateProtocol(p.protocol());
 
-            OutputStream out = wrappedOut != null ? wrappedOut : socket.getOutputStream();
+            // Packets are also written by other clients' threads (callback relay) and by the heartbeat: every
+            // packet must reach the socket (and the RC4 stream of obfuscated connections) atomically.
+            OutputStream out = new SynchronizedOutputStream(wrappedOut != null ? wrappedOut : socket.getOutputStream());
+            wrappedOut = out;
             loginHandler.handleLogin(this, p, out);
 
             long lastHeartbeat = System.currentTimeMillis();
@@ -218,4 +221,26 @@ public class ClientHandler implements Runnable, ClientContext {
     @Override public void setWrappedOut(OutputStream out) { this.wrappedOut = out; }
     @Override public void setObfuscated(boolean o) { this.obfuscated = o; }
     @Override public void disconnect() throws IOException { socket.close(); }
+
+    /** Serializes writes so that one packet (one write call) is never interleaved with another. */
+    static final class SynchronizedOutputStream extends java.io.FilterOutputStream {
+        SynchronizedOutputStream(OutputStream out) {
+            super(out);
+        }
+
+        @Override
+        public synchronized void write(int b) throws IOException {
+            out.write(b);
+        }
+
+        @Override
+        public synchronized void write(byte[] b, int off, int len) throws IOException {
+            out.write(b, off, len);
+        }
+
+        @Override
+        public synchronized void flush() throws IOException {
+            out.flush();
+        }
+    }
 }

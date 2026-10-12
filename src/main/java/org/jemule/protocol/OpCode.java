@@ -42,12 +42,13 @@ public enum OpCode {
     SERVER_LIST(0xE3, 0x32),          // OP_SERVERLIST <count 1>(<IP 4><port 2>)*
     SEARCH_RESULT(0xE3, 0x33),        // OP_SEARCHRESULT <count 4>(<hash 16><ID 4><port 2><tags>)*[<more 1>]
     SERVER_STATUS(0xE3, 0x34),        // OP_SERVERSTATUS <users 4><files 4>
+    CALLBACK_REQUESTED(0xE3, 0x35),   // OP_CALLBACKREQUESTED <IP 4><port 2>[<cryptOptions 1><userhash 16>]
+    CALLBACK_FAIL(0xE3, 0x36),        // OP_CALLBACK_FAIL
     SERVER_MESSAGE(0xE3, 0x38),       // OP_SERVERMESSAGE <len 2><text>
     ID_CHANGE(0xE3, 0x40),            // OP_IDCHANGE <ID 4><flags 4><unused 4><IP 4><obf port 4>
     SERVER_IDENT(0xE3, 0x41),         // OP_SERVERIDENT <hash 16><IP 4><port 2><tags>
     FOUND_SOURCES(0xE3, 0x42),        // OP_FOUNDSOURCES <hash 16><count 1>(<ID 4><port 2>)*
     SOURCES_RESULT_OBFU(0xE3, 0x44),  // OP_FOUNDSOURCES_OBFU <hash 16><count 1>(<ID 4><port 2><crypt 1>[<hash 16>])*
-    CALLBACK(0xE3, 0x99),
 
     // ---- 0xC5 (eMule extended protocol)
     EMULE_INFO(0xC5, 0x01),           // OP_EMULEINFO

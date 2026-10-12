@@ -24,6 +24,7 @@ import java.nio.file.Path;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.mockito.Mockito.mock;
@@ -86,24 +87,41 @@ class CallbackTest {
 
     @Test
     void testCallbackRelay() throws Exception {
-        // Client 1 sends CALLBACK for Client 2
+        state1.setListenPort(4662);
+        state1.setUserHash(EmuleTestSupport.hash("00112233445566778899aabbccddeeff"));
+        state1.setServerCaps(EmuleTestSupport.EMULE_DEFAULT_SRVCAPS);
+
+        // Client 1 sends OP_CALLBACKREQUEST for Client 2
         ByteBuffer data = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN);
         data.putInt(222); // Target ID
 
         new org.jemule.network.handler.SourceHandler().handleCallback(handler1, data.array(), new ByteArrayOutputStream());
 
-        // Check if Client 2 received the CALLBACK packet
+        // Client 2 receives OP_CALLBACKREQUESTED, decoded like CServerSocket::ProcessPacket (size >= 23)
         Packet p = receivedPacket2.get();
         assertNotNull(p, "Target client should have received a packet");
         assertEquals(Packet.PROTOCOL_ED2K, p.protocol());
-        assertEquals(OpCode.CALLBACK.value, p.opcode());
+        assertEquals((byte) 0x35, p.opcode());
+        assertEquals(23, p.data().length);
 
-        // Payload should be [Requester IP (4 bytes)][Requester Port (2 bytes)]
         ByteBuffer payload = ByteBuffer.wrap(p.data()).order(ByteOrder.LITTLE_ENDIAN);
-        int ip = payload.getInt();
-        short port = payload.getShort();
+        assertEquals((int) ClientState.ipToLong(state1.address()), payload.getInt());
+        assertEquals(4662, Short.toUnsignedInt(payload.getShort()), "requester's listen port");
+        assertEquals(0x01, payload.get(), "crypt layer supported");
+        byte[] hash = new byte[16];
+        payload.get(hash);
+        assertArrayEquals(state1.userHash(), hash);
+    }
 
-        assertEquals((int) ClientState.ipToLong(state1.address()), ip);
-        assertEquals((short) state1.port(), Short.reverseBytes(port));
+    @Test
+    void testCallbackToUnknownClientFails() throws Exception {
+        state1.setListenPort(4662);
+        ByteBuffer data = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(999);
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        new org.jemule.network.handler.SourceHandler().handleCallback(handler1, data.array(), out);
+
+        Packet p = Packet.read(new java.io.ByteArrayInputStream(out.toByteArray()), 1024);
+        assertEquals(Packet.PROTOCOL_ED2K, p.protocol());
+        assertEquals((byte) 0x36, p.opcode(), "OP_CALLBACK_FAIL");
     }
 }

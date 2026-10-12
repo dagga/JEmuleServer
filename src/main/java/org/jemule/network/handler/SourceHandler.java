@@ -99,32 +99,40 @@ public class SourceHandler {
         return buf.array();
     }
 
+    /**
+     * OP_CALLBACKREQUEST <code>&lt;ID 4&gt;</code> (CUpDownClient::TryToConnect): a client wants to reach a LowID client of
+     * this server. The target receives OP_CALLBACKREQUESTED <code>&lt;IP 4&gt;&lt;port 2&gt;&lt;cryptOptions 1&gt;&lt;userhash 16&gt;</code>
+     * describing the requester, and connects to it; if the target is not connected the requester gets
+     * OP_CALLBACK_FAIL (CServerSocket::ProcessPacket).
+     */
     public void handleCallback(ClientContext context, byte[] data, OutputStream out) throws IOException {
         if (data == null || data.length < 4) {
             log.warn("Invalid CALLBACK request: data too short");
             return;
         }
 
+        ClientState requester = context.getState();
         long targetId = Integer.toUnsignedLong(ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN).getInt());
-        log.info("Client {} requested callback to ID: {}", context.getState().clientId(), targetId);
-
-        ClientState targetClient = context.getRegistry().get(targetId);
-        if (targetClient == null) {
-            log.warn("CALLBACK target not found: {}", targetId);
+        ClientState target = context.getRegistry().get(targetId);
+        long requesterIp = ClientState.ipToLong(requester.address());
+        if (target == null || requesterIp == 0 || requester.listenPort() == 0) {
+            log.info("Callback from {} to ID {} failed (target {})", requester.clientId(), targetId, target == null ? "not connected" : "found");
+            new Packet(Packet.PROTOCOL_ED2K, OpCode.CALLBACK_FAIL.value, new byte[0]).write(out, requester.isZlibSupported());
             return;
         }
 
-        ByteBuffer relayData = ByteBuffer.allocate(6).order(ByteOrder.LITTLE_ENDIAN);
-        relayData.putInt((int) ClientState.ipToLong(context.getState().address()));
-        relayData.putShort(Short.reverseBytes((short) context.getState().port()));
-
-        Packet callbackPacket = new Packet(Packet.PROTOCOL_ED2K, OpCode.CALLBACK.value, relayData.array());
-        context.getRegistry().sendTo(targetId, callbackPacket);
+        ByteBuffer relayData = ByteBuffer.allocate(4 + 2 + 1 + 16).order(ByteOrder.LITTLE_ENDIAN);
+        relayData.putInt((int) requesterIp);
+        relayData.putShort((short) requester.listenPort());
+        relayData.put((byte) cryptOptions(requester));
+        relayData.put(requester.userHash());
+        context.getRegistry().sendTo(targetId, new Packet(Packet.PROTOCOL_ED2K, OpCode.CALLBACK_REQUESTED.value, relayData.array()));
+        log.debug("Relayed callback request from {} to LowID {}", requester.clientId(), targetId);
 
         if (context.getEventManager() != null) {
             context.getEventManager().broadcast(new ClientEvent("CALLBACK_RELAY",
                     String.valueOf(targetId),
-                    String.valueOf(context.getState().clientId()),
+                    String.valueOf(requester.clientId()),
                     "Relaying callback request"));
         }
     }
