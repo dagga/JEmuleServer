@@ -154,4 +154,29 @@ class SearchCompatibilityTest {
         assertEquals(List.of("concert.avi", "concert bootleg.avi").stream().sorted().toList(),
                 names(search(new SearchTree().and().keyword("concert").meta(0x03, "Video").toBytes())));
     }
+
+    @Test
+    void moreResultsFlagAndQueryMore() throws Exception {
+        for (int i = 0; i < 60; i++) {
+            publish(String.format("%032x", i + 1), "episode " + i + ".avi", 100_000_000L + i, 2);
+        }
+        SearchAnswer first = search(new SearchTree().keyword("episode").toBytes());
+        assertEquals(50, first.results().size());
+        assertEquals(1, first.more(), "more results are available");
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        new SearchHandler().handleQueryMoreResult(client, out);
+        Packet p = Packet.read(new ByteArrayInputStream(out.toByteArray()), 1 << 20);
+        SearchAnswer second = readSearchAnswer(p.data());
+        assertEquals(10, second.results().size());
+        assertEquals(0, second.more());
+    }
+
+    @Test
+    void singleAnswerSaysNoMoreResults() throws Exception {
+        publish("11111111111111111111111111111111", "holiday video.avi", 700_000_000L, 2);
+        SearchAnswer a = search(new SearchTree().keyword("holiday").toBytes());
+        assertEquals(0, a.more());
+        assertEquals(1, a.trailingBytes());
+    }
 }

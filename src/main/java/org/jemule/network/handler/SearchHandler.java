@@ -38,7 +38,7 @@ public class SearchHandler {
         }
 
         List<FileMetadata> batch = results.subList(0, Math.min(results.size(), BATCH_SIZE));
-        sendSearchResults(context, batch, out);
+        sendSearchResults(context, batch, results.size() > BATCH_SIZE, out);
 
         if (results.size() > BATCH_SIZE) {
             context.getState().setPendingSearchResults(new ArrayList<>(results.subList(BATCH_SIZE, results.size())));
@@ -54,7 +54,7 @@ public class SearchHandler {
         }
 
         List<FileMetadata> batch = pending.subList(0, Math.min(pending.size(), BATCH_SIZE));
-        sendSearchResults(context, batch, out);
+        sendSearchResults(context, batch, pending.size() > BATCH_SIZE, out);
 
         if (pending.size() > BATCH_SIZE) {
             context.getState().setPendingSearchResults(new ArrayList<>(pending.subList(BATCH_SIZE, pending.size())));
@@ -63,7 +63,12 @@ public class SearchHandler {
         }
     }
 
-    private void sendSearchResults(ClientContext context, List<FileMetadata> results, OutputStream out) throws IOException {
+    /**
+     * Sends OP_SEARCHRESULT <code>&lt;count 4&gt;(&lt;hash 16&gt;&lt;ID 4&gt;&lt;port 2&gt;&lt;tags&gt;)[count]&lt;more 1&gt;</code>.
+     * The trailing byte (0x01 = more results available) enables the client's "More" button, which sends
+     * OP_QUERY_MORE_RESULT (CSearchList::ProcessSearchAnswer).
+     */
+    private void sendSearchResults(ClientContext context, List<FileMetadata> results, boolean moreAvailable, OutputStream out) throws IOException {
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         // <count 4> is little-endian like every ed2k integer (CSearchList::ProcessSearchAnswer)
         baos.writeBytes(ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(results.size()).array());
@@ -95,6 +100,7 @@ public class SearchHandler {
             itemBuf.get(itemData);
             baos.writeBytes(itemData);
         }
+        baos.write(moreAvailable ? 0x01 : 0x00);
         new Packet(Packet.PROTOCOL_ED2K, OpCode.SEARCH_RESULT.value, baos.toByteArray()).write(out, context.getState().isZlibSupported());
     }
 }
