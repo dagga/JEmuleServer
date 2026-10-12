@@ -60,4 +60,18 @@ class OfferFilesCompatibilityTest {
         offer(offerFiles(files));
         assertEquals(64, index.fileCount());
     }
+
+    @Test
+    void integerFileTypeIsStoredAsTheSearchTerm() throws Exception {
+        byte[] video = completeFile(hash("55555555555555555555555555555555"), "video.avi", 1000); // FT_FILETYPE = 2 (UINT8)
+        byte[] archive = offeredFile(hash("66666666666666666666666666666666"), 0xFBFBFBFB, 0xFBFB,
+                new NewTags().str(0x01, "archive.zip").num(0x02, 1000).num(0x03, 6)); // ED2KFT_ARCHIVE
+        byte[] collection = offeredFile(hash("77777777777777777777777777777777"), 0xFBFBFBFB, 0xFBFB,
+                new NewTags().str(0x01, "my.emulecollection").num(0x02, 1000).str(0x03, "EmuleCollection"));
+        offer(offerFiles(video, archive, collection));
+
+        assertEquals("Video", file("55555555555555555555555555555555").type());
+        assertEquals("Pro", file("66666666666666666666666666666666").type());
+        assertEquals("EmuleCollection", file("77777777777777777777777777777777").type());
+    }
 }

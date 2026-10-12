@@ -95,7 +95,8 @@ public class PublishHandler {
             } else if (t.name().equals(Tag.NAME_FILESIZE_HI) && t.isInt()) { // high part of a >4GB size
                 sizeHi = t.unsignedValue();
             } else if (t.name().equals(Tag.NAME_FILETYPE)) {
-                type = String.valueOf(t.value());
+                // integer with SRV_TCPFLG_TYPETAGINTEGER (e.g. 2), string otherwise (e.g. "Video")
+                type = org.jemule.protocol.FileTypes.fromTag(t);
             }
         }
         long size = sizeHi != 0 ? (sizeHi << 32) | (sizeLo & 0xFFFFFFFFL) : sizeLo;
