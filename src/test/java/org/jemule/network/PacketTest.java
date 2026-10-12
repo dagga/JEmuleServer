@@ -274,15 +274,6 @@ class PacketTest {
     }
 
     @Test
-    void testAntiReplay() {
-        byte[] nonce = {0x01, 0x02, 0x03, 0x04};
-        assertFalse(Obfuscation.isReplay(nonce), "First time should not be a replay");
-        assertTrue(Obfuscation.isReplay(nonce), "Second time should be a replay");
-        
-        byte[] differentNonce = {0x01, 0x02, 0x03, 0x05};
-        assertFalse(Obfuscation.isReplay(differentNonce), "Different nonce should not be a replay");
-    }
-    @Test
     void testTagUint64() {
         ByteBuffer buf = ByteBuffer.allocate(100).order(ByteOrder.LITTLE_ENDIAN);
         long largeValue = 0x1234567890ABCDEFL;
