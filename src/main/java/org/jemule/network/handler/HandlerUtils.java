@@ -16,6 +16,11 @@ public class HandlerUtils {
         return b;
     }
 
+    /** Lower-case hex representation of an MD4 hash, as used as key in the file index. */
+    public static String bytesToHashString(byte[] hash) {
+        return java.util.HexFormat.of().formatHex(hash);
+    }
+
     public static boolean isValidHash(String hash) {
         if (hash == null || hash.length() != 32) return false;
         return hash.matches("^[0-9a-fA-F]{32}$");

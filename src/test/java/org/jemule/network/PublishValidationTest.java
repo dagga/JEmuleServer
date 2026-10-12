@@ -16,7 +16,6 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.Socket;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -65,68 +64,65 @@ class PublishValidationTest {
         }
     }
 
-    private void invokeHandlePublish(String data) throws Exception {
-        new org.jemule.network.handler.PublishHandler().handlePublish(handler, org.jemule.protocol.OpCode.PUBLISH_FILES, data.getBytes(StandardCharsets.UTF_8), new ByteArrayOutputStream());
+    private void invokeHandlePublish(byte[] hash, String name, long size) throws Exception {
+        byte[] payload = EmuleTestSupport.offerFiles(EmuleTestSupport.completeFile(hash, name, size));
+        new org.jemule.network.handler.PublishHandler().handlePublish(handler, org.jemule.protocol.OpCode.OFFER_FILES, payload, new ByteArrayOutputStream());
     }
+
+    private static final byte[] HASH = EmuleTestSupport.hash("12345678901234567890123456789012");
 
     @Test
     void testValidPublish() throws Exception {
-        String validData = "12345678901234567890123456789012|test.txt|1024|text";
-        invokeHandlePublish(validData);
+        invokeHandlePublish(HASH, "test.txt", 1024);
         assertEquals(1, index.fileCount());
         assertEquals(1, state.publishedFilesCount().get());
     }
 
     @Test
-    void testInvalidHashLength() throws Exception {
-        String invalidData = "short_hash|test.txt|1024|text";
-        invokeHandlePublish(invalidData);
+    void testTruncatedOffer() throws Exception {
+        byte[] payload = EmuleTestSupport.offerFiles(EmuleTestSupport.completeFile(HASH, "test.txt", 1024));
+        byte[] truncated = java.util.Arrays.copyOf(payload, 4 + 10); // count + part of the hash
+        new org.jemule.network.handler.PublishHandler().handlePublish(handler, org.jemule.protocol.OpCode.OFFER_FILES, truncated, new ByteArrayOutputStream());
         assertEquals(0, index.fileCount());
         assertEquals(0, state.publishedFilesCount().get());
     }
 
     @Test
     void testEmptyFilename() throws Exception {
-        String invalidData = "12345678901234567890123456789012||1024|text";
-        invokeHandlePublish(invalidData);
+        invokeHandlePublish(HASH, "", 1024);
         assertEquals(0, index.fileCount());
         assertEquals(0, state.publishedFilesCount().get());
     }
 
     @Test
-    void testInvalidSize() throws Exception {
-        String invalidData = "12345678901234567890123456789012|test.txt|abc|text";
-        invokeHandlePublish(invalidData);
+    void testZeroSize() throws Exception {
+        invokeHandlePublish(HASH, "test.txt", 0);
         assertEquals(0, index.fileCount());
         assertEquals(0, state.publishedFilesCount().get());
     }
 
     @Test
-    void testNegativeSize() throws Exception {
-        String invalidData = "12345678901234567890123456789012|test.txt|-100|text";
-        invokeHandlePublish(invalidData);
+    void testSizeAboveEmuleMaximum() throws Exception {
+        invokeHandlePublish(HASH, "test.txt", 0x4000000001L); // > MAX_EMULE_FILE_SIZE (256 GB)
         assertEquals(0, index.fileCount());
         assertEquals(0, state.publishedFilesCount().get());
     }
 
     @Test
-    void testMissingFields() throws Exception {
-        String invalidData = "12345678901234567890123456789012|test.txt";
-        invokeHandlePublish(invalidData);
+    void testKeepAliveOfferIsAccepted() throws Exception {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        new org.jemule.network.handler.PublishHandler().handlePublish(handler, org.jemule.protocol.OpCode.OFFER_FILES, new byte[4], out);
         assertEquals(0, index.fileCount());
-        assertEquals(0, state.publishedFilesCount().get());
     }
 
     @Test
     void testFakeFileDetection() throws Exception {
         // Suspect keyword
-        String fakeData = "12345678901234567890123456789012|movie_crack.exe|1024|Video";
-        invokeHandlePublish(fakeData);
+        invokeHandlePublish(HASH, "movie_crack.exe", 1024);
         assertEquals(0, index.fileCount(), "File with 'crack' keyword should be rejected");
-        
+
         // Double extension
-        String fakeData2 = "ABCDEF1234567890ABCDEF1234567890|document.pdf.exe|1024|Document";
-        invokeHandlePublish(fakeData2);
+        invokeHandlePublish(EmuleTestSupport.hash("ABCDEF1234567890ABCDEF1234567890"), "document.pdf.exe", 1024);
         assertEquals(0, index.fileCount(), "File with double extension should be rejected");
     }
 }

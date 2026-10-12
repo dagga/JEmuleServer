@@ -49,4 +49,15 @@ class OfferFilesCompatibilityTest {
         assertEquals(200L, file("33333333333333333333333333333333").size());
         assertEquals(5_000_000_000L, file("44444444444444444444444444444444").size());
     }
+
+    @Test
+    void offersWith32To127FilesAreNotMistakenForText() throws Exception {
+        // The first payload byte is the low byte of the file count: 64 = 0x40 = '@'
+        byte[][] files = new byte[64][];
+        for (int i = 0; i < files.length; i++) {
+            files[i] = completeFile(hash(String.format("%032x", i + 1)), "shared file " + i + ".avi", 700_000_000L + i);
+        }
+        offer(offerFiles(files));
+        assertEquals(64, index.fileCount());
+    }
 }

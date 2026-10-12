@@ -141,13 +141,11 @@ public class ServerIntegrationTest {
                 // Note: We don't strictly assert welcomeReceived here to avoid flakiness,
                 // but the test will fail later if publish/udp fails.
 
-                // Now publish a file (text pipe-separated format supported by server)
+                // Now publish a file with OP_OFFERFILES, exactly as the eMule client does
                 String hash = "0123456789abcdef0123456789abcdef"; // 32 hex chars
-                String name = "test-file.txt";
-                String size = "123";
-                String type = "application/octet-stream";
-                String publishPayloadStr = String.join("|", hash, name, size, type);
-                Packet publish = new Packet(Packet.PROTOCOL_ED2K, OpCode.PUBLISH_FILES.value, publishPayloadStr.getBytes());
+                byte[] offer = org.jemule.network.EmuleTestSupport.offerFiles(
+                        org.jemule.network.EmuleTestSupport.completeFile(org.jemule.network.EmuleTestSupport.hash(hash), "test-file.txt", 123));
+                Packet publish = new Packet(Packet.PROTOCOL_ED2K, OpCode.OFFER_FILES.value, offer);
                 publish.write(out, false);
 
                 // Expect PUBLISH_ACK (server may send interleaved SERVER_STATUS packets)

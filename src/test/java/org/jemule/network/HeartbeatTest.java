@@ -233,30 +233,4 @@ class HeartbeatTest {
         assertEquals("test_file.txt", results.get(0).name(), "File name should match");
         assertEquals(1024, results.get(0).size(), "File size should match");
     }
-
-    /**
-     * Test that verifies file publication works correctly with text format.
-     */
-    @Test
-    void testFilePublicationText() throws Exception {
-        // Create a text PUBLISH_FILES packet
-        // Format: "hash|name|size|type"
-        String publishData = "0123456789abcdef0123456789abcdef|test_file2.txt|2048|Text";
-        byte[] data = publishData.getBytes(StandardCharsets.UTF_8);
-
-        // Verify initial state
-        assertEquals(0, fileIndex.fileCount(), "File index should be empty initially");
-
-        // Process the PUBLISH_FILES packet
-        new PublishHandler().handlePublish(handler, OpCode.PUBLISH_FILES, data, capturedOutput);
-
-        // Verify file was added
-        assertEquals(1, fileIndex.fileCount(), "File should be added to index");
-
-        // Verify we can search for it
-        List<FileMetadata> results = fileIndex.search("test_file2", 10);
-        assertEquals(1, results.size(), "Should find the published file");
-        assertEquals("test_file2.txt", results.get(0).name(), "File name should match");
-        assertEquals(2048, results.get(0).size(), "File size should match");
-    }
 }
