@@ -406,39 +406,15 @@ public class Server {
                         fileIndex.getSources(hash, null, config.maxSourcesPerFile()));
                 if (sources.isEmpty()) continue;
 
-                // Separate IPv4-mappable and IPv6-only sources
-                List<org.jemule.core.ClientState> ipv4List = new java.util.ArrayList<>();
-                List<org.jemule.core.ClientState> ipv6List = new java.util.ArrayList<>();
-                for (var s : sources) {
-                    if (ClientState.ipToLong(s.address()) != 0) ipv4List.add(s);
-                    else ipv6List.add(s);
+                // ed2k IDs are IPv4 addresses (or LowIDs): an IPv6-only client (ID 0) is never handed out.
+                byte[] block = org.jemule.network.handler.SourceHandler.encodeFoundSources(hashBytes, sources);
+                if (datagram.size() > 0 && datagram.size() + 2 + block.length > MAX_UDP_PAYLOAD) {
+                    sendUdp(ds, datagram.toByteArray(), p.getAddress(), p.getPort(), "SRCS");
+                    datagram.reset();
                 }
-
-                if (!ipv4List.isEmpty()) {
-                    byte[] block = org.jemule.network.handler.SourceHandler.encodeFoundSources(hashBytes, ipv4List);
-                    if (datagram.size() > 0 && datagram.size() + 2 + block.length > MAX_UDP_PAYLOAD) {
-                        sendUdp(ds, datagram.toByteArray(), p.getAddress(), p.getPort(), "SRCS");
-                        datagram.reset();
-                    }
-                    datagram.write(Packet.PROTOCOL_ED2K);
-                    datagram.write(0x9B); // OP_GLOBFOUNDSOURCES
-                    datagram.writeBytes(block);
-                }
-
-                // If there are IPv6-only sources, send a separate IPv6 response packet (new opcode 0x9C)
-                if (!ipv6List.isEmpty()) {
-                    ByteBuffer v6buf = ByteBuffer.allocate(2 + 16 + 1 + ipv6List.size() * (16 + 2)).order(ByteOrder.LITTLE_ENDIAN);
-                    v6buf.put(Packet.PROTOCOL_ED2K);
-                    v6buf.put((byte) 0x9C); // OP_GLOBFOUNDSOURCES_V6 (extension)
-                    v6buf.put(hashBytes);
-                    v6buf.put((byte) Math.min(ipv6List.size(), 255));
-                    for (var s : ipv6List) {
-                        byte[] addr = s.address().getAddress();
-                        v6buf.put(addr.length == 16 ? addr : new byte[16]);
-                        v6buf.putShort((short) s.listenPort());
-                    }
-                    sendUdp(ds, java.util.Arrays.copyOf(v6buf.array(), v6buf.position()), p.getAddress(), p.getPort(), "SRCS_V6");
-                }
+                datagram.write(Packet.PROTOCOL_ED2K);
+                datagram.write(0x9B); // OP_GLOBFOUNDSOURCES
+                datagram.writeBytes(block);
             }
             if (datagram.size() > 0) {
                 sendUdp(ds, datagram.toByteArray(), p.getAddress(), p.getPort(), "SRCS");

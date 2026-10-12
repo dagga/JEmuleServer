@@ -218,24 +218,10 @@ public class ServerIntegrationTest {
                     Assertions.assertEquals(Packet.PROTOCOL_ED2K & 0xFF, gr[0] & 0xFF);
                     Assertions.assertEquals(0x9B, gr[1] & 0xFF);
 
-                    // Base payload: [2 bytes header] [16 bytes hash] [1 byte ipv4 count] [ipv4 entries...]
+                    // Payload: [E3 9B] [16 bytes hash] [1 byte count] [count * (ID 4, port 2)]
                     if (len >= 2 + 16 + 1) {
                         int ipv4Count = gr[2 + 16] & 0xFF;
-                        if (ipv4Count >= 1) {
-                            Assertions.assertTrue(true, "Found IPv4 sources in UDP response");
-                        } else {
-                            // Maybe IPv6-only extension present: search for marker 'V6'
-                            boolean foundV6 = false;
-                            for (int k = 2 + 16 + 1; k < len - 2; k++) {
-                                if (gr[k] == (byte) 'V' && gr[k + 1] == (byte) '6') {
-                                    int v6Count = gr[k + 2] & 0xFF;
-                                    Assertions.assertTrue(v6Count >= 1, "Expected at least one IPv6 source in UDP extended response");
-                                    foundV6 = true;
-                                    break;
-                                }
-                            }
-                            Assertions.assertTrue(foundV6, "No IPv4 sources and no IPv6 extension found in UDP response");
-                        }
+                        Assertions.assertTrue(ipv4Count >= 1, "Expected at least one source in OP_GLOBFOUNDSOURCES");
                     } else {
                         Assertions.fail("UDP response too short");
                     }
