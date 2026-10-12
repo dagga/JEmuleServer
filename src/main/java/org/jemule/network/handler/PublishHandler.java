@@ -121,7 +121,7 @@ public class PublishHandler {
         }
 
         FileMetadata meta = new FileMetadata(hash, name, size, type, tags);
-        meta.sources().put(String.valueOf(context.getState().clientId()), context.getState());
+        meta.sources().put(org.jemule.core.FileIndex.sourceKey(context.getState()), context.getState());
         context.getFileIndex().addFile(meta);
         context.getState().publishedFilesCount().incrementAndGet();
         return true;

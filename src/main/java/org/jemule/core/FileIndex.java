@@ -73,23 +73,48 @@ public class FileIndex {
     }
 
     /**
-     * Registers a new file in the index and persists it to the database.
+     * Registers a published file. If the file (same hash) is already known, the publisher's sources are
+     * <b>added</b> to the existing entry: every client sharing a file must be returned as a source.
      *
-     * @param meta The file metadata to add.
+     * @param meta The file metadata to add, carrying the publishing client(s) in {@link FileMetadata#sources()}.
+     * @return the metadata instance now stored in the index for this hash
      */
-    public void addFile(FileMetadata meta) {
-        indexInMemory(meta);
-        searchCache.clear(); // Invalidate cache when adding a new file
-        if (db != null) {
-            db.saveFile(meta);
+    public FileMetadata addFile(FileMetadata meta) {
+        boolean[] isNew = {false};
+        FileMetadata stored = byHash.compute(meta.hash(), (h, existing) -> {
+            if (existing == null || existing.sources().isEmpty()) {
+                // unknown file, or a file without online source (e.g. loaded from the database): take the new metadata
+                if (existing != null) meta.sources().putAll(existing.sources());
+                isNew[0] = true;
+                return meta;
+            }
+            existing.sources().putAll(meta.sources());
+            return existing;
+        });
+        if (isNew[0]) {
+            indexTokens(stored);
+            searchCache.clear(); // Invalidate cache when adding a new file
+            if (db != null) {
+                db.saveFile(stored);
+            }
+            if (eventManager != null) {
+                eventManager.broadcast(new FileEvent(FileEvent.PUBLISHED, stored.name(), stored.hash(), "File published: " + stored.name()));
+            }
         }
-        if (eventManager != null) {
-            eventManager.broadcast(new FileEvent(FileEvent.PUBLISHED, meta.name(), meta.hash(), "File published: " + meta.name()));
-        }
+        return stored;
+    }
+
+    /** Key of a client in {@link FileMetadata#sources()}: unique per connection (several clients may share one IP). */
+    public static String sourceKey(ClientState client) {
+        return String.valueOf(client.connectionId());
     }
 
     private void indexInMemory(FileMetadata meta) {
         byHash.put(meta.hash(), meta);
+        indexTokens(meta);
+    }
+
+    private void indexTokens(FileMetadata meta) {
         String name = meta.name();
         if (name == null) return;
         String[] tokens = TOKENIZER.split(name.toLowerCase());

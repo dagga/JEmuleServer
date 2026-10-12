@@ -128,4 +128,23 @@ class SourcesCompatibilityTest {
         Packet resp = Packet.read(new ByteArrayInputStream(out.toByteArray()), 65536);
         assertEquals(0, resp.data()[16], "no usable source");
     }
+
+    @Test
+    void everyPublisherOfAFileIsASource() throws Exception {
+        FakeContext second = loggedInContext("10.4.5.6", 50002, CONFIG, registry, index);
+        FakeContext sameNat = loggedInContext("10.1.2.3", 50003, CONFIG, registry, index); // same IP as publisher
+        sameNat.getState().setListenPort(4663);
+        for (FakeContext c : List.of(second, sameNat)) {
+            new PublishHandler().handlePublish(c, OpCode.OFFER_FILES,
+                    offerFiles(completeFile(hash(HASH_A), "other name.avi", 1234567)), new ByteArrayOutputStream());
+        }
+
+        FakeContext requester = loggedInContext("10.9.9.9", 50001, CONFIG, registry, index);
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        new SourceHandler().handleGetSources(requester, new Packet(Packet.PROTOCOL_ED2K, OpCode.GET_SOURCES.value, hash(HASH_A)), out);
+        Packet resp = Packet.read(new ByteArrayInputStream(out.toByteArray()), 65536);
+        List<String> sources = readSourceBlock(ByteBuffer.wrap(resp.data()).order(ByteOrder.LITTLE_ENDIAN), HASH_A);
+        assertEquals(java.util.Set.of("10.1.2.3:4662", "10.4.5.6:4662", "10.1.2.3:4663"), new java.util.HashSet<>(sources));
+        assertEquals(1, index.fileCount());
+    }
 }
