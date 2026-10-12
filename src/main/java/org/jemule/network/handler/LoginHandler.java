@@ -4,6 +4,7 @@ import org.jemule.Main;
 import org.jemule.core.ClientState;
 import org.jemule.core.event.ClientEvent;
 import org.jemule.network.Packet;
+import org.jemule.network.FirewallChecker;
 import org.jemule.network.Server;
 import org.jemule.protocol.OpCode;
 import org.jemule.protocol.Tag;
@@ -29,18 +30,20 @@ public class LoginHandler {
         byte[] data = initialPacket.data();
         log.info("Handling login request, data size: {} bytes", data.length);
 
-        long clientId = ClientState.ipToLong(context.getSocket().getInetAddress());
-
-        ClientState state = context.getClientFactory().createClient(context.getSocket().getInetAddress(), context.getSocket().getPort(), clientId);
+        InetAddress clientIp = context.getSocket().getInetAddress();
+        ClientState state = context.getClientFactory().createClient(clientIp, context.getSocket().getPort(), 0);
         context.setState(state);
-
-        if (context.getEventManager() != null) {
-            context.getEventManager().broadcast(new ClientEvent(ClientEvent.LOGIN, context.getSocket().getInetAddress().getHostAddress(), "ID:" + clientId, "Client logged in with ID " + clientId));
-        }
 
         parseLoginRequest(state, data);
         if (initialPacket.protocol() == Packet.PROTOCOL_ZLIB || (state.serverCaps() & ClientState.SRVCAP_ZLIB) != 0) {
             state.setZlibSupported(true);
+        }
+
+        long clientId = assignClientId(context, state);
+        state.setClientId(clientId);
+
+        if (context.getEventManager() != null) {
+            context.getEventManager().broadcast(new ClientEvent(ClientEvent.LOGIN, clientIp.getHostAddress(), "ID:" + clientId, "Client logged in with ID " + clientId));
         }
 
         OutputStream finalOut = out;
@@ -66,7 +69,7 @@ public class LoginHandler {
         idChange.putInt((int) clientId);
         idChange.putInt(serverFlags);
         idChange.putInt(0); // padding/reserved
-        idChange.putInt((int) clientId); // Server-reported IP (using clientId as it usually matches)
+        idChange.putInt((int) ClientState.ipToLong(clientIp)); // client's IP as seen by the server (used by LowID clients)
         idChange.putInt(context.getConfig().port()); // Obfuscation TCP Port
         new Packet(Packet.PROTOCOL_ED2K, OpCode.ID_CHANGE.value, idChange.array()).write(out, state.isZlibSupported());
 
@@ -75,6 +78,28 @@ public class LoginHandler {
         sendServerStatus(context, out);
         sendServerMessage(context, out, "Welcome to " + Main.VERSION + " (JEmuleServer)\n" +
                 "Your ID is: " + Long.toUnsignedString(clientId));
+    }
+
+    /**
+     * Chooses the client's ID like eD2K servers do: its IP (HighID) if it accepts incoming connections on
+     * the TCP port announced in the login, a LowID (&lt; 2^24) otherwise. An IP whose ID would be below 2^24
+     * (x.y.z.0) or that is not IPv4 can only get a LowID.
+     */
+    static long assignClientId(ClientContext context, ClientState state) {
+        long ipId = ClientState.ipToLong(state.address());
+        if (ipId > 0x00FFFFFFL && state.listenPort() > 0) {
+            Server server = context.getServer();
+            byte[] serverHash = server != null ? server.getServerHash() : new byte[16];
+            InetAddress serverIp = server != null ? server.getPublicIp() : null;
+            FirewallChecker checker = new FirewallChecker(context.getConfig().lowIdCheckTimeoutSeconds() * 1000);
+            if (checker.isReachable(state.address(), state.listenPort(), serverHash, serverIp, context.getConfig().port())) {
+                return ipId;
+            }
+        }
+        long lowId = context.getRegistry().allocateLowId();
+        log.info("Client {} ({}:{}) is not reachable: LowID {}", HandlerUtils.sanitize(state.nickname()),
+                state.address().getHostAddress(), state.listenPort(), lowId);
+        return lowId;
     }
 
     /**

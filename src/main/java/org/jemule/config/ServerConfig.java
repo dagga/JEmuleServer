@@ -64,8 +64,27 @@ public record ServerConfig(
         int heartbeatIntervalSeconds,
         
         // Public IP (optional – null or empty means auto-detect)
-        String publicIp
+        String publicIp,
+
+        // HighID test: time allowed to connect to the client's listen port and get its OP_HELLOANSWER
+        // (0 disables the test: every client gets a LowID)
+        int lowIdCheckTimeoutSeconds
 ) {
+    /** Default time allowed for the HighID test, in seconds. */
+    public static final int DEFAULT_LOWID_CHECK_TIMEOUT_SECONDS = 5;
+
+    /** Constructor without the HighID test timeout (uses {@link #DEFAULT_LOWID_CHECK_TIMEOUT_SECONDS}). */
+    public ServerConfig(int port, int maxPacketSize, int maxSearchResults, int floodMaxRequestsPerSecond, int maxUsers,
+                        int maxFiles, int maxFilesPerUser, int maxSourcesPerFile, String databasePath, String ipFilterPath,
+                        boolean fakeFileDetectionEnabled, float cbFailureRateThreshold, int cbMinimumNumberOfCalls,
+                        int cbWaitDurationInSeconds, int tcpKeepAliveTimeoutInSeconds, int heartbeatIntervalSeconds,
+                        String publicIp) {
+        this(port, maxPacketSize, maxSearchResults, floodMaxRequestsPerSecond, maxUsers, maxFiles, maxFilesPerUser,
+                maxSourcesPerFile, databasePath, ipFilterPath, fakeFileDetectionEnabled, cbFailureRateThreshold,
+                cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds, heartbeatIntervalSeconds,
+                publicIp, DEFAULT_LOWID_CHECK_TIMEOUT_SECONDS);
+    }
+
     public ServerConfig {
         if (port < 1 || port > 65535) {
             throw new IllegalArgumentException("Port must be between 1 and 65535");
@@ -120,7 +139,8 @@ public record ServerConfig(
                 Integer.parseInt(props.getProperty("cbWaitDurationInSeconds", String.valueOf(DEFAULT.cbWaitDurationInSeconds()))),
                 Integer.parseInt(props.getProperty("tcpKeepAliveTimeoutInSeconds", String.valueOf(DEFAULT.tcpKeepAliveTimeoutInSeconds()))),
                 Integer.parseInt(props.getProperty("heartbeatIntervalSeconds", String.valueOf(DEFAULT.heartbeatIntervalSeconds()))),
-                props.getProperty("publicIp", DEFAULT.publicIp())
+                props.getProperty("publicIp", DEFAULT.publicIp()),
+                Integer.parseInt(props.getProperty("lowIdCheckTimeoutSeconds", String.valueOf(DEFAULT.lowIdCheckTimeoutSeconds())))
         );
     }
 }

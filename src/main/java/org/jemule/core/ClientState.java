@@ -32,7 +32,7 @@ public final class ClientState {
     private final int connectionId;
     private final InetAddress address;
     private final int port;
-    private final long clientId;
+    private volatile long clientId;
     private final long connectedAt;
     private final AtomicLong lastActivity;
     private final AtomicInteger publishedFilesCount = new AtomicInteger(0);
@@ -64,6 +64,9 @@ public final class ClientState {
     public InetAddress address() { return address; }
     public int port() { return port; }
     public long clientId() { return clientId; }
+
+    /** Sets the ID assigned at login (HighID = IP, or LowID); must be called before registering the client. */
+    public void setClientId(long clientId) { this.clientId = clientId; }
     public long connectedAt() { return connectedAt; }
     public AtomicLong lastActivity() { return lastActivity; }
 
