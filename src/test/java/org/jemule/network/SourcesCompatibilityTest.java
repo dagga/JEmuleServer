@@ -147,4 +147,19 @@ class SourcesCompatibilityTest {
         assertEquals(java.util.Set.of("10.1.2.3:4662", "10.4.5.6:4662", "10.1.2.3:4663"), new java.util.HashSet<>(sources));
         assertEquals(1, index.fileCount());
     }
+
+    @Test
+    void getSourcesObfuIsRoutedToTheSourceHandler() throws Exception {
+        // Default eMule (crypt layer supported) + server announcing SRV_TCPFLG_TCPOBFUSCATION:
+        // the client sends OP_GETSOURCES_OBFU = 0xE3/0x23 <hash 16><size 4>
+        FakeContext requester = loggedInContext("10.9.9.9", 50001, CONFIG, registry, index);
+        ByteBuffer req = ByteBuffer.allocate(20).order(ByteOrder.LITTLE_ENDIAN).put(hash(HASH_A)).putInt(1234567);
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        new org.jemule.network.handler.PacketProcessor().processPacket(requester, new Packet(Packet.PROTOCOL_ED2K, (byte) 0x23, req.array()), out);
+
+        assertTrue(out.size() > 0, "OP_GETSOURCES_OBFU must be answered");
+        Packet resp = Packet.read(new ByteArrayInputStream(out.toByteArray()), 65536);
+        assertEquals(Packet.PROTOCOL_ED2K, resp.protocol());
+        assertTrue(resp.opcode() == 0x42 || resp.opcode() == 0x44, "OP_FOUNDSOURCES(_OBFU) expected");
+    }
 }

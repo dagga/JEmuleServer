@@ -137,8 +137,8 @@ class PacketTest {
 
     @Test
     void testEmuleProtocolPacket() throws IOException {
-        byte protocol = Packet.PROTOCOL_EMULE;
-        byte opcode = (byte) 0x23; // GET_SOURCES_OBFU
+        byte protocol = Packet.PROTOCOL_ED2K;
+        byte opcode = (byte) 0x23; // OP_GETSOURCES_OBFU is an ed2k (0xE3) opcode
         byte[] payload = "FileHash12345678".getBytes();
         Packet packet = new Packet(protocol, opcode, payload);
 
@@ -209,7 +209,11 @@ class PacketTest {
 
     @Test
     void testNewOpCodes() {
-        assertEquals(OpCode.SOURCES_RESULT_OBFU, OpCode.fromByte(Packet.PROTOCOL_EMULE, (byte) 0x44));
+        assertEquals(OpCode.SOURCES_RESULT_OBFU, OpCode.fromByte(Packet.PROTOCOL_ED2K, (byte) 0x44));
+        assertEquals(OpCode.GET_SOURCES_OBFU, OpCode.fromByte(Packet.PROTOCOL_ED2K, (byte) 0x23));
+        assertEquals(OpCode.GET_SOURCES_OBFU, OpCode.fromByte(Packet.PROTOCOL_ZLIB, (byte) 0x23));
+        assertEquals(OpCode.OFFER_FILES, OpCode.fromByte(Packet.PROTOCOL_ZLIB, (byte) 0x15));
+        assertNull(OpCode.fromByte(Packet.PROTOCOL_EMULE, (byte) 0x23));
         assertEquals(OpCode.COMPRESSED_PART, OpCode.fromByte(Packet.PROTOCOL_EMULE, (byte) 0x40));
         
         // Conformity tests
