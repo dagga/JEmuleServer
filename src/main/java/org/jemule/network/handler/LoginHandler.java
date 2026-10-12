@@ -188,8 +188,8 @@ public class LoginHandler {
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SERVER_VERSION, org.jemule.Main.ESERVER_VERSION_INT));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_LOWIDUSERS, context.getRegistry().lowIdCount()));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDPFLAGS, udpFlags));
-        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDPKEY, org.jemule.network.Server.getUdpKey())); // ST_UDPKEY
-        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDPKEYIP, (int) ClientState.ipToLong(publicIp))); // ST_UDPKEYIP
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDPKEY, org.jemule.security.UdpObfuscation.serverKeyFor(context.getSocket().getInetAddress()))); // ST_UDPKEY
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDPKEYIP, (int) ClientState.ipToLong(context.getSocket().getInetAddress()))); // ST_UDPKEYIP: IP the key is valid for
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_TCPPORTOBFUSCATION, portInt)); // ST_TCPPORTOBFUSCATION
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDPPORTOBFUSCATION, portInt + 12)); // ST_UDPPORTOBFUSCATION (port + 12)
         tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_AUXPORTSLIST, String.valueOf(portInt + 12))); // ST_AUXPORTSLIST

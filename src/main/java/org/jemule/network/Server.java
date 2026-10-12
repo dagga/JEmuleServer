@@ -61,14 +61,9 @@ public class Server {
     private final ExecutorService executor;
     private final DatabaseManager db;
     private final byte[] serverHash = new byte[16];
-    private static final int GLOBAL_UDP_KEY = new java.util.Random().nextInt();
 
     // Map of UDP sockets bound by startUdpResponder so other components can send via the same source port
     private static final java.util.concurrent.ConcurrentHashMap<Integer, java.net.DatagramSocket> boundUdpSockets = new java.util.concurrent.ConcurrentHashMap<>();
-
-    public static int getUdpKey() {
-        return GLOBAL_UDP_KEY;
-    }
 
     /**
      * Send a UDP packet using a previously-bound DatagramSocket for the given local port.
@@ -322,6 +317,9 @@ public class Server {
         adminThread.start();
     }
 
+    /** Destination of the answers to one UDP request; answers are obfuscated when {@code key != 0}. */
+    private record UdpReply(java.net.DatagramSocket socket, InetAddress address, int port, int key) {}
+
     private void handleUdp(java.net.DatagramSocket ds, java.net.DatagramPacket p) throws IOException {
         String clientIp = p.getAddress().getHostAddress();
         if (ipFilter.isBlocked(clientIp)) {
@@ -329,77 +327,55 @@ public class Server {
             return;
         }
         if (p.getLength() < 2) return;
-        byte[] data = p.getData();
-        byte[] recv = java.util.Arrays.copyOfRange(data, 0, p.getLength());
-        log.info("UDP recv {} bytes from {}:{} - {}", p.getLength(), p.getAddress(), p.getPort(), hex(recv, recv.length));
-        
-        // Handle potentially obfuscated UDP packet
-        if ((data[0] & 0xFF) != (Packet.PROTOCOL_ED2K & 0xFF) && 
-            (data[0] & 0xFF) != (Packet.PROTOCOL_EMULE & 0xFF)) {
-            // For now, if we don't recognize the protocol, we check if it's on the obfuscation port
-            if (ds.getLocalPort() == config.port() + 12) {
-                 log.debug("Received potential obfuscated UDP packet on port {}, but UDP obfuscation is not fully implemented yet.", ds.getLocalPort());
-            }
-            return;
+        byte[] recv = java.util.Arrays.copyOfRange(p.getData(), p.getOffset(), p.getOffset() + p.getLength());
+        if (log.isDebugEnabled()) {
+            log.debug("UDP recv {} bytes from {}:{} - {}", recv.length, p.getAddress(), p.getPort(), hex(recv, recv.length));
         }
 
-        // Spec says UDP packets are: [Protocol] [Opcode] [Data...]
-        // [0xE3] [0x96] [Challenge 4 bytes] -> Total 6 bytes
-        byte opcode = data[1];
-        if (opcode == (byte) 0x96) { // OP_GLOBSERVSTATREQ
-            if (p.getLength() < 6) return;
-            int challenge = ByteBuffer.wrap(data, 2, 4).order(ByteOrder.LITTLE_ENDIAN).getInt();
-            log.debug("UDP Status Request (0x96) from {} with challenge 0x{}", p.getAddress(), Integer.toHexString(challenge));
-
-            // Response: [Protocol] [Opcode] [Challenge 4][UserCount 4][FileCount 4][MaxUsers 4][SoftFiles 4][HardFiles 4][UDPFlags 4][LowIDUsers 4][UDPPort 2][TCPPort 2][ServerKey 4]
-            // Total data size: 4+4+4+4+4+4+4+4+2+2+4 = 40 bytes. Packet size: 1+1+40 = 42 bytes.
-
-            ByteBuffer resp = ByteBuffer.allocate(42).order(ByteOrder.LITTLE_ENDIAN);
-            resp.put(Packet.PROTOCOL_ED2K);
-            resp.put((byte) 0x97); // OP_GLOBSERVSTATRES
-            resp.putInt(challenge); // Echo challenge
-            resp.putInt(registry.size());
-            resp.putInt(fileIndex.fileCount());
-            resp.putInt(config.maxUsers());
-            resp.putInt(1000000); // SoftFiles (Standard Lugdunum value)
-            resp.putInt(2000000); // HardFiles (Standard Lugdunum value)
-        // UDP Flags (matching server.h)
-        // Includes SRV_UDPFLG_TCPOBFUSCATION (0x400) which is essential for client-side obfuscation display
-        int udpFlags = Tag.SERVER_UDP_FLAGS;
-        resp.putInt(udpFlags); 
-            resp.putInt(registry.lowIdCount()); // LowIDUsers
-            resp.putShort((short) (config.port() + 4)); // UDPPort (standard is TCP+4)
-            resp.putShort((short) config.port()); // TCPPort
-            resp.putInt(getUdpKey()); // ServerKey
-            resp.flip();
-            byte[] outStat = resp.array();
-            log.info("UDP send (STAT) {} bytes to {}:{} - {}", outStat.length, p.getAddress(), p.getPort(), hex(outStat, outStat.length));
-            ds.send(new java.net.DatagramPacket(outStat, outStat.length, p.getAddress(), p.getPort()));
-
-            // Not sending server description here to avoid race with subsequent UDP requests (e.g. GET_SOURCES)
-            // If needed, client should request OP_SERVER_DESC_REQ (0xA2) which is handled below.
-        } else if (opcode == (byte) 0xA2) { // OP_SERVER_DESC_REQ
-            int challenge = 0;
-            if (p.getLength() >= 6) {
-                challenge = ByteBuffer.wrap(data, 2, 4).order(ByteOrder.LITTLE_ENDIAN).getInt();
+        int replyKey = 0;
+        if (recv[0] != Packet.PROTOCOL_ED2K) {
+            // Obfuscated packet (CEncryptedDatagramSocket::EncryptSendServer), keyed with this client's server key
+            int serverKey = org.jemule.security.UdpObfuscation.serverKeyFor(p.getAddress());
+            byte[] plain = org.jemule.security.UdpObfuscation.decryptFromClient(recv, serverKey);
+            if (plain != null && plain.length >= 2 && plain[0] == Packet.PROTOCOL_ED2K) {
+                recv = plain;
+                replyKey = serverKey;
+            } else if (recv.length >= 4 && recv.length < 4 + 16 && ds.getLocalPort() == config.port() + 12) {
+                // "Crypt ping" (CServerList::ServerStats): raw <challenge 4><random 0-15> sent to port+12;
+                // the OP_GLOBSERVSTATRES answer is obfuscated with the challenge as base key.
+                int challenge = ByteBuffer.wrap(recv, 0, 4).order(ByteOrder.LITTLE_ENDIAN).getInt();
+                UdpReply reply = new UdpReply(ds, p.getAddress(), p.getPort(), challenge);
+                sendUdp(reply, buildGlobServStatRes(challenge, p.getAddress()), "STAT (crypt ping)");
+                return;
+            } else {
+                log.debug("Dropping undecodable UDP packet ({} bytes) from {}", recv.length, p.getAddress());
+                return;
             }
-            log.debug("UDP Description Request (0xA2) from {} with challenge 0x{}", p.getAddress(), Integer.toHexString(challenge));
+        }
+        dispatchUdp(new UdpReply(ds, p.getAddress(), p.getPort(), replyKey), recv);
+    }
 
-            byte[] outDesc = buildServerDescPacket(challenge);
-            log.info("UDP send (DESC) {} bytes to {}:{} - {}", outDesc.length, p.getAddress(), p.getPort(), hex(outDesc, outDesc.length));
-            ds.send(new java.net.DatagramPacket(outDesc, outDesc.length, p.getAddress(), p.getPort()));
+    private void dispatchUdp(UdpReply reply, byte[] recv) throws IOException {
+        byte opcode = recv[1];
+        if (opcode == (byte) 0x96) { // OP_GLOBSERVSTATREQ <challenge 4>
+            if (recv.length < 6) return;
+            int challenge = ByteBuffer.wrap(recv, 2, 4).order(ByteOrder.LITTLE_ENDIAN).getInt();
+            sendUdp(reply, buildGlobServStatRes(challenge, reply.address()), "STAT");
+        } else if (opcode == (byte) 0xA2) { // OP_SERVER_DESC_REQ [<challenge 4>]
+            int challenge = recv.length >= 6 ? ByteBuffer.wrap(recv, 2, 4).order(ByteOrder.LITTLE_ENDIAN).getInt() : 0;
+            sendUdp(reply, buildServerDescPacket(challenge, reply.address()), "DESC");
         } else if (opcode == (byte) 0x98 || opcode == (byte) 0x92 || opcode == (byte) 0x90) {
-            handleGlobalSearch(ds, p, opcode, recv);
+            handleGlobalSearch(reply, opcode, recv);
         } else if (opcode == (byte) 0x9A) { // OP_GLOBGETSOURCES: <hash 16>[<hash 16>...] (up to 35 with SRV_UDPFLG_EXT_GETSOURCES)
-            int hashCount = (p.getLength() - 2) / 16;
+            int hashCount = (recv.length - 2) / 16;
             if (hashCount < 1) return;
-            log.debug("UDP Source Request from {} for {} file(s)", p.getAddress(), hashCount);
+            log.debug("UDP Source Request from {} for {} file(s)", reply.address(), hashCount);
 
             // The client accepts several <hash><count>(<ID><port>)* blocks in one datagram, each further block
             // being preceded by its own <0xE3><0x9B> header (CUDPSocket::ProcessPacket, OP_GLOBFOUNDSOURCES).
             java.io.ByteArrayOutputStream datagram = new java.io.ByteArrayOutputStream();
             for (int h = 0; h < hashCount; h++) {
-                byte[] hashBytes = java.util.Arrays.copyOfRange(data, 2 + h * 16, 2 + (h + 1) * 16);
+                byte[] hashBytes = java.util.Arrays.copyOfRange(recv, 2 + h * 16, 2 + (h + 1) * 16);
                 String hash = org.jemule.network.handler.HandlerUtils.bytesToHashString(hashBytes);
 
                 var sources = org.jemule.network.handler.SourceHandler.reachableSources(
@@ -409,7 +385,7 @@ public class Server {
                 // ed2k IDs are IPv4 addresses (or LowIDs): an IPv6-only client (ID 0) is never handed out.
                 byte[] block = org.jemule.network.handler.SourceHandler.encodeFoundSources(hashBytes, sources);
                 if (datagram.size() > 0 && datagram.size() + 2 + block.length > MAX_UDP_PAYLOAD) {
-                    sendUdp(ds, datagram.toByteArray(), p.getAddress(), p.getPort(), "SRCS");
+                    sendUdp(reply, datagram.toByteArray(), "SRCS");
                     datagram.reset();
                 }
                 datagram.write(Packet.PROTOCOL_ED2K);
@@ -417,9 +393,32 @@ public class Server {
                 datagram.writeBytes(block);
             }
             if (datagram.size() > 0) {
-                sendUdp(ds, datagram.toByteArray(), p.getAddress(), p.getPort(), "SRCS");
+                sendUdp(reply, datagram.toByteArray(), "SRCS");
             }
         }
+    }
+
+    /**
+     * OP_GLOBSERVSTATRES as read by CUDPSocket::ProcessPacket:
+     * <challenge 4><users 4><files 4><maxusers 4><softfiles 4><hardfiles 4><UDP flags 4><lowid users 4>
+     * <UDP port 2><TCP port 2><server UDP key 4>. The key is specific to the client's IP.
+     */
+    private byte[] buildGlobServStatRes(int challenge, InetAddress client) {
+        ByteBuffer resp = ByteBuffer.allocate(42).order(ByteOrder.LITTLE_ENDIAN);
+        resp.put(Packet.PROTOCOL_ED2K);
+        resp.put((byte) 0x97); // OP_GLOBSERVSTATRES
+        resp.putInt(challenge);
+        resp.putInt(registry.size());
+        resp.putInt(fileIndex.fileCount());
+        resp.putInt(config.maxUsers());
+        resp.putInt(1000000); // SoftFiles (Standard Lugdunum value)
+        resp.putInt(2000000); // HardFiles (Standard Lugdunum value)
+        resp.putInt(Tag.SERVER_UDP_FLAGS);
+        resp.putInt(registry.lowIdCount());
+        resp.putShort((short) (config.port() + 4)); // UDPPort (standard is TCP+4)
+        resp.putShort((short) config.port()); // TCPPort
+        resp.putInt(org.jemule.security.UdpObfuscation.serverKeyFor(client)); // server UDP key for this client
+        return resp.array();
     }
 
     /** eMule keeps at most MAX_RESULTS (100) results of a global search per server. */
@@ -432,7 +431,7 @@ public class Server {
      * Each result is sent as an OP_GLOBSEARCHRES (0x99) block; several blocks, each with its own E3/99 header,
      * may share one datagram (CUDPSocket::ProcessPacket).
      */
-    private void handleGlobalSearch(java.net.DatagramSocket ds, java.net.DatagramPacket p, byte opcode, byte[] recv) throws IOException {
+    private void handleGlobalSearch(UdpReply reply, byte opcode, byte[] recv) throws IOException {
         ByteBuffer buf = ByteBuffer.wrap(recv, 2, recv.length - 2).slice().order(ByteOrder.LITTLE_ENDIAN);
         boolean largeFiles = false;
         List<FileMetadata> results;
@@ -447,7 +446,7 @@ public class Server {
             SearchQuery query = SearchQuery.parse(buf.slice());
             results = fileIndex.searchComplex(query, Math.min(config.maxSearchResults(), MAX_GLOBAL_SEARCH_RESULTS));
         } catch (RuntimeException e) {
-            log.debug("Malformed UDP search request from {}: {}", p.getAddress(), e.getMessage());
+            log.debug("Malformed UDP search request from {}: {}", reply.address(), e.getMessage());
             return;
         }
 
@@ -456,7 +455,7 @@ public class Server {
             if (!largeFiles && m.size() > 0xFFFFFFFFL) continue; // the requester cannot handle files > 4 GB
             byte[] item = org.jemule.network.handler.SearchHandler.encodeSearchResult(m);
             if (datagram.size() > 0 && datagram.size() + 2 + item.length > MAX_UDP_PAYLOAD) {
-                sendUdp(ds, datagram.toByteArray(), p.getAddress(), p.getPort(), "SEARCH");
+                sendUdp(reply, datagram.toByteArray(), "SEARCH");
                 datagram.reset();
             }
             datagram.write(Packet.PROTOCOL_ED2K);
@@ -464,18 +463,20 @@ public class Server {
             datagram.writeBytes(item);
         }
         if (datagram.size() > 0) {
-            sendUdp(ds, datagram.toByteArray(), p.getAddress(), p.getPort(), "SEARCH");
+            sendUdp(reply, datagram.toByteArray(), "SEARCH");
         }
     }
 
     /** Keeps answers below the usual path MTU (the client reads up to 5000 bytes per datagram). */
     private static final int MAX_UDP_PAYLOAD = 1300;
 
-    private void sendUdp(java.net.DatagramSocket ds, byte[] out, InetAddress addr, int port, String what) throws IOException {
+    private void sendUdp(UdpReply reply, byte[] plain, String what) throws IOException {
+        byte[] out = reply.key() != 0 ? org.jemule.security.UdpObfuscation.encryptForClient(plain, reply.key()) : plain;
         if (log.isDebugEnabled()) {
-            log.debug("UDP send ({}) {} bytes to {}:{} - {}", what, out.length, addr, port, hex(out, out.length));
+            log.debug("UDP send ({}{}) {} bytes to {}:{} - {}", what, reply.key() != 0 ? ", obfuscated" : "",
+                    out.length, reply.address(), reply.port(), hex(plain, plain.length));
         }
-        ds.send(new java.net.DatagramPacket(out, out.length, addr, port));
+        reply.socket().send(new java.net.DatagramPacket(out, out.length, reply.address(), reply.port()));
     }
 
     // Hex dump helper for UDP debugging
@@ -487,7 +488,7 @@ public class Server {
         return sb.toString().trim();
     }
 
-    private byte[] buildServerDescPacket(int challenge) {
+    private byte[] buildServerDescPacket(int challenge, InetAddress client) {
         String sName = "JEmuleServer (https://github.com/dagga/JEmuleServer/)";
         String sDesc = "Experimental eMule Server";
 
@@ -508,8 +509,8 @@ public class Server {
         tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_SERVER_VERSION, org.jemule.Main.ESERVER_VERSION_INT));
         tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_LOWIDUSERS, registry.lowIdCount()));
         tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_UDPFLAGS, udpFlags));
-        tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_UDP_KEY, getUdpKey()));
-        tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_UDP_KEY_IP, (int) ClientState.ipToLong(publicIp)));
+        tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_UDP_KEY, org.jemule.security.UdpObfuscation.serverKeyFor(client)));
+        tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_UDP_KEY_IP, (int) ClientState.ipToLong(client))); // IP the key is valid for
         tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_TCP_OBFUSCATION_PORT, config.port()));
         tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_UDPPORTOBFUSCATION, config.port() + 12));
         tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_STRING, org.jemule.protocol.Tag.NAME_AUXPORTSLIST, String.valueOf(config.port() + 12)));
