@@ -15,15 +15,28 @@ public interface SearchQuery extends Predicate<FileMetadata> {
     byte OP_OR = 0x01;
     byte OP_NOT = 0x02;
 
-    // Tag IDs for filters
+    // Tag IDs for filters (FT_* in eMule opcodes.h)
     byte ID_FILENAME = 0x01;
     byte ID_FILESIZE = 0x02;
     byte ID_FILETYPE = 0x03;
     byte ID_FORMAT = 0x04;
+    byte ID_SOURCES = 0x15;
+    byte ID_COMPLETE_SOURCES = 0x30;
+    byte ID_MEDIA_ARTIST = (byte) 0xD0;
+    byte ID_MEDIA_ALBUM = (byte) 0xD1;
+    byte ID_MEDIA_TITLE = (byte) 0xD2;
+    byte ID_MEDIA_LENGTH = (byte) 0xD3;
+    byte ID_MEDIA_BITRATE = (byte) 0xD4;
+    byte ID_MEDIA_CODEC = (byte) 0xD5;
+    byte ID_FILERATING = (byte) 0xF7;
 
-    // Filter modes for numeric tags (size)
-    byte MODE_MIN = 0x01;
-    byte MODE_MAX = 0x02;
+    // Comparison operators of numeric parameters (ED2K_SEARCH_OP_* in opcodes.h)
+    byte OP_EQUAL = 0;
+    byte OP_GREATER = 1;
+    byte OP_LESS = 2;
+    byte OP_GREATER_EQUAL = 3;
+    byte OP_LESS_EQUAL = 4;
+    byte OP_NOTEQUAL = 5;
 
     record AndQuery(SearchQuery left, SearchQuery right) implements SearchQuery {
         @Override
@@ -75,7 +88,11 @@ public interface SearchQuery extends Predicate<FileMetadata> {
                 }
                 case ID_FILETYPE -> meta.type() != null && meta.type().equalsIgnoreCase(lowerTerm);
                 case ID_FORMAT -> meta.name() != null && meta.name().toLowerCase().endsWith("." + lowerTerm);
-                default -> true;
+                case ID_MEDIA_CODEC, ID_MEDIA_TITLE, ID_MEDIA_ALBUM, ID_MEDIA_ARTIST -> {
+                    String value = stringTag(meta, id);
+                    yield value != null && Keywords.normalize(value).contains(Keywords.normalize(term));
+                }
+                default -> true; // unknown meta tag: not filtered on
             };
         }
         @Override
@@ -84,26 +101,69 @@ public interface SearchQuery extends Predicate<FileMetadata> {
                 case ID_FILENAME -> "Name";
                 case ID_FILETYPE -> "Type";
                 case ID_FORMAT -> "Format";
-                default -> "Unknown(" + id + ")";
+                default -> "Tag(0x" + Integer.toHexString(id & 0xFF) + ")";
             };
             return type + ":" + term;
         }
     }
 
-    record SizeQuery(long value, byte mode) implements SearchQuery {
+    /**
+     * Numeric comparison <code>&lt;tag&gt; &lt;operator&gt; &lt;value&gt;</code> (ED2K_SEARCH_OP_*). eMule sends "&gt;= v" as
+     * "&gt; v-1" and "&lt;= v" as "&lt; v+1" (GetSearchPacket), so the operators must keep their strict meaning.
+     */
+    record NumericQuery(byte id, byte operator, long value) implements SearchQuery {
         @Override
         public boolean test(FileMetadata meta) {
-            return switch (mode) {
-                case MODE_MIN -> meta.size() >= value;
-                case MODE_MAX -> meta.size() <= value;
+            Long actual = switch (id) {
+                case ID_FILESIZE -> meta.size();
+                case ID_SOURCES -> (long) meta.sources().size();
+                case ID_COMPLETE_SOURCES -> (long) meta.completeSourceCount();
+                case ID_MEDIA_LENGTH, ID_MEDIA_BITRATE, ID_FILERATING -> intTag(meta, id);
+                default -> null;
+            };
+            if (actual == null) {
+                // a file without this information cannot satisfy the filter; an unknown tag is not filtered on
+                return !(id == ID_MEDIA_LENGTH || id == ID_MEDIA_BITRATE || id == ID_FILERATING);
+            }
+            return switch (operator) {
+                case OP_EQUAL -> actual == value;
+                case OP_GREATER -> actual > value;
+                case OP_LESS -> actual < value;
+                case OP_GREATER_EQUAL -> actual >= value;
+                case OP_LESS_EQUAL -> actual <= value;
+                case OP_NOTEQUAL -> actual != value;
                 default -> true;
             };
         }
         @Override
         public String toString() {
-            String m = (mode == MODE_MIN) ? ">=" : (mode == MODE_MAX) ? "<=" : "?";
-            return "Size" + m + value;
+            String op = switch (operator) {
+                case OP_EQUAL -> "=";
+                case OP_GREATER -> ">";
+                case OP_LESS -> "<";
+                case OP_GREATER_EQUAL -> ">=";
+                case OP_LESS_EQUAL -> "<=";
+                case OP_NOTEQUAL -> "!=";
+                default -> "?";
+            };
+            return "Tag(0x" + Integer.toHexString(id & 0xFF) + ")" + op + value;
         }
+    }
+
+    private static String stringTag(FileMetadata meta, byte id) {
+        String name = String.valueOf((char) (id & 0xFF));
+        for (org.jemule.protocol.Tag t : meta.tags()) {
+            if (t.name().equals(name) && t.value() instanceof String str) return str;
+        }
+        return null;
+    }
+
+    private static Long intTag(FileMetadata meta, byte id) {
+        String name = String.valueOf((char) (id & 0xFF));
+        for (org.jemule.protocol.Tag t : meta.tags()) {
+            if (t.name().equals(name) && t.isInt()) return t.unsignedValue();
+        }
+        return null;
     }
 
     /** Maximum nesting of boolean operators accepted in a search tree (protects the parser's stack). */
@@ -151,12 +211,9 @@ public interface SearchQuery extends Predicate<FileMetadata> {
             }
             case 0x03, 0x08 -> {
                 long val = type == 0x03 ? Integer.toUnsignedLong(buf.getInt()) : buf.getLong();
-                byte mode = buf.get();
+                byte operator = buf.get();
                 int id = readTagId(buf);
-                if (id == ID_FILESIZE) {
-                    yield builder.size(val, mode);
-                }
-                yield (meta) -> true;
+                yield id < 0 ? (meta) -> true : builder.numeric((byte) id, operator, val);
             }
             default -> throw new IllegalArgumentException("Unknown search tag type: 0x" + String.format("%02X", type));
         };

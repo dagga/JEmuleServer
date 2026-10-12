@@ -66,6 +66,7 @@ public record Tag(byte type, String name, Object value) {
     public static final String NAME_FILETYPE = "\u0003"; // FT_FILETYPE
     public static final String NAME_FILEFORMAT = "\u0004"; // FT_FILEFORMAT
     public static final String NAME_SOURCES = "\u0015"; // FT_SOURCES
+    public static final String NAME_COMPLETE_SOURCES = "\u0030"; // FT_COMPLETE_SOURCES
 
     // Client/Server Capability Tags (CT_ from opcodes.h)
     public static final String NAME_TCP_FLAGS = "\u0020"; // CT_SERVER_FLAGS

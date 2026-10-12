@@ -86,7 +86,8 @@ public class SearchHandler {
             if (m.type() != null && !m.type().isEmpty()) {
                 tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_FILETYPE, m.type())); // search results use the string form ("Video")
             }
-            tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, m.sources().size())); // Ajout du nombre de sources
+            tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, m.sources().size()));
+            tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_COMPLETE_SOURCES, m.completeSourceCount()));
 
             Tag.writeList(itemBuf, tags);
             itemBuf.flip();

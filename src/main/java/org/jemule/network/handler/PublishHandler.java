@@ -44,14 +44,18 @@ public class PublishHandler {
             }
             byte[] hashBytes = new byte[16];
             buf.get(hashBytes);
+            boolean partial = false;
 
             if (op == OpCode.OFFER_FILES) {
                 if (buf.remaining() < 6) {
                     log.warn("Truncated {}: file {}/{} has no ID/port", op, i + 1, count);
                     break;
                 }
-                buf.getInt();   // client ID (or 0xFBFBFBFB / 0xFCFCFCFC status marker)
-                buf.getShort(); // client port (or 0xFBFB / 0xFCFC)
+                // Client ID and port, or - for servers announcing SRV_TCPFLG_COMPRESSION - a status marker:
+                // 0xFBFBFBFB/0xFBFB = complete file, 0xFCFCFCFC/0xFCFC = part file (CreateOfferedFilePacket).
+                // The source's ID and port are always taken from the session.
+                partial = buf.getInt() == 0xFCFCFCFC;
+                buf.getShort();
             }
 
             List<Tag> tags;
@@ -62,7 +66,7 @@ public class PublishHandler {
                 break;
             }
 
-            if (!publishFile(context, HandlerUtils.bytesToHashString(hashBytes), tags)) {
+            if (!publishFile(context, HandlerUtils.bytesToHashString(hashBytes), tags, partial)) {
                 rejectedAsFake++;
             }
         }
@@ -80,7 +84,7 @@ public class PublishHandler {
      *
      * @return false if the file was rejected by the fake file detector, true otherwise
      */
-    private boolean publishFile(ClientContext context, String hash, List<Tag> tags) {
+    private boolean publishFile(ClientContext context, String hash, List<Tag> tags, boolean partial) {
         String name = "";
         long sizeLo = 0;
         long sizeHi = 0;
@@ -121,6 +125,11 @@ public class PublishHandler {
             return false;
         }
 
+        if (partial) {
+            context.getState().partialHashes().add(hash);
+        } else {
+            context.getState().partialHashes().remove(hash);
+        }
         FileMetadata meta = new FileMetadata(hash, name, size, type, tags);
         meta.sources().put(org.jemule.core.FileIndex.sourceKey(context.getState()), context.getState());
         context.getFileIndex().addFile(meta);

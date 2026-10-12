@@ -33,13 +33,17 @@ public class SearchQueryBuilder {
         return new SearchQuery.TermQuery(term, id);
     }
 
-    public SearchQuery size(long value, byte mode) {
+    public SearchQuery size(long value, byte operator) {
+        return numeric(SearchQuery.ID_FILESIZE, operator, value);
+    }
+
+    public SearchQuery numeric(byte tagId, byte operator, long value) {
         if (value < 0) {
-            throw new IllegalArgumentException("File size cannot be negative");
+            throw new IllegalArgumentException("Numeric search value cannot be negative");
         }
-        if (mode != SearchQuery.MODE_MIN && mode != SearchQuery.MODE_MAX) {
-            throw new IllegalArgumentException("Invalid size filter mode: " + mode);
+        if (operator < SearchQuery.OP_EQUAL || operator > SearchQuery.OP_NOTEQUAL) {
+            throw new IllegalArgumentException("Invalid comparison operator: " + operator);
         }
-        return new SearchQuery.SizeQuery(value, mode);
+        return new SearchQuery.NumericQuery(tagId, operator, value);
     }
 }

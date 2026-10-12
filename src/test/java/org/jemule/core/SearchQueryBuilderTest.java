@@ -25,8 +25,8 @@ class SearchQueryBuilderTest {
 
     @Test
     void testSizeBuilder() {
-        SearchQuery query = builder.size(1000, SearchQuery.MODE_MIN);
-        assertInstanceOf(SearchQuery.SizeQuery.class, query);
+        SearchQuery query = builder.size(1000, SearchQuery.OP_GREATER);
+        assertInstanceOf(SearchQuery.NumericQuery.class, query);
         
         FileMetadata meta = new FileMetadata("HASH", "file.txt", 2000, "Text", java.util.List.of());
         assertTrue(query.test(meta));
@@ -34,7 +34,7 @@ class SearchQueryBuilderTest {
 
     @Test
     void testSizeBuilderValidation() {
-        assertThrows(IllegalArgumentException.class, () -> builder.size(-1, SearchQuery.MODE_MIN));
+        assertThrows(IllegalArgumentException.class, () -> builder.size(-1, SearchQuery.OP_GREATER));
         assertThrows(IllegalArgumentException.class, () -> builder.size(100, (byte) 0xFF));
     }
 

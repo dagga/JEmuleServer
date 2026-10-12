@@ -50,4 +50,13 @@ public record FileMetadata(
     public FileMetadata(String hash, String name, long size, String type, List<Tag> tags) {
         this(hash, name, size, type, tags, new ConcurrentHashMap<>());
     }
+
+    /** Number of sources sharing the complete file (FT_COMPLETE_SOURCES). */
+    public int completeSourceCount() {
+        int n = 0;
+        for (ClientState s : sources.values()) {
+            if (!s.partialHashes().contains(hash)) n++;
+        }
+        return n;
+    }
 }

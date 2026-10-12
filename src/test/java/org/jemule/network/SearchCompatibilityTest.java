@@ -108,4 +108,50 @@ class SearchCompatibilityTest {
         b.put((byte) 1).putShort((short) 7).put("holiday".getBytes());
         assertEquals(List.of("holiday video.avi"), names(search(java.util.Arrays.copyOf(b.array(), b.position()))));
     }
+
+    @Test
+    void sizeBoundsKeepTheClientOperatorsStrict() throws Exception {
+        publish("11111111111111111111111111111111", "size 999.bin", 999, 4);
+        publish("22222222222222222222222222222222", "size 1000.bin", 1000, 4);
+        publish("33333333333333333333333333333333", "size 2000.bin", 2000, 4);
+        publish("44444444444444444444444444444444", "size 2001.bin", 2001, 4);
+        // User asks for 1000 <= size <= 2000: GetSearchPacket sends size > 999 AND size < 2001
+        byte[] tree = new SearchTree().and().and().keyword("size")
+                .num(0x02, 1, 999).num(0x02, 2, 2001).toBytes();
+        assertEquals(List.of("size 1000.bin", "size 2000.bin"), names(search(tree)));
+    }
+
+    @Test
+    void availabilityAndCompleteSourcesFilters() throws Exception {
+        publish("11111111111111111111111111111111", "popular song.mp3", 5_000_000, 1);
+        publish("22222222222222222222222222222222", "rare song.mp3", 5_000_000, 1);
+        FakeContext other = loggedInContext("10.4.5.6", 50002, ServerConfig.DEFAULT, registry, index);
+        // second source of the popular song, but only a part file (ID 0xFCFCFCFC)
+        new PublishHandler().handlePublish(other, OpCode.OFFER_FILES, offerFiles(offeredFile(hash("11111111111111111111111111111111"),
+                0xFCFCFCFC, 0xFCFC, new NewTags().str(0x01, "popular song.mp3").num(0x02, 5_000_000).num(0x03, 1))), new ByteArrayOutputStream());
+
+        // availability >= 2 is sent as FT_SOURCES > 1
+        assertEquals(List.of("popular song.mp3"), names(search(new SearchTree().and().keyword("song").num(0x15, 1, 1).toBytes())));
+        // complete sources >= 2 is sent as FT_COMPLETE_SOURCES > 1: only one complete source
+        assertTrue(search(new SearchTree().and().keyword("song").num(0x30, 1, 1).toBytes()).results().isEmpty());
+
+        SearchResult popular = search(new SearchTree().keyword("popular").toBytes()).results().getFirst();
+        assertEquals(2, ((Number) popular.tag(Tag.NAME_SOURCES)).intValue());
+        assertEquals(1, ((Number) popular.tag(Tag.NAME_COMPLETE_SOURCES)).intValue());
+    }
+
+    @Test
+    void mediaFilters() throws Exception {
+        byte[] withMedia = offeredFile(hash("11111111111111111111111111111111"), 0xFBFBFBFB, 0xFBFB, new NewTags()
+                .str(0x01, "concert.avi").num(0x02, 700_000_000).num(0x03, 2)
+                .num(0xD3, 3600).num(0xD4, 1200).str(0xD5, "xvid"));
+        new PublishHandler().handlePublish(client, OpCode.OFFER_FILES, offerFiles(withMedia), new ByteArrayOutputStream());
+        publish("22222222222222222222222222222222", "concert bootleg.avi", 700_000_000, 2);
+
+        assertEquals(List.of("concert.avi"), names(search(new SearchTree().and().keyword("concert").meta(0xD5, "xvid").toBytes())));
+        assertEquals(List.of("concert.avi"), names(search(new SearchTree().and().keyword("concert").num(0xD4, 1, 999).toBytes())));
+        assertEquals(List.of("concert.avi"), names(search(new SearchTree().and().keyword("concert").num(0xD3, 1, 1799).toBytes())));
+        assertEquals(List.of("concert.avi", "concert bootleg.avi").stream().sorted().toList(),
+                names(search(new SearchTree().and().keyword("concert").meta(0x03, "Video").toBytes())));
+    }
 }

@@ -65,7 +65,7 @@ public class SearchTest {
         ByteBuffer buf = ByteBuffer.allocate(100).order(ByteOrder.LITTLE_ENDIAN);
         buf.put((byte) 0x03); // Numeric Tag with ID
         buf.putInt(500);
-        buf.put((byte) 0x01); // MODE_MIN
+        buf.put((byte) 0x01); // ED2K_SEARCH_OP_GREATER
         buf.putShort((short) 1); // Name len
         buf.put((byte) 0x02); // ID_FILESIZE
         buf.flip();
