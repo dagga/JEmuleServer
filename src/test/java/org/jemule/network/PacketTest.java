@@ -307,4 +307,35 @@ class PacketTest {
         assertEquals("\u0088", read.name());
         assertEquals(largeValue, read.value());
     }
+
+    private static byte[] zlib(byte[] data) {
+        java.util.zip.Deflater d = new java.util.zip.Deflater();
+        d.setInput(data);
+        d.finish();
+        byte[] out = new byte[data.length + 64];
+        int len = d.deflate(out);
+        d.end();
+        return java.util.Arrays.copyOf(out, len);
+    }
+
+    private static byte[] frame(byte protocol, byte opcode, byte[] payload) {
+        ByteBuffer b = ByteBuffer.allocate(6 + payload.length).order(ByteOrder.LITTLE_ENDIAN);
+        b.put(protocol).putInt(payload.length + 1).put(opcode).put(payload);
+        return b.array();
+    }
+
+    @Test
+    @org.junit.jupiter.api.Timeout(5)
+    void truncatedZlibPacketIsRejected() {
+        byte[] compressed = zlib(new byte[10_000]);
+        byte[] truncated = java.util.Arrays.copyOf(compressed, compressed.length / 2);
+        assertThrows(IOException.class, () -> Packet.read(new ByteArrayInputStream(frame(Packet.PROTOCOL_ZLIB, (byte) 0x15, truncated)), 1 << 20));
+    }
+
+    @Test
+    @org.junit.jupiter.api.Timeout(5)
+    void zlibBombIsRejected() {
+        byte[] compressed = zlib(new byte[5_000_000]); // a few KB inflating to 5 MB
+        assertThrows(IOException.class, () -> Packet.read(new ByteArrayInputStream(frame(Packet.PROTOCOL_ZLIB, (byte) 0x15, compressed)), 1 << 20));
+    }
 }

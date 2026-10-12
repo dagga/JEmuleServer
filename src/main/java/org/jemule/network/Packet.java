@@ -98,7 +98,7 @@ public record Packet(byte protocol, byte opcode, byte[] data) {
             throw new EOFException("Incomplete payload: expected=" + payloadLength + " received=" + payload.length + " preview=[" + sb + "]");
         }
 
-        byte[] data = (protocol == PROTOCOL_ZLIB || protocol == PROTOCOL_KAD_ZLIB) ? decompress(payload) : payload;
+        byte[] data = (protocol == PROTOCOL_ZLIB || protocol == PROTOCOL_KAD_ZLIB) ? decompress(payload, maxPacketSize) : payload;
         return new Packet(protocol, opcode, data);
     }
 
@@ -112,9 +112,13 @@ public record Packet(byte protocol, byte opcode, byte[] data) {
     public void write(OutputStream out, boolean useCompression) throws IOException {
         byte proto = protocol;
         byte[] payload = data;
-        if (useCompression && data.length > 64) {
-            payload = compress(data);
-            proto = (protocol == PROTOCOL_KAD) ? PROTOCOL_KAD_ZLIB : PROTOCOL_ZLIB;
+        // Like eMule's Packet::PackPacket: only ed2k packets, and only when compression actually saves bytes
+        if (useCompression && data.length > 64 && (protocol == PROTOCOL_ED2K || protocol == PROTOCOL_KAD)) {
+            byte[] compressed = compress(data);
+            if (compressed.length < data.length) {
+                payload = compressed;
+                proto = (protocol == PROTOCOL_KAD) ? PROTOCOL_KAD_ZLIB : PROTOCOL_ZLIB;
+            }
         }
 
         ByteBuffer buf = ByteBuffer.allocate(HEADER_SIZE + payload.length).order(ByteOrder.LITTLE_ENDIAN);
@@ -134,17 +138,6 @@ public record Packet(byte protocol, byte opcode, byte[] data) {
             log.debug("Sent packet proto=0x{} opcode=0x{} len={} bytes={}{}",
                     String.format("%02X", proto & 0xFF), String.format("%02X", opcode & 0xFF), payload.length,
                     sb, bytes.length > 256 ? " ..." : "");
-
-            // Also append to a debug file for easier collection (non-fatal on error)
-            try {
-                String line = java.time.Instant.now().toString() + " " +
-                        String.format("proto=0x%02X opcode=0x%02X len=%d ", proto & 0xFF, opcode & 0xFF, payload.length) + sb + System.lineSeparator();
-                java.nio.file.Path p = java.nio.file.Path.of("build/packet-debug.log");
-                java.nio.file.Files.createDirectories(p.getParent() != null ? p.getParent() : java.nio.file.Path.of("build"));
-                java.nio.file.Files.writeString(p, line, java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.APPEND);
-            } catch (Exception e) {
-                // ignore file write errors
-            }
         }
     }
 
@@ -158,14 +151,24 @@ public record Packet(byte protocol, byte opcode, byte[] data) {
         return Arrays.copyOf(buf, len);
     }
 
-    private static byte[] decompress(byte[] input) throws IOException {
+    /**
+     * Inflates a 0xD4 payload. A truncated or corrupted stream, or one inflating beyond {@code maxSize}
+     * (zip bomb), is rejected instead of looping forever.
+     */
+    static byte[] decompress(byte[] input, int maxSize) throws IOException {
         Inflater i = new Inflater();
         i.setInput(input);
-        ByteArrayOutputStream bos = new ByteArrayOutputStream(input.length * 2);
-        byte[] buf = new byte[1024];
+        ByteArrayOutputStream bos = new ByteArrayOutputStream(Math.min(input.length * 4, maxSize));
+        byte[] buf = new byte[8192];
         try {
             while (!i.finished()) {
                 int count = i.inflate(buf);
+                if (count == 0 && (i.needsInput() || i.needsDictionary())) {
+                    throw new IOException("Truncated or invalid zlib stream");
+                }
+                if (bos.size() + count > maxSize) {
+                    throw new IOException("Decompressed packet exceeds " + maxSize + " bytes");
+                }
                 bos.write(buf, 0, count);
             }
         } catch (DataFormatException e) {
