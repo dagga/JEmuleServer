@@ -161,8 +161,10 @@ public class ServerIntegrationTest {
                 }
                 Assertions.assertNotNull(ack, "Did not receive PUBLISH_ACK after publish");
 
-                // Now request sources via TCP (32-char hash as payload)
-                Packet getSources = new Packet(Packet.PROTOCOL_ED2K, OpCode.GET_SOURCES.value, hash.getBytes());
+                // Now request sources via TCP: <hash 16><size 4> as sent by CDownloadQueue::ProcessLocalRequests
+                byte[] getSourcesPayload = ByteBuffer.allocate(20).order(ByteOrder.LITTLE_ENDIAN)
+                        .put(org.jemule.network.EmuleTestSupport.hash(hash)).putInt(123).array();
+                Packet getSources = new Packet(Packet.PROTOCOL_ED2K, OpCode.GET_SOURCES.value, getSourcesPayload);
                 getSources.write(out, false);
 
                 // Read until we get a SOURCES_RESULT (some SERVER_STATUS may be interleaved)

@@ -159,7 +159,58 @@ class SourcesCompatibilityTest {
 
         assertTrue(out.size() > 0, "OP_GETSOURCES_OBFU must be answered");
         Packet resp = Packet.read(new ByteArrayInputStream(out.toByteArray()), 65536);
-        assertEquals(Packet.PROTOCOL_ED2K, resp.protocol());
-        assertTrue(resp.opcode() == 0x42 || resp.opcode() == 0x44, "OP_FOUNDSOURCES(_OBFU) expected");
+        assertEquals(Packet.PROTOCOL_ED2K, resp.protocol(), "the client ignores 0xC5 on its server socket");
+        assertEquals((byte) 0x44, resp.opcode(), "OP_FOUNDSOURCES_OBFU expected");
+    }
+
+    @Test
+    void foundSourcesObfuCarriesCryptOptionsAndUserHash() throws Exception {
+        byte[] userHash = hash("00112233445566778899aabbccddeeff");
+        publisher.getState().setUserHash(userHash);
+        publisher.getState().setServerCaps(EMULE_DEFAULT_SRVCAPS | org.jemule.core.ClientState.SRVCAP_REQUESTCRYPT);
+        FakeContext other = loggedInContext("10.4.5.6", 50002, CONFIG, registry, index); // no crypt support
+        new PublishHandler().handlePublish(other, OpCode.OFFER_FILES,
+                offerFiles(completeFile(hash(HASH_A), "file a.avi", 1234567)), new ByteArrayOutputStream());
+
+        FakeContext requester = loggedInContext("10.9.9.9", 50001, CONFIG, registry, index);
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        new SourceHandler().handleGetSources(requester, new Packet(Packet.PROTOCOL_ED2K, (byte) 0x23, hash(HASH_A)), out);
+        Packet resp = Packet.read(new ByteArrayInputStream(out.toByteArray()), 65536);
+
+        // Decode like CPartFile::AddSources(bWithObfuscationAndHash = true)
+        ByteBuffer buf = ByteBuffer.wrap(resp.data()).order(ByteOrder.LITTLE_ENDIAN);
+        buf.position(16);
+        int count = buf.get();
+        assertEquals(2, count);
+        java.util.Map<Integer, Integer> optionsByPort = new java.util.HashMap<>();
+        java.util.Map<Integer, byte[]> hashByIp = new java.util.HashMap<>();
+        for (int i = 0; i < count; i++) {
+            int id = buf.getInt();
+            buf.getShort();
+            int options = Byte.toUnsignedInt(buf.get());
+            optionsByPort.put(id, options);
+            if ((options & 0x80) != 0) {
+                byte[] h = new byte[16];
+                buf.get(h);
+                hashByIp.put(id, h);
+            }
+        }
+        assertFalse(buf.hasRemaining());
+        int publisherId = (int) publisher.getState().clientId();
+        int otherId = (int) other.getState().clientId();
+        assertEquals(0x80 | 0x01 | 0x02, optionsByPort.get(publisherId));
+        assertArrayEquals(userHash, hashByIp.get(publisherId));
+        assertEquals(0, optionsByPort.get(otherId));
+    }
+
+    @Test
+    void largeFileRequestIsAccepted() throws Exception {
+        // <hash 16><0 4><size 8> for files > 4 GB
+        FakeContext requester = loggedInContext("10.9.9.9", 50001, CONFIG, registry, index);
+        ByteBuffer req = ByteBuffer.allocate(28).order(ByteOrder.LITTLE_ENDIAN).put(hash(HASH_A)).putInt(0).putLong(5_000_000_000L);
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        new SourceHandler().handleGetSources(requester, new Packet(Packet.PROTOCOL_ED2K, OpCode.GET_SOURCES.value, req.array()), out);
+        Packet resp = Packet.read(new ByteArrayInputStream(out.toByteArray()), 65536);
+        assertEquals(List.of(expectedSource()), readSourceBlock(ByteBuffer.wrap(resp.data()).order(ByteOrder.LITTLE_ENDIAN), HASH_A));
     }
 }

@@ -11,67 +11,65 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.List;
 
 public class SourceHandler {
     private static final Logger log = LoggerFactory.getLogger(SourceHandler.class);
 
+    /**
+     * Handles OP_GETSOURCES (0x19) and OP_GETSOURCES_OBFU (0x23), both sent in protocol 0xE3 by
+     * CDownloadQueue::ProcessLocalRequests: <code>&lt;hash 16&gt;&lt;size 4&gt;</code> or, for files &gt; 4 GB,
+     * <code>&lt;hash 16&gt;&lt;0 4&gt;&lt;size 8&gt;</code>. The answer is always sent in 0xE3 (the client ignores any other
+     * protocol on its server socket): OP_FOUNDSOURCES_OBFU (0x44) for an _OBFU request, OP_FOUNDSOURCES (0x42) otherwise.
+     */
     public void handleGetSources(ClientContext context, Packet packet, OutputStream out) throws IOException {
         byte[] data = packet.data();
-        String hash = null;
-        byte[] hashBytes = null;
-
-        if (data.length == 16) {
-            hashBytes = data;
-            StringBuilder sb = new StringBuilder();
-            for (byte b : data) sb.append(String.format("%02x", b));
-            hash = sb.toString();
-        } else if (data.length == 32) {
-            hash = new String(data, StandardCharsets.UTF_8).trim();
-            if (HandlerUtils.isValidHash(hash)) {
-                hashBytes = HandlerUtils.hashToBytes(hash);
-            }
-        }
-
-        if (hash == null && data.length > 16) {
-            try {
-                ByteBuffer buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN);
-                byte[] potentialHash = new byte[16];
-                buf.get(potentialHash);
-                hashBytes = potentialHash;
-                StringBuilder sb = new StringBuilder();
-                for (byte b : potentialHash) sb.append(String.format("%02x", b));
-                hash = sb.toString();
-
-                log.debug("Extracted hash from extended GET_SOURCES: {}", HandlerUtils.sanitize(hash));
-            } catch (Exception e) {
-                log.warn("Failed to extract hash from extended GET_SOURCES: {}", HandlerUtils.sanitize(e.getMessage()));
-            }
-        }
-
-        if (!HandlerUtils.isValidHash(hash)) {
-            log.warn("Invalid hash format/length for GET_SOURCES: {}", data.length);
+        if (data == null || data.length < 16) {
+            log.warn("Invalid GET_SOURCES request: {} bytes", data == null ? 0 : data.length);
             return;
         }
-
-        log.info("Client requested sources for hash: {}", HandlerUtils.sanitize(hash));
+        byte[] hashBytes = Arrays.copyOf(data, 16);
+        String hash = HandlerUtils.bytesToHashString(hashBytes);
+        boolean obfu = packet.opcode() == OpCode.GET_SOURCES_OBFU.value;
+        log.debug("Client {} requested sources for {} ({})", context.getState().clientId(), hash, obfu ? "OBFU" : "plain");
 
         var sources = context.getFileIndex().getSources(hash, context.getState(), context.getConfig().maxSourcesPerFile());
-        byte[] response = encodeFoundSources(hashBytes, sources);
+        byte[] response = obfu ? encodeFoundSourcesObfu(hashBytes, sources) : encodeFoundSources(hashBytes, sources);
+        byte opcode = obfu ? OpCode.SOURCES_RESULT_OBFU.value : OpCode.FOUND_SOURCES.value;
+        new Packet(Packet.PROTOCOL_ED2K, opcode, response).write(out, context.getState().isZlibSupported());
+    }
 
-        byte responseProtocol = Packet.PROTOCOL_ED2K;
-        byte responseOpcode = OpCode.FOUND_SOURCES.value;
+    /** Connect options of a source as understood by CUpDownClient::SetConnectOptions. */
+    public static int cryptOptions(ClientState s) {
+        int options = 0;
+        if (s.supportsCrypt()) options |= 0x01;
+        if (s.requestsCrypt()) options |= 0x02;
+        if (s.requiresCrypt()) options |= 0x04;
+        return options;
+    }
 
-        if (packet.protocol() == Packet.PROTOCOL_EMULE) {
-            responseProtocol = Packet.PROTOCOL_EMULE;
-            responseOpcode = OpCode.SOURCES_RESULT_OBFU.value;
-            log.debug("Responding to GET_SOURCES_OBFU with SOURCES_RESULT_OBFU (0xC5:0x24)");
-        } else {
-            log.debug("Responding to GET_SOURCES with FOUND_SOURCES (0xE3:0x42)");
+    /**
+     * Encodes OP_FOUNDSOURCES_OBFU: <code>&lt;hash 16&gt;&lt;count 1&gt;(&lt;ID 4&gt;&lt;port 2&gt;&lt;cryptOptions 1&gt;[&lt;userhash 16&gt;])[count]</code>.
+     * The user hash (flag 0x80) is sent for sources supporting the crypt layer: the requester needs it to open an
+     * obfuscated connection (CPartFile::AddSources).
+     */
+    public static byte[] encodeFoundSourcesObfu(byte[] hashBytes, List<ClientState> sources) {
+        List<ClientState> usable = reachableSources(sources);
+        int count = Math.min(usable.size(), 255);
+        ByteBuffer buf = ByteBuffer.allocate(16 + 1 + count * (6 + 1 + 16)).order(ByteOrder.LITTLE_ENDIAN);
+        buf.put(hashBytes);
+        buf.put((byte) count);
+        for (int i = 0; i < count; i++) {
+            ClientState s = usable.get(i);
+            int options = cryptOptions(s);
+            boolean withHash = (options & 0x01) != 0;
+            buf.putInt((int) s.clientId());
+            buf.putShort((short) s.listenPort());
+            buf.put((byte) (options | (withHash ? 0x80 : 0)));
+            if (withHash) buf.put(s.userHash());
         }
-
-        new Packet(responseProtocol, responseOpcode, response).write(out, context.getState().isZlibSupported());
+        return Arrays.copyOf(buf.array(), buf.position());
     }
 
     /**
