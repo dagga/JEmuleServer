@@ -72,7 +72,7 @@ class SourcesCompatibilityTest {
     }
 
     String expectedSource() {
-        return "10.1.2.3:" + publisher.getState().port();
+        return "10.1.2.3:" + LISTEN_PORT; // the listen port from the login, not the socket port (50000)
     }
 
     @Test
@@ -108,7 +108,7 @@ class SourcesCompatibilityTest {
 
         assertEquals(1, cds.sent.size());
         ByteBuffer buf = ByteBuffer.wrap(cds.sent.getFirst().getData()).order(ByteOrder.LITTLE_ENDIAN);
-        String src = "10.1.2.3:" + pub.getState().port();
+        String src = "10.1.2.3:" + LISTEN_PORT;
         assertEquals(Packet.PROTOCOL_ED2K, buf.get());
         assertEquals((byte) 0x9B, buf.get());
         assertEquals(List.of(src), readSourceBlock(buf, HASH_A));
@@ -117,5 +117,15 @@ class SourcesCompatibilityTest {
         assertEquals(List.of(src), readSourceBlock(buf, HASH_B));
         assertFalse(buf.hasRemaining());
         server.stop();
+    }
+
+    @Test
+    void sourcesWithoutKnownListenPortAreNotHandedOut() throws Exception {
+        publisher.getState().setListenPort(0);
+        FakeContext requester = loggedInContext("10.9.9.9", 50001, CONFIG, registry, index);
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        new SourceHandler().handleGetSources(requester, new Packet(Packet.PROTOCOL_ED2K, OpCode.GET_SOURCES.value, hash(HASH_A)), out);
+        Packet resp = Packet.read(new ByteArrayInputStream(out.toByteArray()), 65536);
+        assertEquals(0, resp.data()[16], "no usable source");
     }
 }

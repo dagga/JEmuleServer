@@ -80,11 +80,15 @@ public final class EmuleTestSupport {
         @Override public void disconnect() throws IOException { }
     }
 
-    /** Creates a context with a logged-in client state (ID = IP, listen port given). */
+    /** Default eMule TCP listen port announced in the login request of test clients. */
+    public static final int LISTEN_PORT = 4662;
+
+    /** Creates a context with a logged-in client state (ID = IP, listen port {@link #LISTEN_PORT}, given socket port). */
     public static FakeContext loggedInContext(String ip, int socketPort, ServerConfig config, ClientRegistry registry, FileIndex index) throws IOException {
         InetAddress addr = InetAddress.getByName(ip);
         FakeContext ctx = new FakeContext(new DummySocket(addr, socketPort), config, registry, index);
         ClientState st = new ClientState(addr, socketPort, ClientState.ipToLong(addr), System.currentTimeMillis(), new AtomicLong(System.currentTimeMillis()));
+        st.setListenPort(LISTEN_PORT);
         ctx.setState(st);
         registry.add(st, p -> {});
         return ctx;

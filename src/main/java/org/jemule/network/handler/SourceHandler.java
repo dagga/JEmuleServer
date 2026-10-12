@@ -75,18 +75,28 @@ public class SourceHandler {
     }
 
     /**
+     * Keeps only the sources another client can actually contact: their ID (HighID = IP) and the TCP port
+     * they listen on, as announced in their OP_LOGINREQUEST. The port of the client's own connection to the
+     * server is an ephemeral port and must never be handed out.
+     */
+    public static List<ClientState> reachableSources(List<ClientState> sources) {
+        return sources.stream().filter(s -> s.listenPort() > 0 && s.clientId() != 0).toList();
+    }
+
+    /**
      * Encodes one source block <code>&lt;hash 16&gt;&lt;count 1&gt;(&lt;ID 4&gt;&lt;port 2&gt;)[count]</code>, all integers
      * little-endian as read by CPartFile::AddSources. Used by OP_FOUNDSOURCES (TCP) and OP_GLOBFOUNDSOURCES (UDP).
      */
     public static byte[] encodeFoundSources(byte[] hashBytes, List<ClientState> sources) {
-        int count = Math.min(sources.size(), 255);
+        List<ClientState> usable = reachableSources(sources);
+        int count = Math.min(usable.size(), 255);
         ByteBuffer buf = ByteBuffer.allocate(16 + 1 + count * 6).order(ByteOrder.LITTLE_ENDIAN);
         buf.put(hashBytes);
         buf.put((byte) count);
         for (int i = 0; i < count; i++) {
-            ClientState s = sources.get(i);
-            buf.putInt((int) ClientState.ipToLong(s.address()));
-            buf.putShort((short) s.port());
+            ClientState s = usable.get(i);
+            buf.putInt((int) s.clientId());
+            buf.putShort((short) s.listenPort());
         }
         return buf.array();
     }

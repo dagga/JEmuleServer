@@ -400,7 +400,8 @@ public class Server {
                 byte[] hashBytes = java.util.Arrays.copyOfRange(data, 2 + h * 16, 2 + (h + 1) * 16);
                 String hash = org.jemule.network.handler.HandlerUtils.bytesToHashString(hashBytes);
 
-                var sources = fileIndex.getSources(hash, null, config.maxSourcesPerFile());
+                var sources = org.jemule.network.handler.SourceHandler.reachableSources(
+                        fileIndex.getSources(hash, null, config.maxSourcesPerFile()));
                 if (sources.isEmpty()) continue;
 
                 // Separate IPv4-mappable and IPv6-only sources
@@ -432,7 +433,7 @@ public class Server {
                     for (var s : ipv6List) {
                         byte[] addr = s.address().getAddress();
                         v6buf.put(addr.length == 16 ? addr : new byte[16]);
-                        v6buf.putShort((short) s.port());
+                        v6buf.putShort((short) s.listenPort());
                     }
                     sendUdp(ds, java.util.Arrays.copyOf(v6buf.array(), v6buf.position()), p.getAddress(), p.getPort(), "SRCS_V6");
                 }

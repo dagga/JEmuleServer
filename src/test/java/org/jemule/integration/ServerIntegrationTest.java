@@ -94,8 +94,9 @@ public class ServerIntegrationTest {
                 InputStream in = s.getInputStream();
                 OutputStream out = s.getOutputStream();
 
-                // Send a minimal LOGIN_REQUEST (empty payload)
-                Packet login = new Packet(Packet.PROTOCOL_ED2K, OpCode.LOGIN_REQUEST.value, new byte[0]);
+                // Send a LOGIN_REQUEST built like eMule (the listen port is needed to be handed out as a source)
+                Packet login = new Packet(Packet.PROTOCOL_ED2K, OpCode.LOGIN_REQUEST.value,
+                        org.jemule.network.EmuleTestSupport.loginRequest(new byte[16], 4662, "integration", 0));
                 login.write(out, false);
 
                 // Read the handshake sequence and verify order/content (tolerates EOF)

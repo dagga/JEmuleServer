@@ -183,6 +183,7 @@ class ProtocolSequenceTest {
         fi.addFile(meta);
 
         org.jemule.core.ClientState source = new org.jemule.core.ClientState(remote, 9000, 101, System.currentTimeMillis(), new AtomicLong(System.currentTimeMillis()));
+        source.setListenPort(4662);
         meta.sources().put(String.valueOf(source.clientId()), source);
 
         // TCP GET_SOURCES (16 bytes hash)
