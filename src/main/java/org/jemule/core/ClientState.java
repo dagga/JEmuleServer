@@ -39,6 +39,14 @@ public final class ClientState {
     private boolean zlibSupported = false;
     private List<FileMetadata> pendingSearchResults;
 
+    // Information announced by the client in OP_LOGINREQUEST (ServerConnect::ConnectionEstablished)
+    private volatile byte[] userHash = new byte[16];
+    private volatile String nickname = "";
+    private volatile int listenPort;
+    private volatile long clientVersion;
+    private volatile long emuleVersion;
+    private volatile int serverCaps;
+
     public ClientState(InetAddress address, int port, long clientId, long connectedAt, AtomicLong lastActivity) {
         this.connectionId = nextConnectionId.getAndIncrement();
         this.address = requireNonNull(address);
@@ -59,6 +67,43 @@ public final class ClientState {
 
     public boolean isZlibSupported() { return zlibSupported; }
     public void setZlibSupported(boolean zlibSupported) { this.zlibSupported = zlibSupported; }
+
+    public byte[] userHash() { return userHash; }
+    public void setUserHash(byte[] userHash) { this.userHash = userHash.clone(); }
+
+    public String nickname() { return nickname; }
+    public void setNickname(String nickname) { this.nickname = nickname == null ? "" : nickname; }
+
+    /** TCP port on which the client accepts incoming connections (from the login packet), 0 if unknown. */
+    public int listenPort() { return listenPort; }
+    public void setListenPort(int listenPort) { this.listenPort = listenPort; }
+
+    /** CT_VERSION (ed2k protocol version, 0x3C for eMule). */
+    public long clientVersion() { return clientVersion; }
+    public void setClientVersion(long clientVersion) { this.clientVersion = clientVersion; }
+
+    /** CT_EMULE_VERSION ((major << 17) | (minor << 10) | (update << 7)), 0 for non eMule clients. */
+    public long emuleVersion() { return emuleVersion; }
+    public void setEmuleVersion(long emuleVersion) { this.emuleVersion = emuleVersion; }
+
+    /** CT_SERVER_FLAGS: SRVCAP_* capabilities announced by the client. */
+    public int serverCaps() { return serverCaps; }
+    public void setServerCaps(int serverCaps) { this.serverCaps = serverCaps; }
+
+    public boolean supportsCrypt() { return (serverCaps & SRVCAP_SUPPORTCRYPT) != 0; }
+    public boolean requestsCrypt() { return (serverCaps & SRVCAP_REQUESTCRYPT) != 0; }
+    public boolean requiresCrypt() { return (serverCaps & SRVCAP_REQUIRECRYPT) != 0; }
+
+    // SRVCAP_* values (opcodes.h)
+    public static final int SRVCAP_ZLIB = 0x0001;
+    public static final int SRVCAP_IP_IN_LOGIN = 0x0002;
+    public static final int SRVCAP_AUXPORT = 0x0004;
+    public static final int SRVCAP_NEWTAGS = 0x0008;
+    public static final int SRVCAP_UNICODE = 0x0010;
+    public static final int SRVCAP_LARGEFILES = 0x0100;
+    public static final int SRVCAP_SUPPORTCRYPT = 0x0200;
+    public static final int SRVCAP_REQUESTCRYPT = 0x0400;
+    public static final int SRVCAP_REQUIRECRYPT = 0x0800;
 
     public List<FileMetadata> getPendingSearchResults() { return pendingSearchResults; }
     public void setPendingSearchResults(List<FileMetadata> results) { this.pendingSearchResults = results; }

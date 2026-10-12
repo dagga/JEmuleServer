@@ -157,4 +157,24 @@ public final class EmuleTestSupport {
         tags.num(0x03, 2); // FT_FILETYPE = ED2KFT_VIDEO (SRV_TCPFLG_TYPETAGINTEGER)
         return offeredFile(hash, 0xFBFBFBFB, 0xFBFB, tags);
     }
+
+    /**
+     * OP_LOGINREQUEST payload as built by CServerConnect::ConnectionEstablished, tags written with
+     * CTag::WriteTagToFile (old format: type, uint16 name length = 1, name ID).
+     */
+    public static byte[] loginRequest(byte[] userHash, int listenPort, String nick, int srvCaps) {
+        byte[] nickBytes = nick.getBytes(StandardCharsets.UTF_8);
+        ByteBuffer b = ByteBuffer.allocate(64 + nickBytes.length).order(ByteOrder.LITTLE_ENDIAN);
+        b.put(userHash).putInt(0).putShort((short) listenPort).putInt(4);
+        b.put((byte) 0x02).putShort((short) 1).put((byte) 0x01).putShort((short) nickBytes.length).put(nickBytes); // CT_NAME
+        b.put((byte) 0x03).putShort((short) 1).put((byte) 0x11).putInt(0x3C);                                     // CT_VERSION
+        b.put((byte) 0x03).putShort((short) 1).put((byte) 0x20).putInt(srvCaps);                                   // CT_SERVER_FLAGS
+        b.put((byte) 0x03).putShort((short) 1).put((byte) 0xFB).putInt((0 << 17) | (50 << 10) | (1 << 7));        // CT_EMULE_VERSION 0.50b
+        byte[] out = new byte[b.position()];
+        System.arraycopy(b.array(), 0, out, 0, out.length);
+        return out;
+    }
+
+    /** SRVCAP flags sent by eMule 0.50a with default preferences (crypt layer supported). */
+    public static final int EMULE_DEFAULT_SRVCAPS = 0x0001 | 0x0008 | 0x0100 | 0x0010 | 0x0200;
 }

@@ -38,9 +38,9 @@ public class LoginHandler {
             context.getEventManager().broadcast(new ClientEvent(ClientEvent.LOGIN, context.getSocket().getInetAddress().getHostAddress(), "ID:" + clientId, "Client logged in with ID " + clientId));
         }
 
-        if (initialPacket.protocol() == Packet.PROTOCOL_ZLIB) {
+        parseLoginRequest(state, data);
+        if (initialPacket.protocol() == Packet.PROTOCOL_ZLIB || (state.serverCaps() & ClientState.SRVCAP_ZLIB) != 0) {
             state.setZlibSupported(true);
-            log.info("Client supports ZLIB (detected from initial packet)");
         }
 
         OutputStream finalOut = out;
@@ -133,6 +133,38 @@ public class LoginHandler {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
+    }
+
+    /**
+     * Parses OP_LOGINREQUEST as sent by CServerConnect::ConnectionEstablished:
+     * <pre>&lt;userhash 16&gt;&lt;clientID 4&gt;&lt;listen port 2&gt;&lt;tagcount 4&gt;
+     *   CT_NAME (string), CT_VERSION (uint32), CT_SERVER_FLAGS (uint32 SRVCAP_*), CT_EMULE_VERSION (uint32)</pre>
+     * A malformed or short packet is tolerated: the corresponding fields keep their defaults.
+     */
+    public static void parseLoginRequest(ClientState state, byte[] data) {
+        if (data == null || data.length < 22) {
+            log.debug("Login request too short ({} bytes), no client information available", data == null ? 0 : data.length);
+            return;
+        }
+        ByteBuffer buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN);
+        byte[] userHash = new byte[16];
+        buf.get(userHash);
+        state.setUserHash(userHash);
+        buf.getInt(); // client ID: always 0 for eMule, the server assigns the ID
+        state.setListenPort(Short.toUnsignedInt(buf.getShort()));
+
+        for (Tag tag : Tag.readList(buf)) {
+            switch (tag.name()) {
+                case Tag.NAME_NICK -> state.setNickname(String.valueOf(tag.value()));
+                case Tag.NAME_CLIENT_VERSION -> { if (tag.isInt()) state.setClientVersion(tag.unsignedValue()); }
+                case Tag.NAME_TCP_FLAGS -> { if (tag.isInt()) state.setServerCaps((int) tag.unsignedValue()); }
+                case Tag.NAME_EMULE_VERSION -> { if (tag.isInt()) state.setEmuleVersion(tag.unsignedValue()); }
+                default -> log.debug("Ignoring unknown login tag 0x{}", tag.name().length() == 1 ? Integer.toHexString(tag.name().charAt(0)) : tag.name());
+            }
+        }
+        log.info("Login: nick='{}' listenPort={} version=0x{} caps=0x{} emuleVersion=0x{}",
+                HandlerUtils.sanitize(state.nickname()), state.listenPort(), Long.toHexString(state.clientVersion()),
+                Integer.toHexString(state.serverCaps()), Long.toHexString(state.emuleVersion()));
     }
 
     public static void sendServerMessage(ClientContext context, OutputStream out, String msg) throws IOException {
