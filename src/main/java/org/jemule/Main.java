@@ -47,38 +47,28 @@ public class Main {
     public static final int ESERVER_VERSION_INT = (17 << 16) | 15;
 
     public static void main(String[] args) {
-        String configPath = "server.properties";
+        String configPath = null;
         if (args.length > 0 && !args[0].chars().allMatch(Character::isDigit)) {
             configPath = args[0];
         }
 
-        ServerConfig cfg = loadConfig(configPath);
-        
+        ServerConfig cfg;
+        if (configPath == null && System.getProperty("jpackage.app-path") != null) {
+            // Installed with the .deb/.rpm/.exe package and started without a configuration file: the install
+            // directory is not writable, keep the configuration and the database in a per-user data directory.
+            Path home = dataDirectory();
+            cfg = loadConfig(prepareDataDirectory(home).toString()).withPathsRelativeTo(home);
+            log.info("Data directory: {}", home);
+        } else {
+            cfg = loadConfig(configPath != null ? configPath : "server.properties");
+        }
+
         // Override port from CLI if provided as first or second argument
         for (String arg : args) {
-            try {
-                int port = Integer.parseInt(arg);
-                cfg = new ServerConfig(
-                        port,
-                        cfg.maxPacketSize(),
-                        cfg.maxSearchResults(),
-                        cfg.floodMaxRequestsPerSecond(),
-                        cfg.maxUsers(),
-                        cfg.maxFiles(),
-                        cfg.maxFilesPerUser(),
-                        cfg.maxSourcesPerFile(),
-                        cfg.databasePath(),
-                        cfg.ipFilterPath(),
-                        cfg.fakeFileDetectionEnabled(),
-                        cfg.cbFailureRateThreshold(),
-                        cfg.cbMinimumNumberOfCalls(),
-                        cfg.cbWaitDurationInSeconds(),
-                        cfg.tcpKeepAliveTimeoutInSeconds(),
-                        cfg.heartbeatIntervalSeconds(),
-                        cfg.publicIp()
-                );
+            if (!arg.isEmpty() && arg.chars().allMatch(Character::isDigit)) {
+                cfg = cfg.withPort(Integer.parseInt(arg));
                 break; // Use the first integer found as port
-            } catch (NumberFormatException ignored) {}
+            }
         }
         
         ClientFactory factory = new ClientFactory();
@@ -90,6 +80,33 @@ public class Main {
         } catch (IOException e) {
             log.error("Startup failed: {}", e.getMessage(), e);
         }
+    }
+
+    /** %LOCALAPPDATA%\\JEmuleServer on Windows, $XDG_DATA_HOME/jemuleserver or ~/.local/share/jemuleserver elsewhere. */
+    static Path dataDirectory() {
+        String localAppData = System.getenv("LOCALAPPDATA");
+        if (System.getProperty("os.name", "").toLowerCase().startsWith("windows") && localAppData != null) {
+            return Paths.get(localAppData, "JEmuleServer");
+        }
+        String xdg = System.getenv("XDG_DATA_HOME");
+        Path base = xdg != null && !xdg.isBlank() ? Paths.get(xdg) : Paths.get(System.getProperty("user.home"), ".local", "share");
+        return base.resolve("jemuleserver");
+    }
+
+    /** Creates the data directory and, on first start, an editable copy of the default server.properties. */
+    private static Path prepareDataDirectory(Path home) {
+        Path config = home.resolve("server.properties");
+        try {
+            Files.createDirectories(home);
+            if (!Files.exists(config)) {
+                try (var is = Main.class.getClassLoader().getResourceAsStream("server.properties")) {
+                    if (is != null) Files.copy(is, config);
+                }
+            }
+        } catch (IOException e) {
+            log.error("Cannot prepare data directory {}: {}", home, e.getMessage());
+        }
+        return config;
     }
 
     private static ServerConfig loadConfig(String pathStr) {

@@ -118,6 +118,27 @@ public record ServerConfig(
             null
     );
 
+    /** Same configuration listening on another port. */
+    public ServerConfig withPort(int newPort) {
+        return new ServerConfig(newPort, maxPacketSize, maxSearchResults, floodMaxRequestsPerSecond, maxUsers, maxFiles,
+                maxFilesPerUser, maxSourcesPerFile, databasePath, ipFilterPath, fakeFileDetectionEnabled,
+                cbFailureRateThreshold, cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds,
+                heartbeatIntervalSeconds, publicIp, lowIdCheckTimeoutSeconds);
+    }
+
+    /** Same configuration with relative database / IP filter paths resolved against the given directory. */
+    public ServerConfig withPathsRelativeTo(java.nio.file.Path baseDir) {
+        return new ServerConfig(port, maxPacketSize, maxSearchResults, floodMaxRequestsPerSecond, maxUsers, maxFiles,
+                maxFilesPerUser, maxSourcesPerFile, resolve(baseDir, databasePath), resolve(baseDir, ipFilterPath),
+                fakeFileDetectionEnabled, cbFailureRateThreshold, cbMinimumNumberOfCalls, cbWaitDurationInSeconds,
+                tcpKeepAliveTimeoutInSeconds, heartbeatIntervalSeconds, publicIp, lowIdCheckTimeoutSeconds);
+    }
+
+    private static String resolve(java.nio.file.Path baseDir, String path) {
+        if (path == null || path.isBlank() || java.nio.file.Paths.get(path).isAbsolute()) return path;
+        return baseDir.resolve(path).normalize().toString();
+    }
+
     /**
      * Creates a ServerConfig from a Properties object, using DEFAULT values for missing keys.
      */

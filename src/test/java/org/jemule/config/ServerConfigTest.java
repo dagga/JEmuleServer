@@ -67,4 +67,23 @@ class ServerConfigTest {
             new ServerConfig(65536, 1024, 10, 5, 100, 1000, 10, 50, "./db", null, true, 50f, 5, 30, 300, 60, null)
         );
     }
+
+    @org.junit.jupiter.api.Test
+    void withPortKeepsEveryOtherSetting() {
+        ServerConfig cfg = new ServerConfig(4661, 1024, 10, 5, 100, 1000, 10, 20, "./db", null, true,
+                50f, 10, 60, 300, 60, null, 9);
+        ServerConfig moved = cfg.withPort(4242);
+        org.junit.jupiter.api.Assertions.assertEquals(4242, moved.port());
+        org.junit.jupiter.api.Assertions.assertEquals(9, moved.lowIdCheckTimeoutSeconds());
+        org.junit.jupiter.api.Assertions.assertEquals("./db", moved.databasePath());
+    }
+
+    @org.junit.jupiter.api.Test
+    void relativePathsAreResolvedAgainstTheDataDirectory() {
+        java.nio.file.Path home = java.nio.file.Paths.get("/var/lib/jemuleserver");
+        ServerConfig cfg = new ServerConfig(4661, 1024, 10, 5, 100, 1000, 10, 20, "./jemule_db", "/etc/ipfilter.dat", true,
+                50f, 10, 60, 300, 60, null).withPathsRelativeTo(home);
+        org.junit.jupiter.api.Assertions.assertEquals(home.resolve("jemule_db").toString(), cfg.databasePath());
+        org.junit.jupiter.api.Assertions.assertEquals("/etc/ipfilter.dat", cfg.ipFilterPath());
+    }
 }
