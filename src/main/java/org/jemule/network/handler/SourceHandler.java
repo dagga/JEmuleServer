@@ -7,13 +7,12 @@ import org.jemule.protocol.OpCode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.ByteArrayOutputStream;
-import java.io.DataOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 
 public class SourceHandler {
     private static final Logger log = LoggerFactory.getLogger(SourceHandler.class);
@@ -59,15 +58,7 @@ public class SourceHandler {
         log.info("Client requested sources for hash: {}", HandlerUtils.sanitize(hash));
 
         var sources = context.getFileIndex().getSources(hash, context.getState(), context.getConfig().maxSourcesPerFile());
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        DataOutputStream dos = new DataOutputStream(baos);
-
-        dos.write(hashBytes);
-        dos.writeByte((byte) Math.min(sources.size(), 255));
-        for (var s : sources) {
-            dos.writeInt((int) ClientState.ipToLong(s.address()));
-            dos.writeShort((short) s.port());
-        }
+        byte[] response = encodeFoundSources(hashBytes, sources);
 
         byte responseProtocol = Packet.PROTOCOL_ED2K;
         byte responseOpcode = OpCode.FOUND_SOURCES.value;
@@ -80,7 +71,24 @@ public class SourceHandler {
             log.debug("Responding to GET_SOURCES with FOUND_SOURCES (0xE3:0x42)");
         }
 
-        new Packet(responseProtocol, responseOpcode, baos.toByteArray()).write(out, context.getState().isZlibSupported());
+        new Packet(responseProtocol, responseOpcode, response).write(out, context.getState().isZlibSupported());
+    }
+
+    /**
+     * Encodes one source block <code>&lt;hash 16&gt;&lt;count 1&gt;(&lt;ID 4&gt;&lt;port 2&gt;)[count]</code>, all integers
+     * little-endian as read by CPartFile::AddSources. Used by OP_FOUNDSOURCES (TCP) and OP_GLOBFOUNDSOURCES (UDP).
+     */
+    public static byte[] encodeFoundSources(byte[] hashBytes, List<ClientState> sources) {
+        int count = Math.min(sources.size(), 255);
+        ByteBuffer buf = ByteBuffer.allocate(16 + 1 + count * 6).order(ByteOrder.LITTLE_ENDIAN);
+        buf.put(hashBytes);
+        buf.put((byte) count);
+        for (int i = 0; i < count; i++) {
+            ClientState s = sources.get(i);
+            buf.putInt((int) ClientState.ipToLong(s.address()));
+            buf.putShort((short) s.port());
+        }
+        return buf.array();
     }
 
     public void handleCallback(ClientContext context, byte[] data, OutputStream out) throws IOException {
