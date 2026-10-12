@@ -11,16 +11,21 @@ import java.util.List;
 public record Tag(byte type, String name, Object value) {
     private static final Logger log = LoggerFactory.getLogger(Tag.class);
 
+    // Tag types (TAGTYPE_* in eMule opcodes.h)
     public static final byte TYPE_HASH = (byte) 0x01;
     public static final byte TYPE_STRING = (byte) 0x02;
-    public static final byte TYPE_INTEGER = (byte) 0x03;
+    public static final byte TYPE_INTEGER = (byte) 0x03; // TAGTYPE_UINT32
     public static final byte TYPE_FLOAT = (byte) 0x04;
     public static final byte TYPE_BOOL = (byte) 0x05;
-    public static final byte TYPE_BOOL_ALT = (byte) 0x06;
+    public static final byte TYPE_BOOLARRAY = (byte) 0x06; // <len 2 (bits)><(len/8)+1 bytes>
     public static final byte TYPE_BLOB = (byte) 0x07;
-    public static final byte TYPE_INT16 = (byte) 0x08;
-    public static final byte TYPE_INT8 = (byte) 0x09;
-    public static final byte TYPE_UINT64 = (byte) 0x14;
+    public static final byte TYPE_INT16 = (byte) 0x08; // TAGTYPE_UINT16
+    public static final byte TYPE_INT8 = (byte) 0x09; // TAGTYPE_UINT8
+    public static final byte TYPE_BSOB = (byte) 0x0A; // <len 1><bytes>
+    public static final byte TYPE_UINT64 = (byte) 0x0B;
+    /** Compact strings (WriteNewEd2kTag): TAGTYPE_STR1..STR16, the length is encoded in the type, no length field. */
+    public static final byte TYPE_STR1 = (byte) 0x11;
+    public static final byte TYPE_STR16 = (byte) 0x20;
 
     // Server Tags (ST_ from opcodes.h)
     public static final String NAME_NAME = "\u0001"; // ST_SERVERNAME
@@ -113,7 +118,18 @@ public record Tag(byte type, String name, Object value) {
             }
             case TYPE_INTEGER -> buf.putInt(((Number) value).intValue());
             case TYPE_FLOAT -> buf.putFloat(((Number) value).floatValue());
-            case TYPE_BOOL, TYPE_BOOL_ALT -> buf.put((byte) (((Boolean) value) ? 1 : 0));
+            case TYPE_BOOL -> buf.put((byte) (((Boolean) value) ? 1 : 0));
+            case TYPE_BOOLARRAY -> {
+                byte[] bits = (byte[]) value;
+                buf.putShort((short) (bits.length * 8));
+                buf.put(bits);
+                buf.put((byte) 0); // eMule reads (len/8)+1 bytes
+            }
+            case TYPE_BSOB -> {
+                byte[] bsob = (byte[]) value;
+                buf.put((byte) bsob.length);
+                buf.put(bsob);
+            }
             case TYPE_BLOB -> {
                 byte[] blob = (byte[]) value;
                 buf.putInt(blob.length);
@@ -160,9 +176,14 @@ public record Tag(byte type, String name, Object value) {
             if (nameLen < 0 || nameLen > buf.remaining()) {
                 throw new IllegalArgumentException("Invalid tag name length: " + nameLen + " (remaining: " + buf.remaining() + ")");
             }
-            byte[] nameBytes = new byte[nameLen];
-            buf.get(nameBytes);
-            name = new String(nameBytes, StandardCharsets.UTF_8);
+            if (nameLen == 1) {
+                // Old tag format with a 1-byte numeric name (e.g. CTag::WriteTagToFile): same as an ID tag
+                name = String.valueOf((char) (buf.get() & 0xFF));
+            } else {
+                byte[] nameBytes = new byte[nameLen];
+                buf.get(nameBytes);
+                name = new String(nameBytes, StandardCharsets.UTF_8);
+            }
         }
 
         Object value;
@@ -193,9 +214,26 @@ public record Tag(byte type, String name, Object value) {
                     if (buf.remaining() < 4) throw new IllegalArgumentException("Buffer underflow reading float for tag " + name);
                     value = buf.getFloat();
                 }
-                case TYPE_BOOL, TYPE_BOOL_ALT -> {
+                case TYPE_BOOL -> {
                     if (buf.remaining() < 1) throw new IllegalArgumentException("Buffer underflow reading boolean for tag " + name);
                     value = buf.get() != 0;
+                }
+                case TYPE_BOOLARRAY -> {
+                    if (buf.remaining() < 2) throw new IllegalArgumentException("Buffer underflow reading bool array length for tag " + name);
+                    int bitCount = Short.toUnsignedInt(buf.getShort());
+                    int byteCount = bitCount / 8 + 1; // same formula as eMule's CTag
+                    if (byteCount > buf.remaining()) throw new IllegalArgumentException("Invalid bool array length for tag " + name);
+                    byte[] bits = new byte[byteCount];
+                    buf.get(bits);
+                    value = bits;
+                }
+                case TYPE_BSOB -> {
+                    if (buf.remaining() < 1) throw new IllegalArgumentException("Buffer underflow reading bsob length for tag " + name);
+                    int bsobLen = Byte.toUnsignedInt(buf.get());
+                    if (bsobLen > buf.remaining()) throw new IllegalArgumentException("Invalid bsob length for tag " + name);
+                    byte[] bsob = new byte[bsobLen];
+                    buf.get(bsob);
+                    value = bsob;
                 }
                 case TYPE_BLOB -> {
                     if (buf.remaining() < 4) throw new IllegalArgumentException("Buffer underflow reading blob length for tag " + name);
@@ -228,7 +266,19 @@ public record Tag(byte type, String name, Object value) {
                     if (buf.remaining() < 8) throw new IllegalArgumentException("Buffer underflow reading uint64 for tag " + name);
                     value = buf.getLong();
                 }
-                default -> throw new IllegalArgumentException("Unknown tag type: 0x" + String.format("%02X", type) + " for tag " + name);
+                default -> {
+                    if (type >= TYPE_STR1 && type <= TYPE_STR16) {
+                        // Compact string: length = type - STR1 + 1; normalized to TYPE_STRING like eMule does
+                        int valLen = type - TYPE_STR1 + 1;
+                        if (valLen > buf.remaining()) {
+                            throw new IllegalArgumentException("Buffer underflow reading compact string for tag " + name);
+                        }
+                        byte[] valBytes = new byte[valLen];
+                        buf.get(valBytes);
+                        return new Tag(TYPE_STRING, name, new String(valBytes, StandardCharsets.UTF_8));
+                    }
+                    throw new IllegalArgumentException("Unknown tag type: 0x" + String.format("%02X", type) + " for tag " + name);
+                }
             }
         } catch (java.nio.BufferUnderflowException e) {
             throw new IllegalArgumentException("Unexpected buffer underflow for tag " + name + " (type 0x" + String.format("%02X", type) + ")", e);

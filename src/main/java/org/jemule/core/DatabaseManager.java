@@ -235,8 +235,9 @@ public class DatabaseManager implements AutoCloseable {
                         case Tag.TYPE_INT16 -> value = Short.parseShort(valStr);
                         case Tag.TYPE_INT8 -> value = Byte.parseByte(valStr);
                         case Tag.TYPE_FLOAT -> value = Float.parseFloat(valStr);
-                        case Tag.TYPE_BOOL, Tag.TYPE_BOOL_ALT -> value = Boolean.parseBoolean(valStr);
-                        case Tag.TYPE_BLOB, Tag.TYPE_HASH -> value = valBlob;
+                        case Tag.TYPE_UINT64 -> value = Long.parseLong(valStr);
+                        case Tag.TYPE_BOOL -> value = Boolean.parseBoolean(valStr);
+                        case Tag.TYPE_BLOB, Tag.TYPE_HASH, Tag.TYPE_BOOLARRAY, Tag.TYPE_BSOB -> value = valBlob;
                     }
                     if (value != null) {
                         tags.add(new Tag(type, name, value));
