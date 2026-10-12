@@ -365,7 +365,7 @@ public class Server {
             resp.putInt(2000000); // HardFiles (Standard Lugdunum value)
         // UDP Flags (matching server.h)
         // Includes SRV_UDPFLG_TCPOBFUSCATION (0x400) which is essential for client-side obfuscation display
-        int udpFlags = Tag.UDPFLG_EXT_GETSOURCES | Tag.UDPFLG_NEWTAGS | Tag.UDPFLG_UNICODE | Tag.UDPFLG_LARGEFILES | Tag.UDPFLG_UDPOBFUSCATION | Tag.UDPFLG_TCPOBFUSCATION;
+        int udpFlags = Tag.SERVER_UDP_FLAGS;
         resp.putInt(udpFlags); 
             resp.putInt(registry.lowIdCount()); // LowIDUsers
             resp.putShort((short) (config.port() + 4)); // UDPPort (standard is TCP+4)
@@ -388,6 +388,8 @@ public class Server {
             byte[] outDesc = buildServerDescPacket(challenge);
             log.info("UDP send (DESC) {} bytes to {}:{} - {}", outDesc.length, p.getAddress(), p.getPort(), hex(outDesc, outDesc.length));
             ds.send(new java.net.DatagramPacket(outDesc, outDesc.length, p.getAddress(), p.getPort()));
+        } else if (opcode == (byte) 0x98 || opcode == (byte) 0x92 || opcode == (byte) 0x90) {
+            handleGlobalSearch(ds, p, opcode, recv);
         } else if (opcode == (byte) 0x9A) { // OP_GLOBGETSOURCES: <hash 16>[<hash 16>...] (up to 35 with SRV_UDPFLG_EXT_GETSOURCES)
             int hashCount = (p.getLength() - 2) / 16;
             if (hashCount < 1) return;
@@ -444,6 +446,52 @@ public class Server {
         }
     }
 
+    /** eMule keeps at most MAX_RESULTS (100) results of a global search per server. */
+    private static final int MAX_GLOBAL_SEARCH_RESULTS = 100;
+
+    /**
+     * Global (UDP) search sent by CSearchResultsWnd to every server of the client's list:
+     * OP_GLOBSEARCHREQ (0x98) and OP_GLOBSEARCHREQ2 (0x92) carry the search tree, OP_GLOBSEARCHREQ3 (0x90)
+     * prefixes it with a tag list whose CT_SERVER_UDPSEARCH_FLAGS (0x0E) announces large file support.
+     * Each result is sent as an OP_GLOBSEARCHRES (0x99) block; several blocks, each with its own E3/99 header,
+     * may share one datagram (CUDPSocket::ProcessPacket).
+     */
+    private void handleGlobalSearch(java.net.DatagramSocket ds, java.net.DatagramPacket p, byte opcode, byte[] recv) throws IOException {
+        ByteBuffer buf = ByteBuffer.wrap(recv, 2, recv.length - 2).slice().order(ByteOrder.LITTLE_ENDIAN);
+        boolean largeFiles = false;
+        List<FileMetadata> results;
+        try {
+            if (opcode == (byte) 0x90) {
+                for (Tag t : Tag.readList(buf)) {
+                    if (t.name().equals("\u000E") && t.isInt() && (t.unsignedValue() & 0x01) != 0) { // SRVCAP_UDP_NEWTAGS_LARGEFILES
+                        largeFiles = true;
+                    }
+                }
+            }
+            SearchQuery query = SearchQuery.parse(buf.slice());
+            results = fileIndex.searchComplex(query, Math.min(config.maxSearchResults(), MAX_GLOBAL_SEARCH_RESULTS));
+        } catch (RuntimeException e) {
+            log.debug("Malformed UDP search request from {}: {}", p.getAddress(), e.getMessage());
+            return;
+        }
+
+        java.io.ByteArrayOutputStream datagram = new java.io.ByteArrayOutputStream();
+        for (FileMetadata m : results) {
+            if (!largeFiles && m.size() > 0xFFFFFFFFL) continue; // the requester cannot handle files > 4 GB
+            byte[] item = org.jemule.network.handler.SearchHandler.encodeSearchResult(m);
+            if (datagram.size() > 0 && datagram.size() + 2 + item.length > MAX_UDP_PAYLOAD) {
+                sendUdp(ds, datagram.toByteArray(), p.getAddress(), p.getPort(), "SEARCH");
+                datagram.reset();
+            }
+            datagram.write(Packet.PROTOCOL_ED2K);
+            datagram.write(0x99); // OP_GLOBSEARCHRES
+            datagram.writeBytes(item);
+        }
+        if (datagram.size() > 0) {
+            sendUdp(ds, datagram.toByteArray(), p.getAddress(), p.getPort(), "SEARCH");
+        }
+    }
+
     /** Keeps answers below the usual path MTU (the client reads up to 5000 bytes per datagram). */
     private static final int MAX_UDP_PAYLOAD = 1300;
 
@@ -470,8 +518,8 @@ public class Server {
         int maxFiles = config.maxFiles();
         int maxUsers = config.maxUsers();
 
-        int tcpFlags = Tag.TCPFLG_COMPRESSION | Tag.TCPFLG_NEWTAGS | Tag.TCPFLG_UNICODE | Tag.TCPFLG_TYPETAGINTEGER | Tag.TCPFLG_LARGEFILES | Tag.TCPFLG_TCPOBFUSCATION | Tag.TCPFLG_UDPOBFUSCATION;
-        int udpFlags = Tag.UDPFLG_EXT_GETSOURCES | Tag.UDPFLG_NEWTAGS | Tag.UDPFLG_UNICODE | Tag.UDPFLG_LARGEFILES | Tag.UDPFLG_UDPOBFUSCATION | Tag.UDPFLG_TCPOBFUSCATION;
+        int tcpFlags = Tag.SERVER_TCP_FLAGS;
+        int udpFlags = Tag.SERVER_UDP_FLAGS;
 
         java.util.List<org.jemule.protocol.Tag> tags = new java.util.ArrayList<>();
         tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_HASH, "\u0011", getServerHash())); // ST_SERVERHASH (mapped to version tag ID in some contexts, but usually hash is first)

@@ -22,7 +22,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class ServerTagsTest {
 
     private static final int TCP_FLAGS = 0x01 | 0x08 | 0x10 | 0x80 | 0x100 | 0x200 | 0x400;
-    private static final int UDP_FLAGS = 0x01 | 0x08 | 0x10 | 0x100 | 0x200 | 0x400;
+    private static final int UDP_FLAGS = 0x01 | 0x02 | 0x08 | 0x10 | 0x100 | 0x200 | 0x400;
 
     static class CapturingDatagramSocket extends java.net.DatagramSocket {
         public final List<DatagramPacket> sent = new java.util.ArrayList<>();
@@ -250,7 +250,8 @@ class ServerTagsTest {
         assertEquals(0x200, 1 << 9, "SRV_UDPFLG_UDPOBFUSCATION");
         assertEquals(0x400, 1 << 10, "SRV_UDPFLG_TCPOBFUSCATION");
 
-        assertTrue((UDP_FLAGS & 0x02) == 0, "Bit 0x02 (EXT_GETFILES) must NOT be set");
+        assertTrue((UDP_FLAGS & 0x02) != 0, "Bit 0x02 (EXT_GETFILES): OP_GLOBSEARCHREQ2/3 are supported");
+        assertEquals(UDP_FLAGS, org.jemule.protocol.Tag.SERVER_UDP_FLAGS);
         assertTrue((UDP_FLAGS & 0x20) == 0, "Bit 0x20 (EXT_GETSOURCES2) must NOT be set");
         assertTrue((UDP_FLAGS & 0x40) == 0, "Bit 0x40 must NOT be set");
     }

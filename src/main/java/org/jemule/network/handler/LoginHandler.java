@@ -60,7 +60,7 @@ public class LoginHandler {
         // --- Corrected ID_CHANGE packet construction matching eMule's expectations ---
         // eMule's ServerSocket.cpp expects: <NEW_ID 4>[<server_flags 4>][<pad 4>][<reported_ip 4>][<obf_tcp_port 4>]
         // Flags: 0x01=COMPRESSION, 0x08=NEWTAGS, 0x10=UNICODE, 0x80=TYPETAGINTEGER, 0x100=LARGEFILES, 0x200=UDPOBFUSCATION, 0x400=TCPOBFUSCATION
-        int serverFlags = Tag.TCPFLG_COMPRESSION | Tag.TCPFLG_NEWTAGS | Tag.TCPFLG_UNICODE | Tag.TCPFLG_TYPETAGINTEGER | Tag.TCPFLG_LARGEFILES | Tag.TCPFLG_UDPOBFUSCATION | Tag.TCPFLG_TCPOBFUSCATION;
+        int serverFlags = Tag.SERVER_TCP_FLAGS;
 
         ByteBuffer idChange = ByteBuffer.allocate(20).order(ByteOrder.LITTLE_ENDIAN);
         idChange.putInt((int) clientId);
@@ -201,11 +201,11 @@ public class LoginHandler {
 
         // TCP capability flags matching eMule SRV_TCPFLG_ constants
         // Note: We include UDPOBFUSCATION (0x200) and TCPOBFUSCATION (0x400)
-        int tcpFlags = Tag.TCPFLG_COMPRESSION | Tag.TCPFLG_NEWTAGS | Tag.TCPFLG_UNICODE | Tag.TCPFLG_TYPETAGINTEGER | Tag.TCPFLG_LARGEFILES | Tag.TCPFLG_UDPOBFUSCATION | Tag.TCPFLG_TCPOBFUSCATION;
+        int tcpFlags = Tag.SERVER_TCP_FLAGS;
 
         // UDP capability flags matching eMule SRV_UDPFLG_ constants
         // Note: We include TCPOBFUSCATION (0x400) in UDP flags as well, as eMule checks it there too
-        int udpFlags = Tag.UDPFLG_EXT_GETSOURCES | Tag.UDPFLG_NEWTAGS | Tag.UDPFLG_UNICODE | Tag.UDPFLG_LARGEFILES | Tag.UDPFLG_UDPOBFUSCATION | Tag.UDPFLG_TCPOBFUSCATION;
+        int udpFlags = Tag.SERVER_UDP_FLAGS;
 
         List<Tag> tags = new ArrayList<>();
         tags.add(new Tag(Tag.TYPE_HASH, "\u0011", hash)); // Send hash as a tag too for extra visibility
@@ -291,7 +291,7 @@ public class LoginHandler {
             int udpKey = Server.getUdpKey();
 
             // UDP Flags matching eMule's expectations (from server.h)
-            int udpFlags = Tag.UDPFLG_EXT_GETSOURCES | Tag.UDPFLG_NEWTAGS | Tag.UDPFLG_UNICODE | Tag.UDPFLG_LARGEFILES | Tag.UDPFLG_UDPOBFUSCATION | Tag.UDPFLG_TCPOBFUSCATION;
+            int udpFlags = Tag.SERVER_UDP_FLAGS;
 
             ByteBuffer resp = ByteBuffer.allocate(42).order(ByteOrder.LITTLE_ENDIAN);
             resp.put(Packet.PROTOCOL_ED2K);

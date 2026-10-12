@@ -73,34 +73,37 @@ public class SearchHandler {
         // <count 4> is little-endian like every ed2k integer (CSearchList::ProcessSearchAnswer)
         baos.writeBytes(ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(results.size()).array());
         for (var m : results) {
-            byte[] hashBytes = HandlerUtils.hashToBytes(m.hash());
-
-            ByteBuffer itemBuf = ByteBuffer.allocate(2048).order(ByteOrder.LITTLE_ENDIAN);
-            itemBuf.put(hashBytes);
-            itemBuf.putInt(0); // ID
-            itemBuf.putShort((short) 0); // Port
-
-            List<Tag> tags = new ArrayList<>();
-            tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_FILENAME, m.name())); // Corrected tag name
-            if (m.size() > Integer.MAX_VALUE) {
-                tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_FILESIZE, (int) (m.size() & 0xFFFFFFFFL))); // Corrected tag name
-                tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_FILESIZE_HI, (int) (m.size() >> 32))); // Corrected tag name
-            } else {
-                tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_FILESIZE, (int) m.size())); // Corrected tag name
-            }
-            if (m.type() != null && !m.type().isEmpty()) {
-                tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_FILETYPE, m.type())); // search results use the string form ("Video")
-            }
-            tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, m.sources().size()));
-            tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_COMPLETE_SOURCES, m.completeSourceCount()));
-
-            Tag.writeList(itemBuf, tags);
-            itemBuf.flip();
-            byte[] itemData = new byte[itemBuf.remaining()];
-            itemBuf.get(itemData);
-            baos.writeBytes(itemData);
+            baos.writeBytes(encodeSearchResult(m));
         }
         baos.write(moreAvailable ? 0x01 : 0x00);
         new Packet(Packet.PROTOCOL_ED2K, OpCode.SEARCH_RESULT.value, baos.toByteArray()).write(out, context.getState().isZlibSupported());
+    }
+
+    /**
+     * Encodes one search result <code>&lt;hash 16&gt;&lt;ID 4&gt;&lt;port 2&gt;&lt;tagcount 4&gt;&lt;tags&gt;</code> as read by
+     * CSearchFile; shared by OP_SEARCHRESULT (TCP) and OP_GLOBSEARCHRES (UDP). ID and port are 0: the client
+     * asks the server for the sources.
+     */
+    public static byte[] encodeSearchResult(FileMetadata m) {
+        List<Tag> tags = new ArrayList<>();
+        tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_FILENAME, m.name()));
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_FILESIZE, (int) (m.size() & 0xFFFFFFFFL)));
+        if (m.size() > 0xFFFFFFFFL) {
+            tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_FILESIZE_HI, (int) (m.size() >>> 32)));
+        }
+        if (m.type() != null && !m.type().isEmpty()) {
+            tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_FILETYPE, m.type())); // search results use the string form ("Video")
+        }
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, m.sources().size()));
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_COMPLETE_SOURCES, m.completeSourceCount()));
+
+        ByteBuffer itemBuf = ByteBuffer.allocate(4096).order(ByteOrder.LITTLE_ENDIAN);
+        itemBuf.put(HandlerUtils.hashToBytes(m.hash()));
+        itemBuf.putInt(0);
+        itemBuf.putShort((short) 0);
+        Tag.writeList(itemBuf, tags);
+        byte[] itemData = new byte[itemBuf.position()];
+        System.arraycopy(itemBuf.array(), 0, itemData, 0, itemData.length);
+        return itemData;
     }
 }

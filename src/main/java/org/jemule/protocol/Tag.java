@@ -92,6 +92,14 @@ public record Tag(byte type, String name, Object value) {
     public static final int UDPFLG_UDPOBFUSCATION = 0x200;
     public static final int UDPFLG_TCPOBFUSCATION = 0x400;
     public static final int UDPFLG_EXT_GETSOURCES2 = 0x20; // Added for reference
+    public static final int UDPFLG_EXT_GETFILES = 0x02;    // OP_GLOBSEARCHREQ2 / OP_GLOBSEARCHREQ3 supported
+
+    /** TCP capabilities announced in OP_IDCHANGE (SRV_TCPFLG_* in eMule server.h). */
+    public static final int SERVER_TCP_FLAGS = TCPFLG_COMPRESSION | TCPFLG_NEWTAGS | TCPFLG_UNICODE | TCPFLG_TYPETAGINTEGER
+            | TCPFLG_LARGEFILES | TCPFLG_UDPOBFUSCATION | TCPFLG_TCPOBFUSCATION;
+    /** UDP capabilities announced in ST_UDPFLAGS / OP_GLOBSERVSTATRES (SRV_UDPFLG_* in eMule server.h). */
+    public static final int SERVER_UDP_FLAGS = UDPFLG_EXT_GETSOURCES | UDPFLG_EXT_GETFILES | UDPFLG_NEWTAGS | UDPFLG_UNICODE
+            | UDPFLG_LARGEFILES | UDPFLG_UDPOBFUSCATION | UDPFLG_TCPOBFUSCATION;
 
 
     /** True if this tag holds an integer value (UINT8/16/32/64). */
