@@ -82,20 +82,23 @@ public class PublishHandler {
                         break;
                     }
                     String name = "";
-                    long size = 0;
+                    long sizeLo = 0;
+                    long sizeHi = 0;
                     String type = "";
 
                     for (Tag t : tags) {
                         if (t.name().equals(Tag.NAME_FILENAME)) {
                             name = String.valueOf(t.value());
-                        } else if (t.name().equals(Tag.NAME_FILESIZE)) {
-                            size = ((Number) t.value()).longValue();
-                        } else if (t.name().equals(Tag.NAME_FILESIZE_HI)) { // Handle high part of 64-bit size
-                            size = (size & 0xFFFFFFFFL) | (((Number) t.value()).longValue() << 32);
+                        } else if (t.name().equals(Tag.NAME_FILESIZE) && t.isInt()) {
+                            // eMule compacts integers (UINT8/16/32) and they are always unsigned
+                            sizeLo = t.unsignedValue();
+                        } else if (t.name().equals(Tag.NAME_FILESIZE_HI) && t.isInt()) { // high part of a >4GB size
+                            sizeHi = t.unsignedValue();
                         } else if (t.name().equals(Tag.NAME_FILETYPE)) {
                             type = String.valueOf(t.value());
                         }
                     }
+                    long size = sizeHi != 0 ? (sizeHi << 32) | (sizeLo & 0xFFFFFFFFL) : sizeLo;
 
                     log.info("PUBLISH attempt from client {}: name='{}' hash={} size={} type={}",
                             context.getState() != null ? context.getState().clientId() : -1,

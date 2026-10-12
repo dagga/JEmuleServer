@@ -77,4 +77,13 @@ class TagCompatibilityTest {
         assertEquals("xvid", tags.get(3).value());
         assertFalse(buf.hasRemaining());
     }
+
+    @Test
+    void integerTagsAreUnsigned() {
+        assertEquals(3_000_000_000L, Tag.read(le("83 02 005ED0B2")).unsignedValue()); // UINT32 3 GB
+        assertEquals(40_000L, Tag.read(le("88 02 409C")).unsignedValue());          // UINT16 0x9C40
+        assertEquals(200L, Tag.read(le("89 02 C8")).unsignedValue());               // UINT8 0xC8
+        assertTrue(Tag.read(le("89 02 C8")).isInt());
+        assertFalse(new Tag(Tag.TYPE_STRING, "\u0001", "x").isInt());
+    }
 }

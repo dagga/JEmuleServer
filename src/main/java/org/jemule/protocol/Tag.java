@@ -93,6 +93,28 @@ public record Tag(byte type, String name, Object value) {
     public static final int UDPFLG_EXT_GETSOURCES2 = 0x20; // Added for reference
 
 
+    /** True if this tag holds an integer value (UINT8/16/32/64). */
+    public boolean isInt() {
+        return type == TYPE_INTEGER || type == TYPE_INT16 || type == TYPE_INT8 || type == TYPE_UINT64;
+    }
+
+    /**
+     * Returns the integer value of this tag as an <b>unsigned</b> number, as eMule does
+     * (all ed2k integer tags are unsigned: a UINT32 file size of 3 GiB must not become negative).
+     *
+     * @throws IllegalStateException if the tag is not an integer tag
+     */
+    public long unsignedValue() {
+        return switch (value) {
+            case Byte b -> Byte.toUnsignedLong(b);
+            case Short sh -> Short.toUnsignedLong(sh);
+            case Integer i -> Integer.toUnsignedLong(i);
+            case Long l -> l;
+            case null, default -> throw new IllegalStateException("Tag " + name + " is not an integer tag (type 0x"
+                    + String.format("%02X", type) + ")");
+        };
+    }
+
     public void write(ByteBuffer buf) {
         if (log.isDebugEnabled()) {
             log.debug("Tag.write: name='{}', type=0x{}, value='{}', buf.position={}, buf.remaining={}",
