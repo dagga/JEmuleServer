@@ -65,10 +65,11 @@ public interface SearchQuery extends Predicate<FileMetadata> {
             return switch (id) {
                 case ID_FILENAME -> {
                     if (meta.name() == null) yield false;
-                    String nameLower = meta.name().toLowerCase();
-                    String[] tokens = lowerTerm.split("[^a-zA-Z0-9]+");
+                    String nameLower = Keywords.normalize(meta.name());
+                    String[] tokens = Keywords.split(term);
+                    if (tokens.length == 0) yield false; // a keyword without any letter/digit matches nothing
                     for (String t : tokens) {
-                        if (!t.isEmpty() && !nameLower.contains(t)) yield false;
+                        if (!nameLower.contains(t)) yield false;
                     }
                     yield true;
                 }

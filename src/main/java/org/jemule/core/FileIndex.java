@@ -25,7 +25,6 @@ import org.jemule.core.event.FileEvent;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListMap;
-import java.util.regex.Pattern;
 
 /**
  * Manages the global file index for the server.
@@ -34,7 +33,6 @@ import java.util.regex.Pattern;
 public class FileIndex {
     private final ConcurrentHashMap<String, FileMetadata> byHash = new ConcurrentHashMap<>();
     private final ConcurrentSkipListMap<String, Set<String>> invertedIndex = new ConcurrentSkipListMap<>();
-    private static final Pattern TOKENIZER = Pattern.compile("[^a-zA-Z0-9]+");
     private final DatabaseManager db;
     private final EventManager eventManager;
 
@@ -132,7 +130,7 @@ public class FileIndex {
 
     private void unindexTokens(FileMetadata meta) {
         if (meta.name() == null) return;
-        for (String t : TOKENIZER.split(meta.name().toLowerCase())) {
+        for (String t : Keywords.split(meta.name())) {
             if (t.isEmpty()) continue;
             invertedIndex.computeIfPresent(t, (k, hashes) -> {
                 hashes.remove(meta.hash());
@@ -154,7 +152,7 @@ public class FileIndex {
     private void indexTokens(FileMetadata meta) {
         String name = meta.name();
         if (name == null) return;
-        String[] tokens = TOKENIZER.split(name.toLowerCase());
+        String[] tokens = Keywords.split(name);
         for (String t : tokens) {
             if (!t.isEmpty()) {
                 invertedIndex.computeIfAbsent(t, k -> ConcurrentHashMap.newKeySet()).add(meta.hash());
@@ -246,7 +244,7 @@ public class FileIndex {
             return byHash.values().stream().limit(limit).toList();
         }
         
-        String queryLower = query.toLowerCase().trim();
+        String queryLower = Keywords.normalize(query).trim();
         
         // Cache check
         String cacheKey = queryLower + "|" + limit;
@@ -255,7 +253,7 @@ public class FileIndex {
             return cached;
         }
 
-        String[] tokens = TOKENIZER.split(queryLower);
+        String[] tokens = Keywords.split(queryLower);
         Set<String> candidates = null;
         for (String t : tokens) {
             if (t.isEmpty()) continue;

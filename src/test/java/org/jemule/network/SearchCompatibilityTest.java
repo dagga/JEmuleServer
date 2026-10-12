@@ -68,4 +68,17 @@ class SearchCompatibilityTest {
         assertEquals("Video", r.tag(Tag.NAME_FILETYPE));
         assertEquals(1, ((Number) r.tag(Tag.NAME_SOURCES)).intValue());
     }
+
+    @Test
+    void nonAsciiKeywordsOnlyMatchTheirFiles() throws Exception {
+        publish("11111111111111111111111111111111", "Vacances d'été 2025.avi", 700_000_000L, 2);
+        publish("22222222222222222222222222222222", "Привет мир.mp3", 5_000_000L, 1);
+        publish("33333333333333333333333333333333", "日本語ドラマ 01.mkv", 400_000_000L, 2);
+        publish("44444444444444444444444444444444", "unrelated file.txt", 1000L, 5);
+
+        assertEquals(List.of("Vacances d'été 2025.avi"), names(search(new SearchTree().keyword("été").toBytes())));
+        assertEquals(List.of("Привет мир.mp3"), names(search(new SearchTree().keyword("ПРИВЕТ").toBytes())));
+        assertEquals(List.of("日本語ドラマ 01.mkv"), names(search(new SearchTree().keyword("日本語").toBytes())));
+        assertTrue(search(new SearchTree().keyword("中文").toBytes()).results().isEmpty());
+    }
 }
