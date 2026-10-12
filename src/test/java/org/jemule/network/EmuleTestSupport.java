@@ -181,4 +181,78 @@ public final class EmuleTestSupport {
 
     /** SRVCAP flags sent by eMule 0.50a with default preferences (crypt layer supported). */
     public static final int EMULE_DEFAULT_SRVCAPS = 0x0001 | 0x0008 | 0x0100 | 0x0010 | 0x0200;
+
+    /**
+     * Search tree writer reproducing CSearchExprTarget (SearchResultsWnd.cpp). Operators are prefix:
+     * write AND, then both operands.
+     */
+    public static final class SearchTree {
+        private final ByteBuffer buf = ByteBuffer.allocate(4096).order(ByteOrder.LITTLE_ENDIAN);
+
+        public SearchTree and() { buf.put((byte) 0).put((byte) 0x00); return this; }
+        public SearchTree or() { buf.put((byte) 0).put((byte) 0x01); return this; }
+        public SearchTree not() { buf.put((byte) 0).put((byte) 0x02); return this; }
+
+        /** Keyword (file name), parameter type 1. */
+        public SearchTree keyword(String s) {
+            byte[] b = s.getBytes(StandardCharsets.UTF_8);
+            buf.put((byte) 1).putShort((short) b.length).put(b);
+            return this;
+        }
+
+        /** String meta tag (FT_FILETYPE, FT_FILEFORMAT, FT_MEDIA_CODEC...), parameter type 2. */
+        public SearchTree meta(int tagId, String s) {
+            byte[] b = s.getBytes(StandardCharsets.UTF_8);
+            buf.put((byte) 2).putShort((short) b.length).put(b).putShort((short) 1).put((byte) tagId);
+            return this;
+        }
+
+        /** Numeric meta tag, parameter type 3 (uint32) or 8 (uint64, only when the server supports large files). */
+        public SearchTree num(int tagId, int operator, long value) {
+            if (value > 0xFFFFFFFFL) {
+                buf.put((byte) 8).putLong(value);
+            } else {
+                buf.put((byte) 3).putInt((int) value);
+            }
+            buf.put((byte) operator).putShort((short) 1).put((byte) tagId);
+            return this;
+        }
+
+        public byte[] toBytes() {
+            byte[] out = new byte[buf.position()];
+            System.arraycopy(buf.array(), 0, out, 0, out.length);
+            return out;
+        }
+    }
+
+    /** One result of OP_SEARCHRESULT / OP_GLOBSEARCHRES, decoded like CSearchFile's constructor. */
+    public record SearchResult(String hash, int clientId, int port, java.util.List<org.jemule.protocol.Tag> tags) {
+        public Object tag(String name) {
+            return tags.stream().filter(t -> t.name().equals(name)).map(org.jemule.protocol.Tag::value).findFirst().orElse(null);
+        }
+    }
+
+    public static SearchResult readSearchResult(ByteBuffer buf) {
+        byte[] h = new byte[16];
+        buf.get(h);
+        int id = buf.getInt();
+        int port = Short.toUnsignedInt(buf.getShort());
+        return new SearchResult(HexFormat.of().formatHex(h), id, port, org.jemule.protocol.Tag.readList(buf));
+    }
+
+    /** Decoded OP_SEARCHRESULT: results plus the optional trailing "more results" byte (-1 if absent). */
+    public record SearchAnswer(java.util.List<SearchResult> results, int more, int trailingBytes) {}
+
+    /** Mirrors CSearchList::ProcessSearchAnswer (server variant). */
+    public static SearchAnswer readSearchAnswer(byte[] payload) {
+        ByteBuffer buf = ByteBuffer.wrap(payload).order(ByteOrder.LITTLE_ENDIAN);
+        long count = Integer.toUnsignedLong(buf.getInt());
+        if (count > payload.length) throw new AssertionError("Implausible result count " + count + " (endianness?)");
+        java.util.List<SearchResult> results = new java.util.ArrayList<>();
+        for (long i = 0; i < count; i++) results.add(readSearchResult(buf));
+        int more = -1;
+        int trailing = buf.remaining();
+        if (trailing == 1) more = Byte.toUnsignedInt(buf.get());
+        return new SearchAnswer(results, more, trailing);
+    }
 }

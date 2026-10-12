@@ -9,7 +9,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.ByteArrayOutputStream;
-import java.io.DataOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
@@ -73,8 +72,8 @@ public class SearchHandler {
 
     private void sendSearchResults(ClientContext context, List<FileMetadata> results, OutputStream out) throws IOException {
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        DataOutputStream dos = new DataOutputStream(baos);
-        dos.writeInt(results.size());
+        // <count 4> is little-endian like every ed2k integer (CSearchList::ProcessSearchAnswer)
+        baos.writeBytes(ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(results.size()).array());
         for (var m : results) {
             byte[] hashBytes = HandlerUtils.hashToBytes(m.hash());
 
@@ -100,7 +99,7 @@ public class SearchHandler {
             itemBuf.flip();
             byte[] itemData = new byte[itemBuf.remaining()];
             itemBuf.get(itemData);
-            dos.write(itemData);
+            baos.writeBytes(itemData);
         }
         new Packet(Packet.PROTOCOL_ED2K, OpCode.SEARCH_RESULT.value, baos.toByteArray()).write(out, context.getState().isZlibSupported());
     }
