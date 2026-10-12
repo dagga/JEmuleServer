@@ -1,0 +1,177 @@
+name: Release
+
+# Builds the JAR and the installers (.deb, .rpm, .exe with a bundled Java runtime).
+# On a "v*" tag the files are published as a GitHub release; on other runs they are kept as workflow artifacts.
+on:
+  push:
+    tags: [ 'v*' ]
+    branches: [ main ]
+    paths:
+      - '.github/workflows/release.yml'
+      - 'packaging/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # Runtime modules needed by the server (jdeps + H2/logback runtime needs), without java.desktop (no X11 dependency)
+  JLINK_MODULES: java.base,java.compiler,java.instrument,java.logging,java.management,java.naming,java.net.http,java.scripting,java.sql,java.xml,jdk.localedata,jdk.management,jdk.net,jdk.unsupported,jdk.zipfs
+  JLINK_OPTIONS: --strip-debug --no-header-files --no-man-pages --strip-native-commands
+  APP_DESCRIPTION: eMule (ed2k) server
+
+jobs:
+  jar:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: temurin
+          cache: gradle
+
+      - name: Test and build the JAR
+        run: |
+          chmod +x gradlew
+          ./gradlew clean test shadowJar --no-daemon
+
+      - name: Version
+        id: version
+        run: |
+          jar=$(ls build/libs/JEmuleServer-*.jar)
+          version=$(basename "$jar" .jar | sed 's/^JEmuleServer-//')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_REF" == refs/tags/v* && "${GITHUB_REF_NAME#v}" != "$version" ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match the project version $version"
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jar
+          path: build/libs/JEmuleServer-*.jar
+
+  linux:
+    needs: jar
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.jar.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 25 (bundled runtime)
+        uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: temurin
+
+      - name: Install packaging tools
+        run: sudo apt-get update && sudo apt-get install -y rpm fakeroot
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: jar
+          path: input
+
+      - name: Build .deb and .rpm
+        run: |
+          for type in deb rpm; do
+            jpackage --type "$type" --dest dist --input input \
+              --name JEmuleServer --app-version "$VERSION" \
+              --main-jar "JEmuleServer-$VERSION.jar" --main-class org.jemule.Main \
+              --description "$APP_DESCRIPTION" --vendor "Nicolas Hernandez" \
+              --about-url https://github.com/dagga/JEmuleServer \
+              --license-file LICENSE.LGPL \
+              --linux-package-name jemuleserver --linux-app-category net \
+              --linux-rpm-license-type LGPLv3 \
+              --add-modules "$JLINK_MODULES" --jlink-options "$JLINK_OPTIONS"
+          done
+          ls -l dist
+
+      - name: Smoke test of the .deb
+        run: |
+          sudo apt-get install -y ./dist/*.deb
+          test -x /opt/jemuleserver/bin/JEmuleServer
+          dpkg -s jemuleserver | grep -E '^(Version|Depends):'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: dist/*
+
+  windows:
+    needs: jar
+    runs-on: windows-latest
+    env:
+      VERSION: ${{ needs.jar.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 25 (bundled runtime, jpackage with WiX v4/v5 support)
+        uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: temurin
+
+      - name: Install WiX Toolset 5
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --version 5.0.2
+          wix extension add --global WixToolset.Util.wixext/5.0.2
+          wix extension add --global WixToolset.UI.wixext/5.0.2
+          wix --version
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: jar
+          path: input
+
+      - name: Build .exe
+        shell: pwsh
+        run: |
+          jpackage --type exe --dest dist --input input `
+            --name JEmuleServer --app-version "$env:VERSION" `
+            --main-jar "JEmuleServer-$env:VERSION.jar" --main-class org.jemule.Main `
+            --description "$env:APP_DESCRIPTION" --vendor "Nicolas Hernandez" `
+            --about-url https://github.com/dagga/JEmuleServer `
+            --license-file LICENSE.LGPL `
+            --win-console --win-dir-chooser --win-menu --win-menu-group JEmuleServer `
+            --win-upgrade-uuid ae4b4770-62b4-40fd-b03d-55764c135437 `
+            --add-modules "$env:JLINK_MODULES" --jlink-options "$env:JLINK_OPTIONS"
+          Get-ChildItem dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/*.exe
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [ jar, linux, windows ]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
+          cp packaging/jemuleserver.service assets/
+          cd assets && sha256sum * > SHA256SUMS && cat SHA256SUMS
+
+      - name: Publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: JEmuleServer ${{ github.ref_name }}
+          body_path: doc/release-notes-${{ github.ref_name }}.md
+          files: assets/*

@@ -19,6 +19,20 @@ To compile the project and generate the executable JAR file (Fat JAR):
 
 The JAR file will be generated in `build/libs/JEmuleServer-1.0.jar`.
 
+## Installation from the release packages
+
+Each release on GitHub provides installers bundling their own Java runtime:
+`jemuleserver_<version>-1_amd64.deb` (Debian/Ubuntu), `jemuleserver-<version>-1.x86_64.rpm` (Fedora/RHEL) and
+`JEmuleServer-<version>.exe` (Windows), plus the plain JAR and a systemd unit (`packaging/jemuleserver.service`).
+
+- The application is installed in `/opt/jemuleserver` (Linux) or `Program Files\JEmuleServer` (Windows).
+- Started without arguments, the installed program keeps its configuration (`server.properties`, created on first
+  start) and its H2 database in `~/.local/share/jemuleserver` (Linux) or `%LOCALAPPDATA%\JEmuleServer` (Windows).
+- Started with a configuration file argument (as the systemd unit does), relative paths are relative to the
+  working directory.
+
+The packages are built by `.github/workflows/release.yml` and published automatically when a `v*` tag is pushed.
+
 ## Running
 
 ### Run Mode (via Gradle)

@@ -1,0 +1,30 @@
+# systemd unit for JEmuleServer installed from the .deb or .rpm package (/opt/jemuleserver).
+#
+#   sudo useradd --system --home-dir /var/lib/jemuleserver --create-home --shell /usr/sbin/nologin jemule
+#   sudo install -d -o jemule -g jemule /etc/jemuleserver
+#   sudo install -m 644 -o jemule server.properties /etc/jemuleserver/server.properties
+#   sudo cp jemuleserver.service /etc/systemd/system/ && sudo systemctl daemon-reload
+#   sudo systemctl enable --now jemuleserver
+#
+# Relative paths of server.properties (databasePath=./jemule_db) are relative to WorkingDirectory.
+[Unit]
+Description=JEmuleServer - eMule (ed2k) server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jemule
+Group=jemule
+WorkingDirectory=/var/lib/jemuleserver
+ExecStart=/opt/jemuleserver/bin/JEmuleServer /etc/jemuleserver/server.properties
+# SIGTERM runs the shutdown hook, which closes the H2 database cleanly
+KillSignal=SIGTERM
+TimeoutStopSec=30
+SuccessExitStatus=143
+Restart=on-failure
+RestartSec=10
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
