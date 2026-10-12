@@ -106,64 +106,74 @@ public interface SearchQuery extends Predicate<FileMetadata> {
         }
     }
 
+    /** Maximum nesting of boolean operators accepted in a search tree (protects the parser's stack). */
+    int MAX_DEPTH = 64;
+
     /**
-     * Parses a SEARCH_REQUEST payload recursively.
+     * Parses a search tree as written by eMule's CSearchExprTarget (SearchResultsWnd.cpp), in prefix order:
+     * <pre>
+     * 0x00 &lt;op 1&gt; &lt;left&gt; &lt;right&gt;                              boolean operator (0 AND, 1 OR, 2 NOT)
+     * 0x01 &lt;len 2&gt;&lt;utf8&gt;                                     keyword (file name)
+     * 0x02 &lt;len 2&gt;&lt;utf8&gt; &lt;namelen 2&gt;&lt;name&gt;                  string meta tag (FT_FILETYPE, FT_FILEFORMAT, ...)
+     * 0x03 &lt;uint32&gt; &lt;op 1&gt; &lt;namelen 2&gt;&lt;name&gt;                 numeric meta tag
+     * 0x08 &lt;uint64&gt; &lt;op 1&gt; &lt;namelen 2&gt;&lt;name&gt;                 numeric meta tag &gt; 4 GB (servers supporting large files)
+     * </pre>
+     * A tag name of length 1 is a numeric FT_* ID; longer names (old ed2k string names) are not filtered on.
+     *
+     * @throws RuntimeException if the tree is malformed
      */
     static SearchQuery parse(ByteBuffer buf) {
         buf.order(ByteOrder.LITTLE_ENDIAN);
-        byte first = buf.get();
+        return parse(buf, 0);
+    }
+
+    private static SearchQuery parse(ByteBuffer buf, int depth) {
+        if (depth > MAX_DEPTH) throw new IllegalArgumentException("Search tree too deep");
         SearchQueryBuilder builder = new SearchQueryBuilder();
-        if (first == 0x00) {
-            // Operator node
-            byte op = buf.get();
-            SearchQuery left = parse(buf);
-            SearchQuery right = parse(buf);
-            return switch (op) {
-                case OP_AND -> builder.and(left, right);
-                case OP_OR -> builder.or(left, right);
-                case OP_NOT -> builder.not(left, right);
-                default -> throw new IllegalArgumentException("Unknown search operator: 0x" + String.format("%02X", op));
-            };
-        } else {
-            // Leaf node (Tag2)
-            // Restore the first byte as it's part of the tag type
-            buf.position(buf.position() - 1);
-            byte type = buf.get();
-            return switch (type) {
-                case 0x01 -> { // String tag, no ID (Filename)
-                    int len = Short.toUnsignedInt(buf.getShort());
-                    if (len == 0) yield builder.term("", ID_FILENAME);
-                    byte[] b = new byte[len];
-                    buf.get(b);
-                    String term = new String(b, StandardCharsets.UTF_8);
-                    yield builder.term(term, ID_FILENAME);
+        byte type = buf.get();
+        return switch (type) {
+            case 0x00 -> {
+                byte op = buf.get();
+                SearchQuery left = parse(buf, depth + 1);
+                SearchQuery right = parse(buf, depth + 1);
+                yield switch (op) {
+                    case OP_AND -> builder.and(left, right);
+                    case OP_OR -> builder.or(left, right);
+                    case OP_NOT -> builder.not(left, right);
+                    default -> throw new IllegalArgumentException("Unknown search operator: 0x" + String.format("%02X", op));
+                };
+            }
+            case 0x01 -> builder.term(readString(buf), ID_FILENAME);
+            case 0x02 -> {
+                String term = readString(buf);
+                int id = readTagId(buf);
+                yield id < 0 ? (meta) -> true : builder.term(term, (byte) id);
+            }
+            case 0x03, 0x08 -> {
+                long val = type == 0x03 ? Integer.toUnsignedLong(buf.getInt()) : buf.getLong();
+                byte mode = buf.get();
+                int id = readTagId(buf);
+                if (id == ID_FILESIZE) {
+                    yield builder.size(val, mode);
                 }
-                case 0x02 -> { // String tag with numeric ID
-                    int len = Short.toUnsignedInt(buf.getShort());
-                    String term;
-                    if (len == 0) {
-                        term = "";
-                    } else {
-                        byte[] b = new byte[len];
-                        buf.get(b);
-                        term = new String(b, StandardCharsets.UTF_8);
-                    }
-                    buf.getShort(); // name length (1)
-                    byte id = buf.get();
-                    yield builder.term(term, id);
-                }
-                case 0x03 -> { // Numeric tag with numeric ID (Size)
-                    long val = Integer.toUnsignedLong(buf.getInt());
-                    byte mode = buf.get();
-                    buf.getShort(); // name length (1)
-                    byte id = buf.get();
-                    if (id == ID_FILESIZE) {
-                        yield builder.size(val, mode);
-                    }
-                    yield (meta) -> true;
-                }
-                default -> throw new IllegalArgumentException("Unknown search tag type: 0x" + String.format("%02X", type));
-            };
-        }
+                yield (meta) -> true;
+            }
+            default -> throw new IllegalArgumentException("Unknown search tag type: 0x" + String.format("%02X", type));
+        };
+    }
+
+    private static String readString(ByteBuffer buf) {
+        int len = Short.toUnsignedInt(buf.getShort());
+        byte[] b = new byte[len];
+        buf.get(b);
+        return new String(b, StandardCharsets.UTF_8);
+    }
+
+    /** Reads &lt;namelen 2&gt;&lt;name&gt;: returns the FT_* ID for a 1-byte name, -1 for a string name. */
+    private static int readTagId(ByteBuffer buf) {
+        int nameLen = Short.toUnsignedInt(buf.getShort());
+        if (nameLen == 1) return Byte.toUnsignedInt(buf.get());
+        buf.position(buf.position() + nameLen);
+        return -1;
     }
 }

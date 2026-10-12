@@ -13,7 +13,6 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -31,17 +30,11 @@ public class SearchHandler {
         try {
             SearchQuery query = SearchQuery.parse(ByteBuffer.wrap(data));
             results = context.getFileIndex().searchComplex(query, context.getConfig().maxSearchResults());
-            log.debug("Complex search -> {} results", results.size());
-        } catch (Exception e) {
-            log.warn("Failed to parse complex search, falling back to simple search: {}", HandlerUtils.sanitize(e.getMessage()));
-            String queryStr = new String(data, StandardCharsets.UTF_8).trim();
-            if (queryStr.length() < 3) {
-                log.warn("Simple search query too short: '{}'", HandlerUtils.sanitize(queryStr));
-                results = List.of();
-            } else {
-                results = context.getFileIndex().search(queryStr, context.getConfig().maxSearchResults());
-                log.debug("Simple search '{}' -> {} results", queryStr, results.size());
-            }
+            log.debug("Search {} -> {} results", query, results.size());
+        } catch (RuntimeException e) {
+            // Never guess: an unparsable tree gets an empty answer, so that the client ends its search
+            log.warn("Malformed search request ({} bytes): {}", data.length, HandlerUtils.sanitize(String.valueOf(e.getMessage())));
+            results = List.of();
         }
 
         List<FileMetadata> batch = results.subList(0, Math.min(results.size(), BATCH_SIZE));

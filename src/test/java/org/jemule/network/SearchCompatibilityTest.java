@@ -81,4 +81,31 @@ class SearchCompatibilityTest {
         assertEquals(List.of("日本語ドラマ 01.mkv"), names(search(new SearchTree().keyword("日本語").toBytes())));
         assertTrue(search(new SearchTree().keyword("中文").toBytes()).results().isEmpty());
     }
+
+    @Test
+    void sixtyFourBitSizeParameterIsSupported() throws Exception {
+        publish("11111111111111111111111111111111", "big movie.mkv", 6_000_000_000L, 2);
+        publish("22222222222222222222222222222222", "small movie.mkv", 700_000_000L, 2);
+        // "movie" AND size > 5 GB : with LARGEFILES the client writes the value as uint64 (type 8)
+        byte[] tree = new SearchTree().and().keyword("movie").num(0x02, 1, 5_000_000_000L).toBytes();
+        assertEquals(List.of("big movie.mkv"), names(search(tree)));
+    }
+
+    @Test
+    void malformedRequestGetsAnEmptyAnswer() throws Exception {
+        publish("11111111111111111111111111111111", "holiday video.avi", 700_000_000L, 2);
+        SearchAnswer a = search(new byte[]{0x01, 0x10}); // truncated keyword
+        assertTrue(a.results().isEmpty(), "no guess on raw bytes");
+    }
+
+    @Test
+    void stringMetaTagWithStringNameIsReadWithoutMisalignment() throws Exception {
+        publish("11111111111111111111111111111111", "holiday video.avi", 700_000_000L, 2);
+        // AND(meta "bitrate"="x" with a string tag name, keyword "holiday")
+        java.nio.ByteBuffer b = java.nio.ByteBuffer.allocate(64).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+        b.put((byte) 0).put((byte) 0);
+        b.put((byte) 2).putShort((short) 1).put((byte) 'x').putShort((short) 7).put("bitrate".getBytes());
+        b.put((byte) 1).putShort((short) 7).put("holiday".getBytes());
+        assertEquals(List.of("holiday video.avi"), names(search(java.util.Arrays.copyOf(b.array(), b.position()))));
+    }
 }

@@ -139,21 +139,23 @@ class ProtocolSequenceTest {
         DummySocket s = new DummySocket(remote, remote, 11111);
         FakeClientContext ctx = new FakeClientContext(s, ServerConfig.DEFAULT, cf, reg, fi, em);
 
-        // Populate file index with 60 entries to force pagination
-        for (int i = 0; i < 60; i++) {
-            fi.addFile(new FileMetadata(String.format("H%02d", i), "TestFile" + i + ".txt", 1000 + i, "Text"));
-        }
-
         // Create state and assign
         org.jemule.core.ClientState st = new org.jemule.core.ClientState(remote, 11111, 42, System.currentTimeMillis(), new AtomicLong(System.currentTimeMillis()));
         ctx.setState(st);
+
+        // Populate file index with 60 entries (offered by this client) to force pagination
+        for (int i = 0; i < 60; i++) {
+            FileMetadata m = new FileMetadata(String.format("H%02d", i), "TestFile" + i + ".txt", 1000 + i, "Doc");
+            m.sources().put(FileIndex.sourceKey(st), st);
+            fi.addFile(m);
+        }
 
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         ctx.setWrappedOut(out);
 
         SearchHandler sh = new SearchHandler();
-        byte[] simpleQuery = "TestFile".getBytes();
-        sh.handleSearch(ctx, simpleQuery, out);
+        byte[] query = new EmuleTestSupport.SearchTree().keyword("TestFile").toBytes();
+        sh.handleSearch(ctx, query, out);
 
         ByteArrayInputStream in = new ByteArrayInputStream(out.toByteArray());
         Packet first = Packet.read(in, 65536);
