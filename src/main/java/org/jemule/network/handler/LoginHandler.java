@@ -218,7 +218,7 @@ public class LoginHandler {
         tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_SERVERNAME, serverName));
         tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_DESCRIPTION, desc));
         // ST_VERSION as integer for standard compliance
-        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SERVER_VERSION, 17));
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SERVER_VERSION, org.jemule.Main.ESERVER_VERSION_INT));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_LOWIDUSERS, context.getRegistry().lowIdCount()));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDPFLAGS, udpFlags));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDPKEY, org.jemule.network.Server.getUdpKey())); // ST_UDPKEY
