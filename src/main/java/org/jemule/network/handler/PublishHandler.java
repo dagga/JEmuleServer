@@ -1,7 +1,6 @@
 package org.jemule.network.handler;
 
 import org.jemule.core.FileMetadata;
-import org.jemule.network.Packet;
 import org.jemule.protocol.OpCode;
 import org.jemule.protocol.Tag;
 import org.slf4j.Logger;
@@ -75,8 +74,6 @@ public class PublishHandler {
             // One message for the whole offer: a client may publish up to 200 files per packet
             LoginHandler.sendServerMessage(context, out, "WARNING : " + rejectedAsFake + " shared file(s) rejected by the server (spam/fake detection)");
         }
-
-        new Packet(Packet.PROTOCOL_ED2K, OpCode.PUBLISH_ACK.value, new byte[0]).write(out, context.getState().isZlibSupported());
     }
 
     /**

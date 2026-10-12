@@ -39,8 +39,6 @@ public enum OpCode {
     GET_SOURCES_OBFU(0xE3, 0x23),     // OP_GETSOURCES_OBFU <hash 16><size 4>[<size 8>]
 
     // ---- 0xE3, server -> client
-    LOGIN_ACCEPTED(0xE3, 0x1B),
-    PUBLISH_ACK(0xE3, 0x22),
     SERVER_LIST(0xE3, 0x32),          // OP_SERVERLIST <count 1>(<IP 4><port 2>)*
     SEARCH_RESULT(0xE3, 0x33),        // OP_SEARCHRESULT <count 4>(<hash 16><ID 4><port 2><tags>)*[<more 1>]
     SERVER_STATUS(0xE3, 0x34),        // OP_SERVERSTATUS <users 4><files 4>
@@ -49,7 +47,6 @@ public enum OpCode {
     SERVER_IDENT(0xE3, 0x41),         // OP_SERVERIDENT <hash 16><IP 4><port 2><tags>
     FOUND_SOURCES(0xE3, 0x42),        // OP_FOUNDSOURCES <hash 16><count 1>(<ID 4><port 2>)*
     SOURCES_RESULT_OBFU(0xE3, 0x44),  // OP_FOUNDSOURCES_OBFU <hash 16><count 1>(<ID 4><port 2><crypt 1>[<hash 16>])*
-    ASK_SHARED_FILES(0xE3, 0x4A),     // OP_ASKSHAREDFILES (client <-> client)
     CALLBACK(0xE3, 0x99),
 
     // ---- 0xC5 (eMule extended protocol)

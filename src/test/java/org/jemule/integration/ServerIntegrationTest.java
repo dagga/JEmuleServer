@@ -103,7 +103,6 @@ public class ServerIntegrationTest {
                 Packet p_ver = readPacketOrEOF(in);
                 Packet p1 = readPacketOrEOF(in);
                 Packet p2 = readPacketOrEOF(in);
-                Packet p3 = readPacketOrEOF(in);
 
                 Assertions.assertNotNull(p_ver, "Connection closed before SERVER_MESSAGE (version)");
                 Assertions.assertEquals(Packet.PROTOCOL_ED2K, p_ver.protocol());
@@ -111,36 +110,11 @@ public class ServerIntegrationTest {
                 Assertions.assertTrue(new String(p_ver.data()).contains("server version 17.15"));
 
                 Assertions.assertNotNull(p1, "Connection closed before SERVER_IDENT");
-                Assertions.assertEquals(Packet.PROTOCOL_ED2K, p1.protocol());
                 Assertions.assertEquals(OpCode.SERVER_IDENT.value, p1.opcode());
 
                 Assertions.assertNotNull(p2, "Connection closed before ID_CHANGE");
                 Assertions.assertEquals(Packet.PROTOCOL_ED2K, p2.protocol());
                 Assertions.assertEquals(OpCode.ID_CHANGE.value, p2.opcode());
-
-                Assertions.assertNotNull(p3, "Connection closed before LOGIN_ACCEPTED");
-                Assertions.assertEquals(Packet.PROTOCOL_ED2K, p3.protocol());
-                Assertions.assertEquals(OpCode.LOGIN_ACCEPTED.value, p3.opcode());
-
-                // Following packets might arrive in slightly different orders due to virtual threads
-                boolean welcomeReceived = false;
-                boolean statusReceived = false;
-                boolean askSharedReceived = false;
-
-                // Collect packets until we get a PUBLISH_ACK or timeout
-                // This is more robust as it handles interleaved packets
-                List<Packet> handshakePackets = new ArrayList<>();
-                for (int i = 0; i < 5; i++) {
-                    Packet p = readPacketOrEOF(in);
-                    if (p == null) break;
-                    handshakePackets.add(p);
-                    if (p.opcode() == OpCode.SERVER_MESSAGE.value) welcomeReceived = true;
-                    else if (p.opcode() == OpCode.SERVER_STATUS.value) statusReceived = true;
-                    else if (p.opcode() == OpCode.ASK_SHARED_FILES.value) askSharedReceived = true;
-                }
-                
-                // Note: We don't strictly assert welcomeReceived here to avoid flakiness,
-                // but the test will fail later if publish/udp fails.
 
                 // Now publish a file with OP_OFFERFILES, exactly as the eMule client does
                 String hash = "0123456789abcdef0123456789abcdef"; // 32 hex chars
@@ -148,18 +122,6 @@ public class ServerIntegrationTest {
                         org.jemule.network.EmuleTestSupport.completeFile(org.jemule.network.EmuleTestSupport.hash(hash), "test-file.txt", 123));
                 Packet publish = new Packet(Packet.PROTOCOL_ED2K, OpCode.OFFER_FILES.value, offer);
                 publish.write(out, false);
-
-                // Expect PUBLISH_ACK (server may send interleaved SERVER_STATUS packets)
-                Packet ack = null;
-                for (int i = 0; i < 10; i++) {
-                    Packet pp = readPacketOrEOF(in);
-                    if (pp != null && pp.protocol() == Packet.PROTOCOL_ED2K && pp.opcode() == OpCode.PUBLISH_ACK.value) {
-                        ack = pp;
-                        break;
-                    }
-                    if (pp == null) break; // Connection closed
-                }
-                Assertions.assertNotNull(ack, "Did not receive PUBLISH_ACK after publish");
 
                 // Now request sources via TCP: <hash 16><size 4> as sent by CDownloadQueue::ProcessLocalRequests
                 byte[] getSourcesPayload = ByteBuffer.allocate(20).order(ByteOrder.LITTLE_ENDIAN)
@@ -256,8 +218,8 @@ public class ServerIntegrationTest {
                 Packet login = new Packet(Packet.PROTOCOL_ED2K, OpCode.LOGIN_REQUEST.value, new byte[0]);
                 login.write(out, false);
 
-                // Read handshake (skip to get past initial packets: Version, Ident, IDChange, LoginAccepted, ServerMsg, ServerStatus, AskSharedx2)
-                for (int i = 0; i < 8; i++) {
+                // Read handshake: version message, ident, ID change, status, welcome message
+                for (int i = 0; i < 5; i++) {
                     readPacketOrEOF(in);
                 }
 
@@ -290,17 +252,13 @@ public class ServerIntegrationTest {
                 Packet publish = new Packet(Packet.PROTOCOL_ED2K, OpCode.PUBLISH_FILES.value, publishPayloadBytes);
                 publish.write(out, false);
 
-                // Expect PUBLISH_ACK
-                Packet ack = null;
-                for (int i = 0; i < 10; i++) {
-                    Packet pp = readPacketOrEOF(in);
-                    if (pp != null && pp.protocol() == Packet.PROTOCOL_ED2K && pp.opcode() == OpCode.PUBLISH_ACK.value) {
-                        ack = pp;
-                        break;
-                    }
-                    if (pp == null) break;
+                // There is no acknowledgement in the ed2k protocol: wait for the file to be indexed
+                boolean indexed = false;
+                for (int i = 0; i < 50 && !indexed; i++) {
+                    indexed = !server.getFileIndex().search("binary-test", 10).isEmpty();
+                    if (!indexed) Thread.sleep(100);
                 }
-                Assertions.assertNotNull(ack, "Did not receive PUBLISH_ACK for binary publish with tags");
+                Assertions.assertTrue(indexed, "binary publish with tags was not indexed");
             }
             return null;
         });

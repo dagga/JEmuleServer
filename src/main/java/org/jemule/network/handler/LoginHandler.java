@@ -70,69 +70,11 @@ public class LoginHandler {
         idChange.putInt(context.getConfig().port()); // Obfuscation TCP Port
         new Packet(Packet.PROTOCOL_ED2K, OpCode.ID_CHANGE.value, idChange.array()).write(out, state.isZlibSupported());
 
-        ByteBuffer loginAccepted = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN);
-        loginAccepted.putInt((int) clientId);
-        new Packet(Packet.PROTOCOL_ED2K, OpCode.LOGIN_ACCEPTED.value, loginAccepted.array()).write(out, state.isZlibSupported());
-
-        log.info("Logged in ID: {} (Sent 0x41, 0x40 and 0x1B)", clientId);
+        log.info("Client {} logged in with ID {}", HandlerUtils.sanitize(state.nickname()), Long.toUnsignedString(clientId));
 
         sendServerStatus(context, out);
-        sendAskSharedFiles(context, out);
-
-        log.info("Your ID is: " + Long.toUnsignedString(clientId));
         sendServerMessage(context, out, "Welcome to " + Main.VERSION + " (JEmuleServer)\n" +
-                "Your ID is: " + Long.toUnsignedString(clientId) + "\n" +
-                "Enjoy the extended protocol support!");
-
-        // Try to parse client's listening UDP/TCP port from the initial login packet and proactively send a UDP GLOBSERVSTATRES
-        int clientUdpPort = -1;
-        try {
-            ByteBuffer inBuf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN);
-            if (inBuf.remaining() >= 22) { // 16(hash) + 4(id) + 2(port)
-                byte[] clientHash = new byte[16];
-                inBuf.get(clientHash);
-                long idFromPacket = Integer.toUnsignedLong(inBuf.getInt());
-                clientUdpPort = Short.toUnsignedInt(inBuf.getShort());
-                log.info("Parsed client listening port from login packet: {} (id from packet: {})", clientUdpPort, Long.toUnsignedString(idFromPacket));
-            } else {
-                log.debug("Login packet too short to extract client listening port (len={})", inBuf.remaining());
-            }
-        } catch (Exception e) {
-            log.debug("Failed to parse client listening port from login packet: {}", e.getMessage());
-        }
-
-        if (clientUdpPort > 0) {
-            // Send a UDP GLOBSERVSTATRES with challenge == 0 which clients commonly accept when no challenge was issued
-            sendUdpStatusToClient(context, context.getSocket().getInetAddress(), clientUdpPort);
-        }
-
-        try {
-            Thread.sleep(100);
-            sendServerStatus(context, out);
-            log.debug("Sent additional SERVER_STATUS to encourage file publishing");
-
-            final OutputStream statusOut = out;
-            Thread statusThread = new Thread(() -> {
-                try {
-                    for (int i = 0; i < 30 && !context.getSocket().isClosed(); i++) {
-                        Thread.sleep(10000);
-                        if (!context.getSocket().isClosed()) {
-                            sendServerStatus(context, statusOut);
-                            log.debug("Sent periodic SERVER_STATUS #{} to encourage file publishing", i + 2);
-                        }
-                    }
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                } catch (IOException e) {
-                    log.debug("Failed to send periodic status update: {}", e.getMessage());
-                }
-            });
-            statusThread.setDaemon(true);
-            statusThread.start();
-            log.info("Started periodic status updates thread for client {}", clientId);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
+                "Your ID is: " + Long.toUnsignedString(clientId));
     }
 
     /**
@@ -257,106 +199,5 @@ public class LoginHandler {
         buf.putInt(context.getRegistry().size()); // Users
         buf.putInt(context.getFileIndex().fileCount()); // Files
         new Packet(Packet.PROTOCOL_ED2K, OpCode.SERVER_STATUS.value, buf.array()).write(out, context.getState() != null && context.getState().isZlibSupported());
-    }
-
-    private void sendAskSharedFiles(ClientContext context, OutputStream out) {
-        log.info("Sending ASK_SHARED_FILES to client {}", context.getState().clientId());
-        try {
-            new Packet(Packet.PROTOCOL_EMULE, OpCode.ASK_SHARED_FILES.value, new byte[0]).write(out, context.getState() != null && context.getState().isZlibSupported());
-        } catch (IOException e) {
-            log.warn("Failed to send ASK_SHARED_FILES: {}", e.getMessage());
-        }
-        try {
-            new Packet(Packet.PROTOCOL_ED2K, OpCode.ASK_SHARED_FILES.value, new byte[0]).write(out, context.getState() != null && context.getState().isZlibSupported());
-            log.debug("Also sent ASK_SHARED_FILES as ED2K for compatibility");
-        } catch (Exception e) {
-            log.debug("Failed to send fallback ED2K ASK_SHARED_FILES: {}", e.getMessage());
-        }
-    }
-
-    /**
-     * Proactively send a UDP GLOBSERVSTATRES and SERVER_DESC_RES to the given client address/port.
-     * Attempts to use the server's bound UDP socket(s) (so source port is 4661/4665) for better NAT compatibility.
-     */
-    private void sendUdpStatusToClient(ClientContext context, java.net.InetAddress addr, int port) {
-        // Build OP_GLOBSERVSTATRES
-        try {
-            int users = context.getRegistry().size();
-            int files = context.getFileIndex().fileCount();
-            int maxUsers = context.getConfig().maxUsers();
-            int maxFiles = context.getConfig().maxFiles();
-            int lowIdUsers = context.getRegistry().lowIdCount();
-            int udpPort = context.getConfig().port() + 4;
-            int tcpPort = context.getConfig().port();
-            int udpKey = Server.getUdpKey();
-
-            // UDP Flags matching eMule's expectations (from server.h)
-            int udpFlags = Tag.SERVER_UDP_FLAGS;
-
-            ByteBuffer resp = ByteBuffer.allocate(42).order(ByteOrder.LITTLE_ENDIAN);
-            resp.put(Packet.PROTOCOL_ED2K);
-            resp.put((byte) 0x97); // OP_GLOBSERVSTATRES
-            resp.putInt(0); // challenge == 0 (unsolicited)
-            resp.putInt(users);
-            resp.putInt(files);
-            resp.putInt(maxUsers);
-            resp.putInt(1000000); // SoftFiles (Standard Lugdunum value)
-            resp.putInt(2000000); // HardFiles (Standard Lugdunum value)
-            resp.putInt(udpFlags);
-            resp.putInt(lowIdUsers);
-            resp.putShort((short) udpPort);
-            resp.putShort((short) tcpPort);
-            resp.putInt(udpKey);
-            resp.flip();
-            byte[] globOut = new byte[resp.remaining()];
-            resp.get(globOut);
-
-            boolean sent = Server.sendUdpFromBoundPort(context.getConfig().port(), globOut, addr, port);
-            if (!sent && context.getConfig().port() <= 0xFFFF - 4) sent = Server.sendUdpFromBoundPort(context.getConfig().port() + 4, globOut, addr, port);
-            if (!sent) {
-                try (java.net.DatagramSocket ds = new java.net.DatagramSocket()) {
-                    java.net.DatagramPacket dp = new java.net.DatagramPacket(globOut, globOut.length, addr, port);
-                    ds.send(dp);
-                    log.info("Fallback: Sent UDP GLOBSERVSTATRES from ephemeral socket to {}:{}", addr.getHostAddress(), port);
-                } catch (Exception e) {
-                    log.debug("Failed to send UDP status to client {}:{} - {}", addr, port, e.getMessage());
-                }
-            } else {
-                log.info("Sent UDP GLOBSERVSTATRES to {}:{} via bound socket", addr.getHostAddress(), port);
-            }
-
-            // Build OP_SERVER_DESC_RES using old format <name_len><name><desc_len><desc> which clients accept without challenge
-            String sName = "JEmuleServer (https://github.com/dagga/JEmuleServer/)";
-            String sVersion = Main.ESERVER_VERSION;
-            String sDesc = "Experimental eMule Server";
-            byte[] nameBytes = sName.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-            byte[] descBytes = sDesc.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-
-            ByteBuffer descBuf = ByteBuffer.allocate(2 + 2 + nameBytes.length + 2 + descBytes.length).order(ByteOrder.LITTLE_ENDIAN);
-            descBuf.put(Packet.PROTOCOL_ED2K);
-            descBuf.put((byte) 0xA3); // OP_SERVER_DESC_RES (old format)
-            descBuf.putShort((short) nameBytes.length);
-            descBuf.put(nameBytes);
-            descBuf.putShort((short) descBytes.length);
-            descBuf.put(descBytes);
-            descBuf.flip();
-            byte[] descOut = new byte[descBuf.remaining()];
-            descBuf.get(descOut);
-
-            boolean descSent = Server.sendUdpFromBoundPort(context.getConfig().port(), descOut, addr, port);
-            if (!descSent && context.getConfig().port() <= 0xFFFF - 4) descSent = Server.sendUdpFromBoundPort(context.getConfig().port() + 4, descOut, addr, port);
-            if (!descSent) {
-                try (java.net.DatagramSocket ds2 = new java.net.DatagramSocket()) {
-                    ds2.send(new java.net.DatagramPacket(descOut, descOut.length, addr, port));
-                    log.info("Fallback: Sent UDP SERVER_DESC_RES (old format) from ephemeral socket to {}:{}", addr.getHostAddress(), port);
-                } catch (Exception e) {
-                    log.debug("Failed to send UDP server description to {}:{} - {}", addr, port, e.getMessage());
-                }
-            } else {
-                log.info("Sent UDP SERVER_DESC_RES (old format) to {}:{} via bound socket", addr.getHostAddress(), port);
-            }
-        } catch (Exception e) {
-            log.debug("Failed to build/send SERVER_DESC_RES: {}", e.getMessage());
-        }
     }
 }
