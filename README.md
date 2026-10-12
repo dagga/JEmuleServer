@@ -1,6 +1,6 @@
 # JEmuleServer
 
-JEmuleServer is an experimental eMule server written in Java.
+JEmuleServer is an eMule server written in Java (version 1.0).
 
 ## Why this project?
 
@@ -17,7 +17,7 @@ To compile the project and generate the executable JAR file (Fat JAR):
 ./gradlew build
 ```
 
-The JAR file will be generated in `build/libs/JEmuleServer-1.0beta1.jar`.
+The JAR file will be generated in `build/libs/JEmuleServer-1.0.jar`.
 
 ## Running
 
@@ -34,7 +34,7 @@ You can start the server directly via Gradle:
 Once the project is compiled, you can start the server with the following command:
 
 ```bash
-java -jar build/libs/JEmuleServer-1.0beta1.jar [config_file] [port]
+java -jar build/libs/JEmuleServer-1.0.jar [config_file] [port]
 ```
 
 - Note: The server now supports IPv6 and will prefer binding to the IPv6 wildcard when available. Avoid forcing the JVM

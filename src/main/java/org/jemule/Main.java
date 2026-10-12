@@ -1,5 +1,5 @@
 /*
- * JEmuleServer - An experimental eMule server.
+ * JEmuleServer - An eMule server.
  * Copyright (C) 2026 Nicolas Hernandez (hernicatgmail.com)
  *
  * This program is free software: you can redistribute it and/or modify
@@ -34,7 +34,11 @@ import java.util.Properties;
 
 public class Main {
     private static final Logger log = LoggerFactory.getLogger(Main.class);
-    public static final String VERSION = "1.0beta1";
+    public static final String VERSION = "1.0";
+    /** Server name shown in the clients' server list (ST_SERVERNAME). */
+    public static final String SERVER_NAME = "JEmuleServer v" + VERSION + " (https://github.com/dagga/JEmuleServer/)";
+    /** Server description shown in the clients' server list (ST_DESCRIPTION). */
+    public static final String SERVER_DESCRIPTION = "eMule Server - version " + VERSION;
     public static final String ESERVER_VERSION = "17.15";
     /**
      * ESERVER_VERSION as the integer form of ST_VERSION: (major &lt;&lt; 16) | minor. The client displays it with

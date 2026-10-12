@@ -1,5 +1,5 @@
 /*
- * JEmuleServer - An experimental eMule server.
+ * JEmuleServer - An eMule server.
  * Copyright (C) 2026 Nicolas Hernandez (hernicatgmail.com)
  *
  * This program is free software: you can redistribute it and/or modify

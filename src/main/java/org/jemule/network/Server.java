@@ -1,5 +1,5 @@
 /*
- * JEmuleServer - An experimental eMule server.
+ * JEmuleServer - An eMule server.
  * Copyright (C) 2026 Nicolas Hernandez (hernicatgmail.com)
  *
  * This program is free software: you can redistribute it and/or modify
@@ -496,8 +496,8 @@ public class Server {
     }
 
     private byte[] buildServerDescPacket(int challenge, InetAddress client) {
-        String sName = "JEmuleServer (https://github.com/dagga/JEmuleServer/)";
-        String sDesc = "Experimental eMule Server";
+        String sName = Main.SERVER_NAME;
+        String sDesc = Main.SERVER_DESCRIPTION;
 
         int maxFiles = config.maxFiles();
         int maxUsers = config.maxUsers();

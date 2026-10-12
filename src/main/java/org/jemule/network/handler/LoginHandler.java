@@ -76,7 +76,7 @@ public class LoginHandler {
         log.info("Client {} logged in with ID {}", HandlerUtils.sanitize(state.nickname()), Long.toUnsignedString(clientId));
 
         sendServerStatus(context, out);
-        sendServerMessage(context, out, "Welcome to " + Main.VERSION + " (JEmuleServer)\n" +
+        sendServerMessage(context, out, "Welcome to JEmuleServer version " + Main.VERSION + "\n" +
                 "Your ID is: " + Long.toUnsignedString(clientId));
     }
 
@@ -159,9 +159,9 @@ public class LoginHandler {
             }
         }
 
-        String serverName = "JEmuleServer (https://github.com/dagga/JEmuleServer/)";
+        String serverName = Main.SERVER_NAME;
         String serverVersion = Main.ESERVER_VERSION;
-        String desc = "Experimental eMule Server";
+        String desc = Main.SERVER_DESCRIPTION;
 
         int maxFiles = context.getConfig().maxFiles();
         int maxUsers = context.getConfig().maxUsers();
