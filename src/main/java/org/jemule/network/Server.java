@@ -401,7 +401,9 @@ public class Server {
     /**
      * OP_GLOBSERVSTATRES as read by CUDPSocket::ProcessPacket:
      * <challenge 4><users 4><files 4><maxusers 4><softfiles 4><hardfiles 4><UDP flags 4><lowid users 4>
-     * <UDP port 2><TCP port 2><server UDP key 4>. The key is specific to the client's IP.
+     * <UDP obfuscation port 2><TCP obfuscation port 2><server UDP key 4>. The key is specific to the client's IP.
+     * Obfuscated UDP is received on port+12 (where eMule also sends its crypt pings); obfuscated TCP connections are
+     * detected on the main port.
      */
     private byte[] buildGlobServStatRes(int challenge, InetAddress client) {
         ByteBuffer resp = ByteBuffer.allocate(42).order(ByteOrder.LITTLE_ENDIAN);
@@ -415,10 +417,15 @@ public class Server {
         resp.putInt(2000000); // HardFiles (Standard Lugdunum value)
         resp.putInt(Tag.SERVER_UDP_FLAGS);
         resp.putInt(registry.lowIdCount());
-        resp.putShort((short) (config.port() + 4)); // UDPPort (standard is TCP+4)
-        resp.putShort((short) config.port()); // TCPPort
+        resp.putShort((short) udpObfuscationPort()); // CServer::SetObfuscationPortUDP
+        resp.putShort((short) config.port());        // CServer::SetObfuscationPortTCP
         resp.putInt(org.jemule.security.UdpObfuscation.serverKeyFor(client)); // server UDP key for this client
         return resp.array();
+    }
+
+    /** Port receiving obfuscated UDP packets (also bound for eMule's crypt pings, sent to TCP port + 12). */
+    private int udpObfuscationPort() {
+        return config.port() + 12;
     }
 
     /** eMule keeps at most MAX_RESULTS (100) results of a global search per server. */
@@ -512,9 +519,7 @@ public class Server {
         tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_UDP_KEY, org.jemule.security.UdpObfuscation.serverKeyFor(client)));
         tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_UDP_KEY_IP, (int) ClientState.ipToLong(client))); // IP the key is valid for
         tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_TCP_OBFUSCATION_PORT, config.port()));
-        tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_UDPPORTOBFUSCATION, config.port() + 12));
-        tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_STRING, org.jemule.protocol.Tag.NAME_AUXPORTSLIST, String.valueOf(config.port() + 12)));
-        tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_UDP_OBFUSCATION_PORT, config.port() + 12));
+        tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_UDPPORTOBFUSCATION, udpObfuscationPort()));
 
         ByteBuffer resp = ByteBuffer.allocate(4096).order(ByteOrder.LITTLE_ENDIAN);
         resp.put(Packet.PROTOCOL_ED2K);

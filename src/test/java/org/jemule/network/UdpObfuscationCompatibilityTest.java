@@ -115,4 +115,16 @@ class UdpObfuscationCompatibilityTest {
         assertEquals(k1, org.jemule.security.UdpObfuscation.serverKeyFor(InetAddress.getByName("10.0.0.1")));
         assertNotEquals(k1, k2);
     }
+
+    @Test
+    void globServStatResAnnouncesTheObfuscationPorts() throws Exception {
+        byte[] answer = exchange(statReq(0x55AA0001), SERVER_PORT + 4);
+        // CUDPSocket::ProcessPacket (OP_GLOBSERVSTATRES), offsets relative to the payload
+        ByteBuffer b = ByteBuffer.wrap(answer, 2, 40).slice().order(ByteOrder.LITTLE_ENDIAN);
+        int udpFlags = b.getInt(24);
+        assertTrue((udpFlags & 0x200) != 0 && (udpFlags & 0x400) != 0);
+        assertEquals(SERVER_PORT + 12, Short.toUnsignedInt(b.getShort(32)), "UDP obfuscation port");
+        assertEquals(SERVER_PORT, Short.toUnsignedInt(b.getShort(34)), "TCP obfuscation port");
+        assertNotEquals(0, b.getInt(36), "server UDP key");
+    }
 }
