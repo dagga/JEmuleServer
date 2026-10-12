@@ -36,6 +36,8 @@ public final class ClientState {
     private final long connectedAt;
     private final AtomicLong lastActivity;
     private final AtomicInteger publishedFilesCount = new AtomicInteger(0);
+    /** Hashes of the files this client offered: it must be removed from their sources when it disconnects. */
+    private final java.util.Set<String> publishedHashes = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private boolean zlibSupported = false;
     private List<FileMetadata> pendingSearchResults;
 
@@ -64,6 +66,8 @@ public final class ClientState {
     public AtomicLong lastActivity() { return lastActivity; }
 
     public AtomicInteger publishedFilesCount() { return publishedFilesCount; }
+
+    public java.util.Set<String> publishedHashes() { return publishedHashes; }
 
     public boolean isZlibSupported() { return zlibSupported; }
     public void setZlibSupported(boolean zlibSupported) { this.zlibSupported = zlibSupported; }

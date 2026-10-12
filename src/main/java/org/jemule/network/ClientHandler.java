@@ -167,7 +167,10 @@ public class ClientHandler implements Runnable, ClientContext {
 
     private void cleanup() {
         String remoteAddr = socket.getRemoteSocketAddress().toString();
-        if (state != null) registry.remove(state);
+        if (state != null) {
+            registry.remove(state);
+            fileIndex.removeSource(state);
+        }
         try {
             socket.close();
         } catch (IOException ignored) {}
