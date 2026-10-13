@@ -4,26 +4,32 @@ import org.jemule.core.DatabaseManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.HashSet;
+import org.jemule.core.Keywords;
+
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
 
 /**
- * Heuristics-based detector for fake or malicious files.
+ * Heuristics-based detector for fake or malicious files. A file matching a heuristic is rejected, but its hash is
+ * not banned: a heuristic can be wrong, and the same file must be accepted under a legitimate name. Only the
+ * hashes explicitly banned stay rejected under any name.
  */
 public class FakeFileDetector {
     private static final Logger log = LoggerFactory.getLogger(FakeFileDetector.class);
 
     // Common patterns for fake files in eMule networks
     private static final Pattern MULTIPLE_EXTENSIONS = Pattern.compile("\\.[a-z0-9]+\\.(exe|vbs|scr|bat|cmd|js|pif)$", Pattern.CASE_INSENSITIVE);
+    /** Whole words or phrases (words separated by spaces): "crack" does not match "Crackerjack". */
     private static final String[] SUSPICIOUS_KEYWORDS = {
             "virus", "worm", "trojan", "crack", "keygen", "serial", "freeporn", "spam",
-            "password_list", "account_hacker", "credit_card", "cheat_engine", "private_video"
+            "password list", "account hacker", "credit card", "cheat engine", "private video"
     };
 
-    private final Set<String> bannedHashes = new HashSet<>();
-    private DatabaseManager db;
-    private boolean enabled = true;
+    // Written by the admin console and read by every client thread
+    private final Set<String> bannedHashes = ConcurrentHashMap.newKeySet();
+    private volatile DatabaseManager db;
+    private volatile boolean enabled = true;
 
     public void setDatabaseManager(DatabaseManager db) {
         this.db = db;
@@ -58,6 +64,7 @@ public class FakeFileDetector {
 
         if (name == null || name.isEmpty()) return false;
         String lowerName = name.toLowerCase();
+        String words = " " + String.join(" ", Keywords.split(name)) + " ";
 
         boolean suspicious = false;
         String reason = "";
@@ -71,7 +78,7 @@ public class FakeFileDetector {
         // 3. Suspicious Keywords
         if (!suspicious) {
             for (String keyword : SUSPICIOUS_KEYWORDS) {
-                if (lowerName.contains(keyword)) {
+                if (words.contains(" " + keyword + " ")) {
                     suspicious = true;
                     reason = "Suspicious keyword: " + keyword;
                     break;
@@ -87,12 +94,6 @@ public class FakeFileDetector {
 
         if (suspicious) {
             log.info("File rejected: {} in '{}' (hash={})", reason, name, hash);
-            // Don't auto-ban in-memory if we're just checking
-            // addBannedHash(upperHash); 
-            if (db != null) {
-                db.addBannedHash(upperHash, "Auto-banned: " + reason + " (Name: " + name + ")");
-                addBannedHash(upperHash); // Now add it to memory if DB persist succeeded (or at least was called)
-            }
             return true;
         }
 
