@@ -26,6 +26,36 @@ class ChildAbuseFilterTest {
     }
 
     @Test
+    void seriesAndStudioMarkersMatchAlone() {
+        assertTrue(filter.matches("opva 2016.avi"));
+        assertTrue(filter.matches("Bibcam 07.mpg"));
+        assertTrue(filter.matches("Kdv 03747 26092012.flv"));
+        assertTrue(filter.matches("siberian mouse 1.avi"));
+        assertTrue(filter.matches("pedomom 2.avi"));
+        assertTrue(filter.matches("педо 1.avi"));
+    }
+
+    @Test
+    void ambiguousNamesStayAllowed() {
+        assertFalse(filter.matches("Lolita (1997).avi"));
+        assertFalse(filter.matches("Nina Simone - Feeling Good.mp3"));
+        assertFalse(filter.matches("Pedometer Pro.apk"));
+        assertFalse(filter.matches("Top 10 y mas.avi"), "an age without a sexual term is not enough");
+    }
+
+    @Test
+    void ageSuffixesWithoutSpaceAndInSpanish(@TempDir Path dir) throws Exception {
+        Path file = dir.resolve("keywords.properties");
+        Files.writeString(file, "minor = niña\nsexual = forbidden\nageSuffixes = y, años\nmaxMinorAge = 17\n");
+        ChildAbuseFilter custom = ChildAbuseFilter.load(file.toString());
+        assertTrue(custom.matches("11y forbidden.avi"));
+        assertTrue(custom.matches("5 años forbidden.avi"));
+        assertTrue(custom.matches("niña forbidden.avi"));
+        assertFalse(custom.matches("19y forbidden.avi"));
+        assertFalse(custom.matches("2024 y forbidden.avi"), "a year is not an age");
+    }
+
+    @Test
     void minorWithSexualTermMatches() {
         assertTrue(filter.matches("BOYFUCK - 6Yo Hot Red Haired Boy Gets Stripped On Floor.avi"));
         assertTrue(filter.matches("12 y.o. nude.jpg"));
