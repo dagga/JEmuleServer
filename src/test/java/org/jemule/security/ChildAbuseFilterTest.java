@@ -33,6 +33,7 @@ class ChildAbuseFilterTest {
         assertTrue(filter.matches("siberian mouse 1.avi"));
         assertTrue(filter.matches("pedomom 2.avi"));
         assertTrue(filter.matches("педо 1.avi"));
+        assertTrue(filter.matches("Periscope 2024.mp4"));
     }
 
     @Test
