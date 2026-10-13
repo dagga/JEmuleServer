@@ -134,8 +134,9 @@ public record ServerConfig(
                 tcpKeepAliveTimeoutInSeconds, heartbeatIntervalSeconds, publicIp, lowIdCheckTimeoutSeconds);
     }
 
+    /** Rooted paths are kept as they are, including "\dir" or "/dir" on Windows, which are not absolute there. */
     private static String resolve(java.nio.file.Path baseDir, String path) {
-        if (path == null || path.isBlank() || java.nio.file.Paths.get(path).isAbsolute()) return path;
+        if (path == null || path.isBlank() || java.nio.file.Paths.get(path).getRoot() != null) return path;
         return baseDir.resolve(path).normalize().toString();
     }
 
