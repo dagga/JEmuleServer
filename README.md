@@ -1,6 +1,9 @@
 # JEmuleServer
 
-JEmuleServer is an eMule server written in Java (version 1.0).
+JEmuleServer is an eMule server written in Java (version 1.0.1).
+
+Downloads (installers and JAR) are on the [releases page](https://github.com/dagga/JEmuleServer/releases); the changes
+of each version are described in `doc/release-notes-v<version>.md` (latest: [1.0.1](doc/release-notes-v1.0.1.md)).
 
 ## Why this project?
 
@@ -11,13 +14,13 @@ high-performance alternative using the latest Java features (such as Virtual Thr
 
 ## Compilation
 
-To compile the project and generate the executable JAR file (Fat JAR):
+Building requires a JDK 21 (Gradle toolchain). To compile the project and generate the executable JAR file (Fat JAR):
 
 ```bash
 ./gradlew build
 ```
 
-The JAR file will be generated in `build/libs/JEmuleServer-1.0.jar`.
+The JAR file will be generated in `build/libs/JEmuleServer-1.0.1.jar`.
 
 ## Installation from the release packages
 
@@ -43,12 +46,14 @@ You can start the server directly via Gradle:
 ./gradlew run
 ```
 
+This task starts the JVM with `-Djava.net.preferIPv4Stack=true` (IPv4 only); use the JAR for IPv6.
+
 ### Manual JAR Launch
 
 Once the project is compiled, you can start the server with the following command:
 
 ```bash
-java -jar build/libs/JEmuleServer-1.0.jar [config_file] [port]
+java -jar build/libs/JEmuleServer-1.0.1.jar [config_file] [port]
 ```
 
 - Note: The server now supports IPv6 and will prefer binding to the IPv6 wildcard when available. Avoid forcing the JVM
@@ -67,9 +72,22 @@ maxUsers=100000
 databasePath=./jemule_db
 fakeFileDetectionEnabled=true
 # ipFilterPath=ipfilter.dat
+# Timeout of the HighID test (0 = every client gets a LowID)
+lowIdCheckTimeoutSeconds=5
 ```
 
 All parameters can be tuned in this file, including quotas, flood protection thresholds, and circuit breaker settings.
+The commented [`server.properties`](server.properties) at the root of the repository lists all of them.
+
+## HighID / LowID
+
+At login, the server connects back to the TCP port announced by the client and sends an `OP_HELLO`. The client gets
+a **HighID** (its IP address) only if it answers with an `OP_HELLOANSWER` carrying the user hash of its login
+request; otherwise it gets a **LowID** and is reached through callbacks (`OP_CALLBACKREQUEST`). Checking the user
+hash matters when several clients share the same public IP (NAT): the announced port may be forwarded to another
+client, which must not obtain the HighID in its place.
+
+The server therefore needs to open outgoing TCP connections to the clients.
 
 ## Administration Interface
 
@@ -85,7 +103,9 @@ Available commands:
 
 ## Firewall Configuration (Fedora)
 
-To allow clients to connect to your server, you must ensure your firewall is running and open the TCP and UDP ports (default 4661). On Fedora, use the following commands:
+To allow clients to connect to your server, you must ensure your firewall is running and open the ports: **TCP 4661**
+and **UDP 4661, 4665 and 4673** (with the default port 4661: UDP on port + 4, obfuscated UDP on port + 12). On
+Fedora, use the following commands:
 
 ### 1. Start and enable firewalld
 ```bash
@@ -97,6 +117,8 @@ sudo systemctl enable firewalld
 ```bash
 sudo firewall-cmd --add-port=4661/tcp --permanent
 sudo firewall-cmd --add-port=4661/udp --permanent
+sudo firewall-cmd --add-port=4665/udp --permanent
+sudo firewall-cmd --add-port=4673/udp --permanent
 sudo firewall-cmd --reload
 ```
 
@@ -141,6 +163,7 @@ This project is distributed under the **GNU Lesser General Public License v3.0 (
 ## Documentation
 
 More information can be found in the `doc/` directory:
+- [Release notes 1.0.1](doc/release-notes-v1.0.1.md) / [1.0](doc/release-notes-v1.0.md)
 - [Protocols Description](doc/protocols.md)
 - [Technical References](doc/references.md)
 - [Class Diagram](doc/class_diagram.puml)
