@@ -1,43 +1,30 @@
-IPv6 support and limitations
+# IPv6 support and limitations
 
-This document explains how JEmuleServer handles IPv6 and what to expect from the current implementation.
+This document explains how JEmuleServer handles IPv6 and what to expect from it.
 
-1. Server binding
+## 1. What works
 
-- The server will attempt to bind TCP and UDP sockets to the IPv6 wildcard address (`::`). If binding to IPv6 fails,
-  it will fall back to IPv4 (`0.0.0.0`). This allows the server to accept both IPv6 and IPv4 clients when the platform supports it.
+- **Listening**: the server binds its TCP and UDP sockets to the IPv6 wildcard address (`::`) when the platform
+  supports it, which accepts both IPv6 and IPv4 clients. It falls back to IPv4 (`0.0.0.0`) otherwise. Starting the
+  JVM with `-Djava.net.preferIPv4Stack=true` (as `./gradlew run` does) disables IPv6.
+- **Connections**: an IPv6 client can connect, log in, publish its files and search.
 
-2. TCP connections
+## 2. Protocol limits
 
-- TCP connections are accepted transparently. The server uses the java.net APIs so remote addresses may be IPv4 or IPv6.
-- Client addresses are stored as `InetAddress` in `ClientState`.
+The ed2k protocol only carries 4-byte IPv4 addresses: client IDs, sources (`OP_FOUNDSOURCES`,
+`OP_GLOBFOUNDSOURCES`), callbacks and the server address (`OP_SERVERIDENT`). No eMule client knows any IPv6
+extension, so the server does not invent one. As a consequence:
 
-3. UDP protocol and IPv6
+- An IPv6 client always gets a **LowID**: its address cannot be its ID. Like any LowID, it is returned as a source
+  and other clients reach it through a callback (`OP_CALLBACKREQUESTED` asks it to connect to the requester's IPv4
+  address, so it needs IPv4 connectivity as well).
+- An IPv6 client **cannot request callbacks**: the callback carries the requester's address, which must be IPv4.
+  It can download from HighID sources only.
+- The **IP filter** only applies to IPv4 clients (including IPv4-mapped IPv6 addresses): `ipfilter.dat` describes
+  IPv4 ranges only.
+- The server announces an **IPv4 address** in `OP_SERVERIDENT`: the configured `publicIp` if it is IPv4, otherwise
+  an auto-detected IPv4 address, or the IPv4 address the client connected to.
 
-- The historical eDonkey/ED2K UDP protocol uses 4-byte IPv4 addresses in many messages. That format cannot carry full
-  IPv6 addresses.
-- To remain backward-compatible, JEmuleServer continues to send the legacy IPv4-format section in UDP source responses.
-- If the server discovers sources that are IPv6-only (not IPv4-mapped), it appends an optional extension to the UDP
-  `OP_GLOBFOUNDSOURCES` response. The extension format is:
+## 3. Tests
 
-  - "V6" marker (2 ASCII bytes: 0x56, 0x36)
-  - 1 byte: IPv6 source count (N)
-  - For each source:
-    - 16 bytes: IPv6 address (network-order bytes as returned by InetAddress.getAddress())
-    - 2 bytes: port (unsigned short, little-endian in current implementation)
-
-- Legacy clients will ignore the extra bytes at the end of the packet (they won't parse them), while updated clients/tests
-  can detect and parse the extension.
-
-4. Limitations and recommendations
-
-- UDP responses still contain the legacy IPv4 section first; IPv6-only sources will be provided only in the appended
-  extension.
-- If you need full IPv6-aware communication for discovery in heterogeneous networks, consider implementing an explicit
-  protocol extension that is understood by clients, or use TCP-based discovery mechanisms where IPv6 addresses can be
-  exchanged in textual or TLV metadata.
-
-5. Tests and CI
-
-- Integration tests in this repository were updated to be loopback-address agnostic: they use `InetAddress.getLoopbackAddress()`.
-  On systems with IPv6 enabled the loopback will be `::1` and tests will validate the presence of IPv6 entries in UDP responses.
+Integration tests use `InetAddress.getLoopbackAddress()`, so they pass whether the loopback is `127.0.0.1` or `::1`.

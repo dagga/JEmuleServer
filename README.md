@@ -56,8 +56,9 @@ Once the project is compiled, you can start the server with the following comman
 java -jar build/libs/JEmuleServer-1.0.1.jar [config_file] [port]
 ```
 
-- Note: The server now supports IPv6 and will prefer binding to the IPv6 wildcard when available. Avoid forcing the JVM
-  to prefer IPv4 (i.e. do not use `-Djava.net.preferIPv4Stack=true`) if you expect IPv6 connectivity.
+- Note: The server binds to the IPv6 wildcard when available, so IPv6 clients can connect. Avoid forcing the JVM to
+  prefer IPv4 (i.e. do not use `-Djava.net.preferIPv4Stack=true`) if you expect IPv6 connectivity. The ed2k protocol
+  only carries IPv4 addresses: IPv6 clients get a LowID and cannot request callbacks (see [IPv6](doc/ipv6.md)).
 - `[config_file]`: Optional, path to a custom configuration file (defaults to `server.properties` if present).
 - `[port]`: Optional, overrides the port defined in the configuration.
 
@@ -171,7 +172,7 @@ Here is a comparison between JEmuleServer and the historical **eServer (Lugdunum
 | **Child Abuse Filter**              |        ✅ Supported        |        ❌ No         |
 | **External Config File**            |        ✅ Supported        |     ✅ Supported     |
 | **Admin Interface**                 |        ✅ Supported        |     ✅ Supported     |
-| **IPv6 Support**                    |        ✅ Supported        |        ❌ No         |
+| **IPv6 Connections**                | ⚠️ Partial ([limits](doc/ipv6.md)) |        ❌ No         |
 
 ## License
 

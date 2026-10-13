@@ -148,10 +148,16 @@ public class Server {
         System.arraycopy(md5, 0, serverHash, 0, 16);
     }
 
-    private static InetAddress resolvePublicIp(String configIp) {
+    /**
+     * The IPv4 address announced to the clients (OP_SERVERIDENT, server lists): ed2k carries only 4-byte addresses,
+     * so an IPv6 address is never returned.
+     */
+    static InetAddress resolvePublicIp(String configIp) {
         if (configIp != null && !configIp.isBlank()) {
             try {
-                return InetAddress.getByName(configIp);
+                InetAddress configured = InetAddress.getByName(configIp);
+                if (configured instanceof java.net.Inet4Address) return configured;
+                log.warn("publicIp {} is not an IPv4 address (ed2k announces IPv4 only), falling back to auto-detect", configIp);
             } catch (Exception e) {
                 log.warn("Invalid publicIp in config ({}), falling back to auto-detect", configIp);
             }
@@ -176,13 +182,17 @@ public class Server {
         }
         try {
             InetAddress local = InetAddress.getLocalHost();
-            if (!local.isLoopbackAddress()) {
+            if (local instanceof java.net.Inet4Address && !local.isLoopbackAddress()) {
                 log.info("Using InetAddress.getLocalHost(): {}", local.getHostAddress());
                 return local;
             }
         } catch (Exception ignored) {}
         log.warn("Could not resolve public IP, using 127.0.0.1 as fallback");
-        return InetAddress.getLoopbackAddress();
+        try {
+            return InetAddress.getByAddress(new byte[]{127, 0, 0, 1});
+        } catch (java.net.UnknownHostException e) {
+            throw new IllegalStateException(e); // never thrown for a 4-byte address
+        }
     }
 
     public InetAddress getPublicIp() {

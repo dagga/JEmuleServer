@@ -196,14 +196,14 @@ public class LoginHandler {
         ByteBuffer buf = ByteBuffer.allocate(4096).order(ByteOrder.LITTLE_ENDIAN);
         buf.put(hash);
 
-        byte[] addr = publicIp.getAddress();
-        if (addr.length == 4) {
-            buf.put(addr);
+        // ed2k addresses are IPv4: without an IPv4 public address, announce the one the client reached, if any
+        InetAddress local = context.getSocket().getLocalAddress();
+        if (publicIp instanceof java.net.Inet4Address) {
+            buf.put(publicIp.getAddress());
+        } else if (local instanceof java.net.Inet4Address && !local.isAnyLocalAddress()) {
+            buf.put(local.getAddress());
         } else {
-            buf.put((byte) 0x7F);
-            buf.put((byte) 0x00);
-            buf.put((byte) 0x00);
-            buf.put((byte) 0x01);
+            buf.putInt(0); // unknown
         }
         // Port is 2 bytes, written as LITTLE_ENDIAN as per ByteBuffer order
         buf.putShort((short) portInt);
