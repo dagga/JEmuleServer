@@ -325,6 +325,33 @@ public class Server {
         Thread adminThread = new Thread(admin, "AdminInterface");
         adminThread.setDaemon(true);
         adminThread.start();
+        if (config.adminPort() > 0) {
+            Thread.ofVirtual().name("AdminPort").start(this::serveAdminPort);
+        }
+    }
+
+    /**
+     * Admin console over TCP, for a server running as a service without a terminal ("nc 127.0.0.1 &lt;adminPort&gt;").
+     * Bound to the loopback address only: there is no authentication, the access is that of the local machine.
+     */
+    private void serveAdminPort() {
+        try (ServerSocket adminSocket = new ServerSocket(config.adminPort(), 5, InetAddress.getLoopbackAddress())) {
+            log.info("Admin console listening on {}:{}", adminSocket.getInetAddress().getHostAddress(), config.adminPort());
+            while (running) {
+                Socket s = adminSocket.accept();
+                Thread.ofVirtual().name("AdminSession").start(() -> {
+                    try (s; var out = new java.io.PrintStream(s.getOutputStream(), true, java.nio.charset.StandardCharsets.UTF_8)) {
+                        log.info("Admin session opened from {}", s.getRemoteSocketAddress());
+                        new AdminInterface(admin, out).session(new java.io.BufferedReader(
+                                new java.io.InputStreamReader(s.getInputStream(), java.nio.charset.StandardCharsets.UTF_8)), true);
+                    } catch (IOException e) {
+                        log.debug("Admin session closed: {}", e.getMessage());
+                    }
+                });
+            }
+        } catch (IOException e) {
+            log.error("Admin port {} unavailable: {}", config.adminPort(), e.getMessage());
+        }
     }
 
     /** Destination of the answers to one UDP request; answers are obfuscated when {@code key != 0}. */

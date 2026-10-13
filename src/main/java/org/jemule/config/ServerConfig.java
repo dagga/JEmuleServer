@@ -39,6 +39,7 @@ import java.util.Properties;
  * @param cbMinimumNumberOfCalls     Circuit Breaker: min calls before calculating rate.
  * @param cbWaitDurationInSeconds    Circuit Breaker: how long to stay open.
  * @param childAbuseKeywordsPath     Keyword file of the child abuse filter (null: the embedded list).
+ * @param adminPort                  Local TCP port of the admin console (0: disabled).
  */
 public record ServerConfig(
         int port,
@@ -72,7 +73,10 @@ public record ServerConfig(
         int lowIdCheckTimeoutSeconds,
 
         // Keyword file of the child abuse filter (optional – null or empty means the list embedded in the jar)
-        String childAbuseKeywordsPath
+        String childAbuseKeywordsPath,
+
+        // Admin console on a TCP port bound to the loopback address (0 disables it)
+        int adminPort
 ) {
     /** Default time allowed for the HighID test, in seconds. */
     public static final int DEFAULT_LOWID_CHECK_TIMEOUT_SECONDS = 5;
@@ -86,7 +90,7 @@ public record ServerConfig(
         this(port, maxPacketSize, maxSearchResults, floodMaxRequestsPerSecond, maxUsers, maxFiles, maxFilesPerUser,
                 maxSourcesPerFile, databasePath, ipFilterPath, fakeFileDetectionEnabled, cbFailureRateThreshold,
                 cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds, heartbeatIntervalSeconds,
-                publicIp, DEFAULT_LOWID_CHECK_TIMEOUT_SECONDS, null);
+                publicIp, DEFAULT_LOWID_CHECK_TIMEOUT_SECONDS, null, 0);
     }
 
     /** Constructor without the child abuse keyword file (uses the list embedded in the jar). */
@@ -98,12 +102,15 @@ public record ServerConfig(
         this(port, maxPacketSize, maxSearchResults, floodMaxRequestsPerSecond, maxUsers, maxFiles, maxFilesPerUser,
                 maxSourcesPerFile, databasePath, ipFilterPath, fakeFileDetectionEnabled, cbFailureRateThreshold,
                 cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds, heartbeatIntervalSeconds,
-                publicIp, lowIdCheckTimeoutSeconds, null);
+                publicIp, lowIdCheckTimeoutSeconds, null, 0);
     }
 
     public ServerConfig {
         if (port < 1 || port > 65535) {
             throw new IllegalArgumentException("Port must be between 1 and 65535");
+        }
+        if (adminPort < 0 || adminPort > 65535) {
+            throw new IllegalArgumentException("adminPort must be between 0 (disabled) and 65535");
         }
         if (port < 1024) {
             // Non-blocking warning for privileged ports
@@ -139,7 +146,7 @@ public record ServerConfig(
         return new ServerConfig(newPort, maxPacketSize, maxSearchResults, floodMaxRequestsPerSecond, maxUsers, maxFiles,
                 maxFilesPerUser, maxSourcesPerFile, databasePath, ipFilterPath, fakeFileDetectionEnabled,
                 cbFailureRateThreshold, cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds,
-                heartbeatIntervalSeconds, publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath);
+                heartbeatIntervalSeconds, publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort);
     }
 
     /** Same configuration with relative database / IP filter / keyword file paths resolved against the given directory. */
@@ -148,7 +155,7 @@ public record ServerConfig(
                 maxFilesPerUser, maxSourcesPerFile, resolve(baseDir, databasePath), resolve(baseDir, ipFilterPath),
                 fakeFileDetectionEnabled, cbFailureRateThreshold, cbMinimumNumberOfCalls, cbWaitDurationInSeconds,
                 tcpKeepAliveTimeoutInSeconds, heartbeatIntervalSeconds, publicIp, lowIdCheckTimeoutSeconds,
-                resolve(baseDir, childAbuseKeywordsPath));
+                resolve(baseDir, childAbuseKeywordsPath), adminPort);
     }
 
     /** Rooted paths are kept as they are, including "\dir" or "/dir" on Windows, which are not absolute there. */
@@ -180,7 +187,8 @@ public record ServerConfig(
                 Integer.parseInt(props.getProperty("heartbeatIntervalSeconds", String.valueOf(DEFAULT.heartbeatIntervalSeconds()))),
                 props.getProperty("publicIp", DEFAULT.publicIp()),
                 Integer.parseInt(props.getProperty("lowIdCheckTimeoutSeconds", String.valueOf(DEFAULT.lowIdCheckTimeoutSeconds()))),
-                props.getProperty("childAbuseKeywordsPath", DEFAULT.childAbuseKeywordsPath())
+                props.getProperty("childAbuseKeywordsPath", DEFAULT.childAbuseKeywordsPath()),
+                Integer.parseInt(props.getProperty("adminPort", String.valueOf(DEFAULT.adminPort())))
         );
     }
 }

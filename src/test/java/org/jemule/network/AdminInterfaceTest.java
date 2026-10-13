@@ -10,6 +10,8 @@ import org.junit.jupiter.api.Test;
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -69,5 +71,24 @@ public class AdminInterfaceTest {
         admin.handleCommand("stop");
         verify(server).stop();
         assertTrue(outContent.toString().contains("Stopping server"));
+    }
+
+    @Test
+    void remoteSessionAnswersOnItsOwnStreamAndQuitEndsOnlyTheSession() throws Exception {
+        ByteArrayOutputStream remote = new ByteArrayOutputStream();
+        AdminInterface session = new AdminInterface(admin, new PrintStream(remote, true));
+        int lines = session.session(new java.io.BufferedReader(new java.io.StringReader("help\nquit\nstatus\n")), true);
+
+        assertEquals(2, lines, "quit ends the session");
+        assertTrue(remote.toString().contains("Available commands"));
+        assertFalse(outContent.toString().contains("Available commands"), "nothing is written on the console");
+        verifyNoInteractions(server);
+    }
+
+    @Test
+    void stopInARemoteSessionStopsTheServer() throws Exception {
+        AdminInterface session = new AdminInterface(admin, new PrintStream(new ByteArrayOutputStream(), true));
+        session.session(new java.io.BufferedReader(new java.io.StringReader("stop\n")), true);
+        verify(server).stop();
     }
 }

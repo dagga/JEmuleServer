@@ -51,6 +51,16 @@ class ServerConfigTest {
         
         assertEquals(ServerConfig.DEFAULT.port(), cfg.port());
         assertEquals(ServerConfig.DEFAULT.maxFiles(), cfg.maxFiles());
+        assertEquals(0, cfg.adminPort(), "the admin port is disabled by default");
+    }
+
+    @Test
+    void testAdminPort() {
+        Properties props = new Properties();
+        props.setProperty("adminPort", "4670");
+        assertEquals(4670, ServerConfig.fromProperties(props).adminPort());
+        props.setProperty("adminPort", "70000");
+        assertThrows(IllegalArgumentException.class, () -> ServerConfig.fromProperties(props));
     }
 
     @Test

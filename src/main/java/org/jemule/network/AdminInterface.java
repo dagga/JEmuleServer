@@ -26,13 +26,17 @@ import org.jemule.security.IPFilter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.PrintStream;
 import java.lang.management.ManagementFactory;
 import java.lang.management.MemoryMXBean;
 import java.lang.management.OperatingSystemMXBean;
-import java.util.Scanner;
 
 /**
- * Provides a command-line interface for server administration.
+ * Provides a command-line interface for server administration: on the standard input of the server, and on the
+ * local admin port (see {@code adminPort}) when the server runs as a service without a terminal.
  */
 public class AdminInterface implements Runnable {
     private static final Logger log = LoggerFactory.getLogger(AdminInterface.class);
@@ -42,6 +46,8 @@ public class AdminInterface implements Runnable {
     private final IPFilter ipFilter;
     private final FakeFileDetector fakeFileDetector;
     private final long startTime;
+    /** Destination of the answers; null for the current System.out (the console). */
+    private final PrintStream output;
 
     public AdminInterface(Server server, ClientRegistry registry, FileIndex fileIndex, IPFilter ipFilter, FakeFileDetector fakeFileDetector) {
         this.server = server;
@@ -50,6 +56,22 @@ public class AdminInterface implements Runnable {
         this.ipFilter = ipFilter;
         this.fakeFileDetector = fakeFileDetector;
         this.startTime = System.currentTimeMillis();
+        this.output = null;
+    }
+
+    /** An interface answering on {@code output}, for one session of the admin port. */
+    AdminInterface(AdminInterface console, PrintStream output) {
+        this.server = console.server;
+        this.registry = console.registry;
+        this.fileIndex = console.fileIndex;
+        this.ipFilter = console.ipFilter;
+        this.fakeFileDetector = console.fakeFileDetector;
+        this.startTime = console.startTime;
+        this.output = output;
+    }
+
+    private PrintStream out() {
+        return output != null ? output : System.out;
     }
 
     public void handleCommand(String line) {
@@ -63,23 +85,44 @@ public class AdminInterface implements Runnable {
             case "ban" -> handleBan(parts);
             case "help" -> showHelp();
             case "stop", "exit", "quit" -> {
-                System.out.println("Stopping server...");
+                out().println("Stopping server...");
                 server.stop();
             }
-            default -> System.out.println("Unknown command: " + command + ". Type 'help' for list.");
+            default -> out().println("Unknown command: " + command + ". Type 'help' for list.");
         }
     }
 
+    /** Console session on the standard input; 'stop', 'exit' and 'quit' shut the server down. */
     @Override
     public void run() {
-        Scanner scanner = new Scanner(System.in);
-        System.out.println("=== JEmuleServer Admin Interface (" + Main.VERSION + ") ===");
-        System.out.println("Type 'help' for available commands.");
+        try {
+            if (session(new BufferedReader(new InputStreamReader(System.in)), false) == 0) {
+                log.info("No standard input (service mode): the admin console is closed, use the admin port (adminPort)");
+            }
+        } catch (IOException e) {
+            log.warn("Admin console closed: {}", e.getMessage());
+        }
+    }
 
+    /**
+     * Reads and runs commands until the end of the input. In a remote session, 'exit' and 'quit' only end the
+     * session; 'stop' always shuts the server down.
+     *
+     * @return the number of lines read
+     */
+    int session(BufferedReader in, boolean remote) throws IOException {
+        out().println("=== JEmuleServer Admin Interface (" + Main.VERSION + ") ===");
+        out().println("Type 'help' for available commands.");
+        int lines = 0;
         while (true) {
-            System.out.print("> ");
-            if (!scanner.hasNextLine()) break;
-            handleCommand(scanner.nextLine());
+            out().print("> ");
+            out().flush();
+            String line = in.readLine();
+            if (line == null) return lines;
+            lines++;
+            String command = line.trim().toLowerCase();
+            if (remote && (command.equals("exit") || command.equals("quit"))) return lines;
+            handleCommand(line);
         }
     }
 
@@ -88,70 +131,70 @@ public class AdminInterface implements Runnable {
         OperatingSystemMXBean os = ManagementFactory.getOperatingSystemMXBean();
         MemoryMXBean mem = ManagementFactory.getMemoryMXBean();
 
-        System.out.println("--- Server Status ---");
-        System.out.println("Version: " + Main.VERSION);
-        System.out.println("Uptime: " + uptime + "s");
-        System.out.println("Registered Clients: " + registry.size());
-        System.out.println("Indexed Files: " + fileIndex.fileCount());
-        System.out.println("IP Filter Ranges: " + ipFilter.getFilterCount());
-        System.out.println("System Load: " + String.format("%.2f", os.getSystemLoadAverage()));
-        System.out.println("Memory Used: " + (mem.getHeapMemoryUsage().getUsed() / 1024 / 1024) + " MB");
-        System.out.println("---------------------");
+        out().println("--- Server Status ---");
+        out().println("Version: " + Main.VERSION);
+        out().println("Uptime: " + uptime + "s");
+        out().println("Registered Clients: " + registry.size());
+        out().println("Indexed Files: " + fileIndex.fileCount());
+        out().println("IP Filter Ranges: " + ipFilter.getFilterCount());
+        out().println("System Load: " + String.format("%.2f", os.getSystemLoadAverage()));
+        out().println("Memory Used: " + (mem.getHeapMemoryUsage().getUsed() / 1024 / 1024) + " MB");
+        out().println("---------------------");
     }
 
     private void showClients() {
-        System.out.println("--- Connected Clients (" + registry.size() + ") ---");
-        System.out.printf("%-15s | %-10s | %-10s | %-8s | %s%n", "IP", "ID", "Type", "Files", "Uptime");
-        System.out.println("---------------------------------------------------------------");
+        out().println("--- Connected Clients (" + registry.size() + ") ---");
+        out().printf("%-15s | %-10s | %-10s | %-8s | %s%n", "IP", "ID", "Type", "Files", "Uptime");
+        out().println("---------------------------------------------------------------");
         long now = System.currentTimeMillis();
         int count = 0;
         for (org.jemule.core.ClientState client : registry.getAllClients()) {
             if (count++ > 50) {
-                System.out.println("... and more");
+                out().println("... and more");
                 break;
             }
             String type = client.isHighId() ? "HighID" : "LowID";
             long uptime = (now - client.connectedAt()) / 1000;
-            System.out.printf("%-15s | %-10s | %-10s | %-8d | %ds%n",
+            out().printf("%-15s | %-10s | %-10s | %-8d | %ds%n",
                     client.address().getHostAddress(),
                     Long.toUnsignedString(client.clientId()),
                     type,
                     client.publishedFilesCount().get(),
                     uptime);
         }
-        System.out.println("---------------------------------------------------------------");
+        out().println("---------------------------------------------------------------");
     }
 
     private void showFiles() {
-        System.out.println("--- File Statistics ---");
-        System.out.println("Total files indexed: " + fileIndex.fileCount());
-        System.out.println("Fake file detection: " + (fakeFileDetector.isEnabled() ? "ENABLED" : "DISABLED"));
-        System.out.println("------------------------");
+        out().println("--- File Statistics ---");
+        out().println("Total files indexed: " + fileIndex.fileCount());
+        out().println("Fake file detection: " + (fakeFileDetector.isEnabled() ? "ENABLED" : "DISABLED"));
+        out().println("------------------------");
     }
 
     private void handleBan(String[] parts) {
         if (parts.length < 2) {
-            System.out.println("Usage: ban <hash> [reason]");
+            out().println("Usage: ban <hash> [reason]");
             return;
         }
         String hash = parts[1].toUpperCase();
         if (!hash.matches("[0-9A-F]{32}")) {
-            System.out.println("Error: Hash must be 32 characters (hex).");
+            out().println("Error: Hash must be 32 characters (hex).");
             return;
         }
         String reason = "Manual ban" + (parts.length > 2 ? ": " + parts[2] : "");
         fakeFileDetector.ban(hash, reason);
         boolean removed = fileIndex.removeFile(hash);
-        System.out.println("Hash " + hash + " added to blacklist" + (removed ? " and removed from the index." : "."));
+        out().println("Hash " + hash + " added to blacklist" + (removed ? " and removed from the index." : "."));
     }
 
     private void showHelp() {
-        System.out.println("Available commands:");
-        System.out.println("  status          - Show server performance and stats");
-        System.out.println("  clients         - Show connected clients count");
-        System.out.println("  files           - Show file indexing stats");
-        System.out.println("  ban <hash> [R]  - Ban a file hash (32 hex chars)");
-        System.out.println("  help            - Show this help message");
-        System.out.println("  stop/exit/quit  - Shutdown the server");
+        out().println("Available commands:");
+        out().println("  status          - Show server performance and stats");
+        out().println("  clients         - Show connected clients count");
+        out().println("  files           - Show file indexing stats");
+        out().println("  ban <hash> [R]  - Ban a file hash (32 hex chars)");
+        out().println("  help            - Show this help message");
+        out().println("  stop/exit/quit  - Shutdown the server");
     }
 }

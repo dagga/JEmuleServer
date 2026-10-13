@@ -115,11 +115,22 @@ The server therefore needs to open outgoing TCP connections to the clients.
 
 JEmuleServer includes a command-line interface (CLI) for administration. When running the server, you can type commands directly into the terminal.
 
+A server running as a service (systemd, Windows service) has no terminal. Set `adminPort` in `server.properties` to
+open the same console on a TCP port bound to `127.0.0.1` only, then connect from the server machine:
+
+```bash
+nc 127.0.0.1 4670
+```
+
+The admin port has no authentication: anyone with a shell on the machine can use it. It is disabled by default
+(`adminPort=0`). In such a session, `exit` and `quit` close the session; `stop` still shuts the server down.
+
 Available commands:
 - `status`: Displays server performance, uptime, and core statistics.
 - `clients`: Lists connected clients with their IP, ID, type (HighID/LowID), and published files count.
 - `files`: Shows file indexing statistics and fake file detection status.
-- `ban <hash> [reason]`: Manually adds a file hash (32-char hex) to the blacklist.
+- `ban <hash> [reason]`: Bans a file hash (32-char hex) for good: it is stored in the database with its reason and the
+  file is removed from the index.
 - `help`: Shows the list of available commands.
 - `stop` / `exit` / `quit`: Safely shuts down the server.
 
