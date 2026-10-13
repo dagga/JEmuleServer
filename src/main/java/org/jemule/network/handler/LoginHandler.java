@@ -82,7 +82,7 @@ public class LoginHandler {
 
     /**
      * Chooses the client's ID like eD2K servers do: its IP (HighID) if it accepts incoming connections on
-     * the TCP port announced in the login, a LowID (&lt; 2^24) otherwise. An IP whose ID would be below 2^24
+     * the TCP port announced in the login (the answer must carry its user hash), a LowID (&lt; 2^24) otherwise. An IP whose ID would be below 2^24
      * (x.y.z.0) or that is not IPv4 can only get a LowID.
      */
     static long assignClientId(ClientContext context, ClientState state) {
@@ -92,7 +92,7 @@ public class LoginHandler {
             byte[] serverHash = server != null ? server.getServerHash() : new byte[16];
             InetAddress serverIp = server != null ? server.getPublicIp() : null;
             FirewallChecker checker = new FirewallChecker(context.getConfig().lowIdCheckTimeoutSeconds() * 1000);
-            if (checker.isReachable(state.address(), state.listenPort(), serverHash, serverIp, context.getConfig().port())) {
+            if (checker.isReachable(state.address(), state.listenPort(), state.userHash(), serverHash, serverIp, context.getConfig().port())) {
                 return ipId;
             }
         }

@@ -11,6 +11,7 @@ import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -19,6 +20,10 @@ import java.util.List;
  * and waits for the OP_HELLOANSWER (CClientReqSocket::ProcessPacket / CUpDownClient::SendHelloAnswer).
  * eMule accepts this unencrypted test connection even when it requires obfuscation, because it is
  * "awaiting a test" from the server it is logging in to (CServerConnect::AwaitingTestFromIP).
+ * <p>
+ * The answer must come from the client that is logging in: behind a NAT, the announced port may be forwarded
+ * to another client sharing the same public IP, which would answer in its place. The user hash of the
+ * OP_HELLOANSWER is therefore compared with the one of the login request.
  */
 public class FirewallChecker {
     private static final Logger log = LoggerFactory.getLogger(FirewallChecker.class);
@@ -31,8 +36,11 @@ public class FirewallChecker {
         this.timeoutMs = timeoutMs;
     }
 
-    /** @return true if the client answered our OP_HELLO on ip:port within the timeout */
-    public boolean isReachable(InetAddress ip, int port, byte[] serverHash, InetAddress serverIp, int serverPort) {
+    /**
+     * @param userHash user hash sent by the client in its login request
+     * @return true if the client with this user hash answered our OP_HELLO on ip:port within the timeout
+     */
+    public boolean isReachable(InetAddress ip, int port, byte[] userHash, byte[] serverHash, InetAddress serverIp, int serverPort) {
         if (port <= 0 || timeoutMs <= 0) return false;
         try (Socket s = new Socket()) {
             s.connect(new InetSocketAddress(ip, port), timeoutMs);
@@ -45,7 +53,13 @@ public class FirewallChecker {
             for (int i = 0; i < 8 && System.currentTimeMillis() < deadline; i++) {
                 Packet p = Packet.read(in, 64 * 1024);
                 if ((p.protocol() == Packet.PROTOCOL_ED2K || p.protocol() == Packet.PROTOCOL_ZLIB) && p.opcode() == OP_HELLOANSWER) {
-                    return true;
+                    // OP_HELLOANSWER: <user hash 16><ID 4><port 2><tags>...
+                    byte[] data = p.data();
+                    if (data.length >= 16 && Arrays.equals(data, 0, 16, userHash, 0, 16)) {
+                        return true;
+                    }
+                    log.info("Firewall check of {}:{} answered by another client (user hash mismatch)", ip.getHostAddress(), port);
+                    return false;
                 }
             }
         } catch (IOException e) {

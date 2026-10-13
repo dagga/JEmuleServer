@@ -31,6 +31,11 @@ class LowIdCompatibilityTest {
 
     /** Fake eMule client listening on a port; answers OP_HELLO like CUpDownClient::SendHelloAnswer if asked to. */
     static ServerSocket fakeClient(boolean answer, AtomicReference<byte[]> receivedHello) throws Exception {
+        return fakeClient(answer, new byte[16], receivedHello);
+    }
+
+    /** Same, answering with the given user hash. */
+    static ServerSocket fakeClient(boolean answer, byte[] userHash, AtomicReference<byte[]> receivedHello) throws Exception {
         ServerSocket ss = new ServerSocket(0, 1, InetAddress.getLoopbackAddress());
         Thread t = new Thread(() -> {
             try (Socket s = ss.accept()) {
@@ -38,7 +43,7 @@ class LowIdCompatibilityTest {
                 receivedHello.set(hello.data());
                 if (answer) {
                     ByteBuffer b = ByteBuffer.allocate(64).order(ByteOrder.LITTLE_ENDIAN);
-                    b.put(new byte[16]).putInt(0).putShort((short) ss.getLocalPort()).putInt(0).putInt(0).putShort((short) 0);
+                    b.put(userHash).putInt(0).putShort((short) ss.getLocalPort()).putInt(0).putInt(0).putShort((short) 0);
                     new Packet(Packet.PROTOCOL_ED2K, (byte) 0x4C, java.util.Arrays.copyOf(b.array(), b.position())).write(s.getOutputStream(), false);
                 } else {
                     Thread.sleep(3000);
@@ -52,10 +57,14 @@ class LowIdCompatibilityTest {
     }
 
     static int login(ClientRegistry registry, int listenPort) throws Exception {
+        return login(registry, listenPort, new byte[16]);
+    }
+
+    static int login(ClientRegistry registry, int listenPort, byte[] userHash) throws Exception {
         FakeContext ctx = new FakeContext(new DummySocket(InetAddress.getLoopbackAddress(), 51000), CONFIG, registry, new FileIndex(null));
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         new LoginHandler().handleLogin(ctx, new Packet(Packet.PROTOCOL_ED2K, OpCode.LOGIN_REQUEST.value,
-                loginRequest(new byte[16], listenPort, "tester", EMULE_DEFAULT_SRVCAPS)), out);
+                loginRequest(userHash, listenPort, "tester", EMULE_DEFAULT_SRVCAPS)), out);
         ByteArrayInputStream in = new ByteArrayInputStream(out.toByteArray());
         while (in.available() > 0) {
             Packet p = Packet.read(in, 65536);
@@ -106,5 +115,22 @@ class LowIdCompatibilityTest {
         assertTrue(id2 > 0 && id2 < 0x01000000, "LowID expected: " + id2);
         assertNotEquals(id1, id2, "LowIDs are unique");
         assertEquals(2, registry.lowIdCount());
+    }
+
+    @Test
+    @Timeout(10)
+    void portAnsweredByAnotherClientGetsALowId() throws Exception {
+        // Two clients behind the same NAT: the announced port is forwarded to the other one, which answers
+        byte[] otherClient = new byte[16];
+        otherClient[0] = 1;
+        byte[] loggingIn = new byte[16];
+        loggingIn[0] = 2;
+        AtomicReference<byte[]> hello = new AtomicReference<>();
+        int id;
+        try (ServerSocket ss = fakeClient(true, otherClient, hello)) {
+            id = login(new ClientRegistry(), ss.getLocalPort(), loggingIn);
+        }
+        assertNotNull(hello.get(), "the test connection was made");
+        assertTrue(id > 0 && id < 0x01000000, "LowID expected: " + id);
     }
 }
