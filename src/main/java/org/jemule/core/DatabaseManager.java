@@ -134,6 +134,45 @@ public class DatabaseManager implements AutoCloseable {
         return hashes;
     }
 
+    /** Banned hashes whose reason starts with the given prefix. */
+    public List<String> loadBannedHashes(String reasonPrefix) {
+        try {
+            return circuitBreaker.executeCheckedSupplier(() -> loadBannedHashesInternal(reasonPrefix));
+        } catch (Throwable e) {
+            logger.error("Circuit breaker prevented or caught error during loadBannedHashes: {}", e.getMessage());
+            return new ArrayList<>();
+        }
+    }
+
+    private List<String> loadBannedHashesInternal(String reasonPrefix) throws SQLException {
+        List<String> hashes = new ArrayList<>();
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT hash FROM banned_hashes WHERE reason LIKE ? ESCAPE '\\'")) {
+            ps.setString(1, reasonPrefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%");
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    hashes.add(rs.getString("hash"));
+                }
+            }
+        }
+        return hashes;
+    }
+
+    /** Deletes a file and its tags. */
+    public void deleteFile(String hash) {
+        try {
+            circuitBreaker.executeCheckedSupplier(() -> {
+                try (PreparedStatement ps = connection.prepareStatement("DELETE FROM files WHERE hash = ?")) {
+                    ps.setString(1, hash);
+                    ps.executeUpdate();
+                }
+                return null;
+            });
+        } catch (Throwable e) {
+            logger.error("Circuit breaker prevented or caught error during deleteFile: {}", e.getMessage());
+        }
+    }
+
     public void saveFile(FileMetadata meta) {
         try {
             circuitBreaker.executeCheckedSupplier(() -> {

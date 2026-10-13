@@ -26,6 +26,7 @@ import org.jemule.protocol.Tag;
 import org.jemule.core.event.ClientEvent;
 import org.jemule.core.event.EventManager;
 import org.jemule.core.event.FileEvent;
+import org.jemule.security.ChildAbuseFilter;
 import org.jemule.security.FakeFileDetector;
 import org.jemule.security.FloodProtector;
 import org.jemule.security.IPFilter;
@@ -132,7 +133,7 @@ public class Server {
             log.error("Failed to initialize database: {}", e.getMessage());
         }
         this.db = dbMgr;
-        this.fileIndex = new FileIndex(db, eventManager);
+        this.fileIndex = new FileIndex(db, eventManager, ChildAbuseFilter.load(config.childAbuseKeywordsPath()));
         this.admin = new AdminInterface(this, registry, fileIndex, ipFilter, fakeFileDetector);
         this.publicIp = resolvePublicIp(config.publicIp());
 

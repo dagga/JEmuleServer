@@ -79,6 +79,27 @@ lowIdCheckTimeoutSeconds=5
 All parameters can be tuned in this file, including quotas, flood protection thresholds, and circuit breaker settings.
 The commented [`server.properties`](server.properties) at the root of the repository lists all of them.
 
+## Child Abuse Filter
+
+The server refuses files whose name advertises child sexual abuse material, and announces it in its name
+(`JEmuleServer vX (no pedo)`). A file is rejected if its name contains a term specific to such content, or a term
+designating a minor (or an age under 18, such as `6yo` or `9 ans`) together with a sexual term. A rejected file:
+
+- is never indexed, and the publishing client is warned that some of its files were refused;
+- has its hash banned for good (table `banned_hashes`), so it stays refused under any other name;
+- is deleted from the database at startup if an older version had stored it. Every deleted or banned file is
+  logged with its hash and name.
+
+Unlike `fakeFileDetectionEnabled`, this filter cannot be disabled. The keywords are read from
+[`child-abuse-keywords.properties`](src/main/resources/child-abuse-keywords.properties), embedded in the jar; the
+file documents its syntax. To use your own list, copy it and set its path in `server.properties`:
+
+```properties
+childAbuseKeywordsPath=/etc/jemuleserver/child-abuse-keywords.properties
+```
+
+Your file replaces the embedded list. If it cannot be read, the server logs an error and uses the embedded list.
+
 ## HighID / LowID
 
 At login, the server connects back to the TCP port announced by the client and sends an `OP_HELLO`. The client gets
@@ -147,6 +168,7 @@ Here is a comparison between JEmuleServer and the historical **eServer (Lugdunum
 | **IP Filtering (ipfilter.dat)**     |        ✅ Supported        |     ✅ Supported     |
 | **LowID Management (Callback)**     |        ✅ Supported        |     ✅ Supported     |
 | **Fake File Detection**             |        ✅ Supported        |     ✅ Supported     |
+| **Child Abuse Filter**              |        ✅ Supported        |        ❌ No         |
 | **External Config File**            |        ✅ Supported        |     ✅ Supported     |
 | **Admin Interface**                 |        ✅ Supported        |     ✅ Supported     |
 | **IPv6 Support**                    |        ✅ Supported        |        ❌ No         |

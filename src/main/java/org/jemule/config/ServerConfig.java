@@ -38,6 +38,7 @@ import java.util.Properties;
  * @param cbFailureRateThreshold     Circuit Breaker: threshold percentage for opening.
  * @param cbMinimumNumberOfCalls     Circuit Breaker: min calls before calculating rate.
  * @param cbWaitDurationInSeconds    Circuit Breaker: how long to stay open.
+ * @param childAbuseKeywordsPath     Keyword file of the child abuse filter (null: the embedded list).
  */
 public record ServerConfig(
         int port,
@@ -68,7 +69,10 @@ public record ServerConfig(
 
         // HighID test: time allowed to connect to the client's listen port and get its OP_HELLOANSWER
         // (0 disables the test: every client gets a LowID)
-        int lowIdCheckTimeoutSeconds
+        int lowIdCheckTimeoutSeconds,
+
+        // Keyword file of the child abuse filter (optional – null or empty means the list embedded in the jar)
+        String childAbuseKeywordsPath
 ) {
     /** Default time allowed for the HighID test, in seconds. */
     public static final int DEFAULT_LOWID_CHECK_TIMEOUT_SECONDS = 5;
@@ -82,7 +86,19 @@ public record ServerConfig(
         this(port, maxPacketSize, maxSearchResults, floodMaxRequestsPerSecond, maxUsers, maxFiles, maxFilesPerUser,
                 maxSourcesPerFile, databasePath, ipFilterPath, fakeFileDetectionEnabled, cbFailureRateThreshold,
                 cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds, heartbeatIntervalSeconds,
-                publicIp, DEFAULT_LOWID_CHECK_TIMEOUT_SECONDS);
+                publicIp, DEFAULT_LOWID_CHECK_TIMEOUT_SECONDS, null);
+    }
+
+    /** Constructor without the child abuse keyword file (uses the list embedded in the jar). */
+    public ServerConfig(int port, int maxPacketSize, int maxSearchResults, int floodMaxRequestsPerSecond, int maxUsers,
+                        int maxFiles, int maxFilesPerUser, int maxSourcesPerFile, String databasePath, String ipFilterPath,
+                        boolean fakeFileDetectionEnabled, float cbFailureRateThreshold, int cbMinimumNumberOfCalls,
+                        int cbWaitDurationInSeconds, int tcpKeepAliveTimeoutInSeconds, int heartbeatIntervalSeconds,
+                        String publicIp, int lowIdCheckTimeoutSeconds) {
+        this(port, maxPacketSize, maxSearchResults, floodMaxRequestsPerSecond, maxUsers, maxFiles, maxFilesPerUser,
+                maxSourcesPerFile, databasePath, ipFilterPath, fakeFileDetectionEnabled, cbFailureRateThreshold,
+                cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds, heartbeatIntervalSeconds,
+                publicIp, lowIdCheckTimeoutSeconds, null);
     }
 
     public ServerConfig {
@@ -123,15 +139,16 @@ public record ServerConfig(
         return new ServerConfig(newPort, maxPacketSize, maxSearchResults, floodMaxRequestsPerSecond, maxUsers, maxFiles,
                 maxFilesPerUser, maxSourcesPerFile, databasePath, ipFilterPath, fakeFileDetectionEnabled,
                 cbFailureRateThreshold, cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds,
-                heartbeatIntervalSeconds, publicIp, lowIdCheckTimeoutSeconds);
+                heartbeatIntervalSeconds, publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath);
     }
 
-    /** Same configuration with relative database / IP filter paths resolved against the given directory. */
+    /** Same configuration with relative database / IP filter / keyword file paths resolved against the given directory. */
     public ServerConfig withPathsRelativeTo(java.nio.file.Path baseDir) {
         return new ServerConfig(port, maxPacketSize, maxSearchResults, floodMaxRequestsPerSecond, maxUsers, maxFiles,
                 maxFilesPerUser, maxSourcesPerFile, resolve(baseDir, databasePath), resolve(baseDir, ipFilterPath),
                 fakeFileDetectionEnabled, cbFailureRateThreshold, cbMinimumNumberOfCalls, cbWaitDurationInSeconds,
-                tcpKeepAliveTimeoutInSeconds, heartbeatIntervalSeconds, publicIp, lowIdCheckTimeoutSeconds);
+                tcpKeepAliveTimeoutInSeconds, heartbeatIntervalSeconds, publicIp, lowIdCheckTimeoutSeconds,
+                resolve(baseDir, childAbuseKeywordsPath));
     }
 
     /** Rooted paths are kept as they are, including "\dir" or "/dir" on Windows, which are not absolute there. */
@@ -162,7 +179,8 @@ public record ServerConfig(
                 Integer.parseInt(props.getProperty("tcpKeepAliveTimeoutInSeconds", String.valueOf(DEFAULT.tcpKeepAliveTimeoutInSeconds()))),
                 Integer.parseInt(props.getProperty("heartbeatIntervalSeconds", String.valueOf(DEFAULT.heartbeatIntervalSeconds()))),
                 props.getProperty("publicIp", DEFAULT.publicIp()),
-                Integer.parseInt(props.getProperty("lowIdCheckTimeoutSeconds", String.valueOf(DEFAULT.lowIdCheckTimeoutSeconds())))
+                Integer.parseInt(props.getProperty("lowIdCheckTimeoutSeconds", String.valueOf(DEFAULT.lowIdCheckTimeoutSeconds()))),
+                props.getProperty("childAbuseKeywordsPath", DEFAULT.childAbuseKeywordsPath())
         );
     }
 }
