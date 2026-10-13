@@ -21,6 +21,9 @@ package org.jemule.core;
 
 import org.jemule.core.event.EventManager;
 import org.jemule.core.event.FileEvent;
+import org.jemule.security.ChildAbuseFilter;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -31,10 +34,14 @@ import java.util.concurrent.ConcurrentSkipListMap;
  * Provides fast full-text and complex search capabilities using an inverted index.
  */
 public class FileIndex {
+    private static final Logger log = LoggerFactory.getLogger(FileIndex.class);
     private final ConcurrentHashMap<String, FileMetadata> byHash = new ConcurrentHashMap<>();
     private final ConcurrentSkipListMap<String, Set<String>> invertedIndex = new ConcurrentSkipListMap<>();
     private final DatabaseManager db;
     private final EventManager eventManager;
+    private final ChildAbuseFilter abuseFilter;
+    /** Hashes banned by the child abuse filter (upper case), loaded from the database and completed at runtime. */
+    private final Set<String> abuseBannedHashes = ConcurrentHashMap.newKeySet();
 
     // LRU Cache for searches (Thread-safe via Collections.synchronizedMap)
     private final Map<String, List<FileMetadata>> searchCache = Collections.synchronizedMap(new LinkedHashMap<>(128, 0.75f, true) {
@@ -45,19 +52,32 @@ public class FileIndex {
     });
 
     /**
-     * Constructs a FileIndex, optionally loading existing files from the database.
+     * Constructs a FileIndex, optionally loading existing files from the database. Files of the database that the
+     * child abuse filter rejects are deleted from it and banned instead of being loaded.
      *
      * @param db           The database manager for persistence.
      * @param eventManager The event manager for broadcasting file events.
+     * @param abuseFilter  The child abuse filter applied to every published or loaded file.
      */
-    public FileIndex(DatabaseManager db, EventManager eventManager) {
+    public FileIndex(DatabaseManager db, EventManager eventManager, ChildAbuseFilter abuseFilter) {
         this.db = db;
         this.eventManager = eventManager;
+        this.abuseFilter = abuseFilter;
         if (db != null) {
             try {
+                db.loadBannedHashes(ChildAbuseFilter.BAN_REASON).forEach(h -> abuseBannedHashes.add(h.toUpperCase(Locale.ROOT)));
                 List<FileMetadata> loaded = db.loadFiles();
+                int purged = 0;
                 for (FileMetadata meta : loaded) {
-                    indexInMemory(meta);
+                    if (isChildAbuse(meta.hash(), meta.name())) {
+                        db.deleteFile(meta.hash());
+                        purged++;
+                    } else {
+                        indexInMemory(meta);
+                    }
+                }
+                if (purged > 0) {
+                    log.warn("Deleted {} child abuse file(s) from the database", purged);
                 }
             } catch (Exception e) {
                 // If DB fails during load, we continue with empty memory index
@@ -66,8 +86,31 @@ public class FileIndex {
         }
     }
 
+    public FileIndex(DatabaseManager db, EventManager eventManager) {
+        this(db, eventManager, ChildAbuseFilter.defaults());
+    }
+
     public FileIndex(DatabaseManager db) {
         this(db, null);
+    }
+
+    /**
+     * Checks a file against the child abuse filter. A file whose name matches has its hash banned for good
+     * (banned_hashes in the database), so that it stays rejected whatever name it is published under.
+     *
+     * @return true if the file must be rejected
+     */
+    public boolean isChildAbuse(String hash, String name) {
+        String key = hash.toUpperCase(Locale.ROOT);
+        if (abuseBannedHashes.contains(key)) return true;
+        if (!abuseFilter.matches(name)) return false;
+        abuseBannedHashes.add(key);
+        log.warn("Child abuse file banned: hash={} name='{}'", hash, name);
+        if (db != null) {
+            String reason = ChildAbuseFilter.BAN_REASON + ": " + name;
+            db.addBannedHash(key, reason.length() > 255 ? reason.substring(0, 255) : reason);
+        }
+        return true;
     }
 
     /**

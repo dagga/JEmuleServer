@@ -35,7 +35,7 @@ public class PublishHandler {
             log.info("Received {} with {} files ({} bytes)", op, count, data.length);
         }
 
-        int rejectedAsFake = 0;
+        int rejected = 0;
         for (long i = 0; i < count; i++) {
             if (buf.remaining() < 16) {
                 log.warn("Truncated {}: file {}/{} has no hash (remaining {} bytes)", op, i + 1, count, buf.remaining());
@@ -66,20 +66,20 @@ public class PublishHandler {
             }
 
             if (!publishFile(context, HandlerUtils.bytesToHashString(hashBytes), tags, partial)) {
-                rejectedAsFake++;
+                rejected++;
             }
         }
 
-        if (rejectedAsFake > 0) {
+        if (rejected > 0) {
             // One message for the whole offer: a client may publish up to 200 files per packet
-            LoginHandler.sendServerMessage(context, out, "WARNING : " + rejectedAsFake + " shared file(s) rejected by the server (spam/fake detection)");
+            LoginHandler.sendServerMessage(context, out, "WARNING : " + rejected + " shared file(s) rejected by the server (spam/fake/child abuse detection)");
         }
     }
 
     /**
      * Validates and indexes one offered file.
      *
-     * @return false if the file was rejected by the fake file detector, true otherwise
+     * @return false if the file was rejected by the child abuse filter or the fake file detector, true otherwise
      */
     private boolean publishFile(ClientContext context, String hash, List<Tag> tags, boolean partial) {
         String name = "";
@@ -112,6 +112,10 @@ public class PublishHandler {
         if (size <= 0 || size > MAX_EMULE_FILE_SIZE) {
             log.warn("Invalid file size for '{}': {}", HandlerUtils.sanitize(name), size);
             return true;
+        }
+        if (context.getFileIndex().isChildAbuse(hash, name)) {
+            log.warn("Child abuse file rejected from client {} (hash={})", context.getState().clientId(), hash);
+            return false;
         }
         if (context.getState().publishedFilesCount().get() >= context.getConfig().maxFilesPerUser()) {
             log.warn("Publish quota reached for client {} ({} files)", context.getState().clientId(), context.getConfig().maxFilesPerUser());

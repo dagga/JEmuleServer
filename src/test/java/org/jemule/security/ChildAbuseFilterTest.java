@@ -1,0 +1,75 @@
+package org.jemule.security;
+
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Properties;
+
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+class ChildAbuseFilterTest {
+
+    private final ChildAbuseFilter filter = ChildAbuseFilter.defaults();
+
+    @Test
+    void bannedTermsMatchAlone() {
+        assertTrue(filter.matches("(pthc) video.avi"));
+        assertTrue(filter.matches("new_PTHC_2024.mpg"));
+        assertTrue(filter.matches("Hussyfan collection.zip"));
+        assertTrue(filter.matches("r@ygold.avi"));
+        assertTrue(filter.matches("pedophilia.avi"));
+        assertTrue(filter.matches("Child.Porn.avi"));
+        assertTrue(filter.matches("best kidporn.mpg"));
+    }
+
+    @Test
+    void minorWithSexualTermMatches() {
+        assertTrue(filter.matches("BOYFUCK - 6Yo Hot Red Haired Boy Gets Stripped On Floor.avi"));
+        assertTrue(filter.matches("12 y.o. nude.jpg"));
+        assertTrue(filter.matches("girl 9yrs old naked.avi"));
+        assertTrue(filter.matches("preteen sex.mpg"));
+        assertTrue(filter.matches("Kids_XXX.wmv"));
+        assertTrue(filter.matches("fillette 10 ans baise.avi"));
+    }
+
+    @Test
+    void legitimateNamesDoNotMatch() {
+        assertFalse(filter.matches("Cheech & Chong - 7 - Get Out of My Room (1985).avi"));
+        assertFalse(filter.matches("Men - Diego Sans & Ian Frost - Revolt Part 1.mp4"));
+        assertFalse(filter.matches("18yo amateur xxx.avi"), "adults are not minors");
+        assertFalse(filter.matches("Spy Kids 2 (2002).avi"), "a minor term alone is not enough");
+        assertFalse(filter.matches("Sex Education S01E01.mkv"), "a sexual term alone is not enough");
+        assertFalse(filter.matches("Baby 2 years old first steps.mp4"));
+        assertFalse(filter.matches("Depthcharge.iso"));
+        assertFalse(filter.matches("Torpedo - Speedo - Pedometer.mp3"));
+        assertFalse(filter.matches("Kidnapped (1960).avi"));
+        assertFalse(filter.matches("Windows 2000 SP4.iso"));
+        assertFalse(filter.matches(""));
+        assertFalse(filter.matches(null));
+    }
+
+    @Test
+    void keywordFileReplacesTheDefaults(@TempDir Path dir) throws Exception {
+        Path file = dir.resolve("keywords.properties");
+        Files.writeString(file, "banned = forbidden*\nminor = little\nsexual = *dirty\nageSuffixes = yo\nmaxMinorAge = 10\n");
+        ChildAbuseFilter custom = ChildAbuseFilter.load(file.toString());
+        assertTrue(custom.matches("ForbiddenThing.avi"));
+        assertTrue(custom.matches("little superdirty.avi"));
+        assertTrue(custom.matches("9yo dirty.avi"));
+        assertFalse(custom.matches("11yo dirty.avi"));
+        assertFalse(custom.matches("pthc.avi"), "the embedded list is replaced, not extended");
+    }
+
+    @Test
+    void unreadableKeywordFileFallsBackToTheDefaults(@TempDir Path dir) {
+        assertTrue(ChildAbuseFilter.load(dir.resolve("missing.properties").toString()).matches("pthc.avi"));
+    }
+
+    @Test
+    void emptyListsMatchNothing() {
+        assertFalse(ChildAbuseFilter.fromProperties(new Properties()).matches("pthc 6yo xxx.avi"));
+    }
+}
