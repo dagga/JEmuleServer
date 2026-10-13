@@ -7,7 +7,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-/** C6: sources (and files without sources) disappear when their client disconnects. */
+/** C6: sources disappear when their client disconnects; the files stay searchable without source. */
 class SourceLifecycleTest {
 
     private static ClientState client(String ip) throws Exception {
@@ -24,7 +24,7 @@ class SourceLifecycleTest {
     }
 
     @Test
-    void disconnectRemovesSourcesAndOrphanFiles() throws Exception {
+    void disconnectRemovesSourcesButKeepsFiles() throws Exception {
         FileIndex index = new FileIndex(null);
         ClientState a = client("10.0.0.1");
         ClientState b = client("10.0.0.2");
@@ -34,17 +34,19 @@ class SourceLifecycleTest {
 
         index.removeSource(a);
 
-        assertEquals(1, index.fileCount());
+        assertEquals(2, index.fileCount());
         assertEquals(1, index.getSources("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", null, 10).size());
         assertSame(b, index.getSources("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", null, 10).getFirst());
-        assertTrue(index.search("only", 10).isEmpty(), "orphan file must not be found any more");
+        assertTrue(index.getSources("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", null, 10).isEmpty());
+        assertEquals(1, index.search("only", 10).size(), "a file without source must still be found");
+        assertEquals(1, index.searchComplex(new SearchQueryBuilder().term("only", SearchQuery.ID_FILENAME), 10).size());
         assertEquals(1, index.search("both", 10).size());
     }
 
     @Test
-    void protocolSearchIgnoresFilesWithoutSource() {
+    void protocolSearchReturnsFilesWithoutSource() {
         FileIndex index = new FileIndex(null);
         index.addFile(new FileMetadata("cccccccccccccccccccccccccccccccc", "offline file.avi", 1000, "Video")); // e.g. loaded from DB
-        assertTrue(index.searchComplex(m -> true, 10).isEmpty());
+        assertEquals(1, index.searchComplex(m -> true, 10).size());
     }
 }
