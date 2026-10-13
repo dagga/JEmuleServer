@@ -42,7 +42,7 @@ public class EmuleSpecTest {
             }
         });
         serverThread.start();
-        // Attendre que le serveur démarre
+        // Wait for the server to start
         try { Thread.sleep(1500); } catch (InterruptedException e) {}
     }
 
@@ -59,7 +59,7 @@ public class EmuleSpecTest {
     }
 
     @Test
-    @DisplayName("Vérification de la conformité TCP (ServerIdent et Version)")
+    @DisplayName("TCP compliance check (ServerIdent and version)")
     void testTcpHandshakeConformity() throws IOException {
         try (Socket socket = new Socket()) {
             socket.setSoTimeout(5000);
@@ -67,8 +67,8 @@ public class EmuleSpecTest {
             OutputStream out = socket.getOutputStream();
             InputStream in = socket.getInputStream();
 
-            // Envoyer LOGINREQUEST (ED2K 0x01)
-            // Calculer la taille nécessaire : 16 (hash) + 4 (id) + 2 (port) + 4 (tag count) + tag (type 1 + name 1 + string_len 2 + string_val)
+            // Send LOGINREQUEST (ED2K 0x01)
+            // Compute the required size: 16 (hash) + 4 (id) + 2 (port) + 4 (tag count) + tag (type 1 + name 1 + string_len 2 + string_val)
             String clientName = "TestClient";
             int tagSize = 1 + 1 + 2 + clientName.length();
             ByteBuffer loginData = ByteBuffer.allocate(16 + 4 + 2 + 4 + tagSize).order(ByteOrder.LITTLE_ENDIAN);
@@ -80,13 +80,13 @@ public class EmuleSpecTest {
 
             new Packet(Packet.PROTOCOL_ED2K, (byte) 0x01, loginData.array()).write(out, false);
 
-            // Lire les réponses du serveur
-            // On attend OP_SERVERMESSAGE (0x38) et OP_SERVERIDENT (0x41)
+            // Read the server responses
+            // Expect OP_SERVERMESSAGE (0x38) and OP_SERVERIDENT (0x41)
             boolean versionFound = false;
             boolean identFound = false;
             boolean idChangeFound = false;
 
-            for (int i = 0; i < 15; i++) { // Lire plus de paquets car le message de version est envoyé plus tard
+            for (int i = 0; i < 15; i++) { // Read more packets because the version message is sent later
                 Packet p = Packet.read(in, 1024 * 1024);
                 if (p.protocol() == Packet.PROTOCOL_ED2K) {
                     if (p.opcode() == 0x38) { // SERVER_MESSAGE
@@ -103,61 +103,61 @@ public class EmuleSpecTest {
                         int port = buf.getShort() & 0xFFFF;
                         List<Tag> tags = Tag.readList(buf);
                         
-                        assertTrue(tags.stream().anyMatch(t -> t.name().equals(Tag.NAME_SERVERNAME)), "ST_SERVERNAME manquant");
-                        assertTrue(tags.stream().anyMatch(t -> t.name().equals(Tag.NAME_DESCRIPTION)), "ST_DESCRIPTION manquant");
+                        assertTrue(tags.stream().anyMatch(t -> t.name().equals(Tag.NAME_SERVERNAME)), "ST_SERVERNAME missing");
+                        assertTrue(tags.stream().anyMatch(t -> t.name().equals(Tag.NAME_DESCRIPTION)), "ST_DESCRIPTION missing");
 
                         Tag maxUsersTag = tags.stream().filter(t -> t.name().equals(Tag.NAME_MAXUSERS)).findFirst().orElse(null);
-                        assertNotNull(maxUsersTag, "ST_MAXUSERS manquant");
+                        assertNotNull(maxUsersTag, "ST_MAXUSERS missing");
                         assertEquals(5000, ((Number) maxUsersTag.value()).intValue());
 
                         Tag softFilesTag = tags.stream().filter(t -> t.name().equals(Tag.NAME_SOFTFILES)).findFirst().orElse(null);
-                        assertNotNull(softFilesTag, "ST_SOFTFILES manquant");
+                        assertNotNull(softFilesTag, "ST_SOFTFILES missing");
                         assertEquals(1000000, ((Number) softFilesTag.value()).intValue());
 
                         Tag hardFilesTag = tags.stream().filter(t -> t.name().equals(Tag.NAME_HARDFILES)).findFirst().orElse(null);
-                        assertNotNull(hardFilesTag, "ST_HARDFILES manquant");
+                        assertNotNull(hardFilesTag, "ST_HARDFILES missing");
                         assertEquals(2000000, ((Number) hardFilesTag.value()).intValue());
 
                         Tag udpFlagsTag = tags.stream().filter(t -> t.name().equals(Tag.NAME_UDPFLAGS)).findFirst().orElse(null);
-                        assertNotNull(udpFlagsTag, "ST_UDPFLAGS manquant");
+                        assertNotNull(udpFlagsTag, "ST_UDPFLAGS missing");
                         int udpFlagsVal = (int) udpFlagsTag.value();
-                        assertTrue((udpFlagsVal & 0x200) != 0, "Drapeau UDPOBFUSCATION (0x200) manquant dans ST_UDPFLAGS");
-                        assertTrue((udpFlagsVal & 0x400) != 0, "Drapeau TCPOBFUSCATION (0x400) manquant dans ST_UDPFLAGS");
+                        assertTrue((udpFlagsVal & 0x200) != 0, "UDPOBFUSCATION flag (0x200) missing in ST_UDPFLAGS");
+                        assertTrue((udpFlagsVal & 0x400) != 0, "TCPOBFUSCATION flag (0x400) missing in ST_UDPFLAGS");
                     } else if (p.opcode() == 0x40) { // ID_CHANGE
                         idChangeFound = true;
-                        // On attend maintenant 20 octets de données (ID + Flags + Padding + ReportedIP + ObfPort)
-                        // Précédemment on attendait 8 octets. eMule accepte les deux mais préfère 20.
-                        assertTrue(p.data().length >= 8, "OP_IDCHANGE doit contenir au moins 8 octets de données");
+                        // 20 data bytes are now expected (ID + Flags + Padding + ReportedIP + ObfPort)
+                        // 8 bytes were expected before. eMule accepts both but prefers 20.
+                        assertTrue(p.data().length >= 8, "OP_IDCHANGE must contain at least 8 data bytes");
                         ByteBuffer buf = ByteBuffer.wrap(p.data()).order(ByteOrder.LITTLE_ENDIAN);
                         int newId = buf.getInt();
                         int flags = buf.getInt();
-                        // Vérifier que le bit LARGEFILES (0x100) est présent
-                        assertTrue((flags & 0x100) != 0, "Bit LARGEFILES (0x100) manquant dans OP_IDCHANGE");
+                        // Check that the LARGEFILES bit (0x100) is set
+                        assertTrue((flags & 0x100) != 0, "LARGEFILES bit (0x100) missing in OP_IDCHANGE");
                         if (p.data().length >= 20) {
                             int pad = buf.getInt();
                             int reportedIp = buf.getInt();
                             int obfPort = buf.getInt();
-                            assertTrue(obfPort > 0, "Port d'obfuscation manquant ou nul dans OP_IDCHANGE");
+                            assertTrue(obfPort > 0, "Obfuscation port missing or zero in OP_IDCHANGE");
                         }
                     }
                 }
                 if (versionFound && identFound && idChangeFound) break;
             }
 
-            assertTrue(versionFound, "Message de version 'server version' non trouvé");
-            assertTrue(identFound, "Paquet OP_SERVERIDENT non trouvé");
-            assertTrue(idChangeFound, "Paquet OP_IDCHANGE non trouvé");
+            assertTrue(versionFound, "Version message 'server version' not found");
+            assertTrue(identFound, "OP_SERVERIDENT packet not found");
+            assertTrue(idChangeFound, "OP_IDCHANGE packet not found");
         }
     }
 
     @Test
-    @DisplayName("Vérification de la conformité UDP (Global Status Response)")
+    @DisplayName("UDP compliance check (Global Status Response)")
     void testUdpStatusConformity() throws IOException {
         try (DatagramSocket socket = new DatagramSocket()) {
             socket.setSoTimeout(2000);
             InetAddress address = InetAddress.getByName("127.0.0.1");
             
-            // Envoyer OP_GLOBSERVSTATREQ (0x96)
+            // Send OP_GLOBSERVSTATREQ (0x96)
             int challenge = 0x12345678;
             ByteBuffer req = ByteBuffer.allocate(6).order(ByteOrder.LITTLE_ENDIAN);
             req.put(Packet.PROTOCOL_ED2K);
@@ -167,24 +167,24 @@ public class EmuleSpecTest {
             DatagramPacket packet = new DatagramPacket(req.array(), req.capacity(), address, TEST_PORT);
             socket.send(packet);
             
-            // Recevoir OP_GLOBSERVSTATRES (0x97)
+            // Receive OP_GLOBSERVSTATRES (0x97)
             byte[] buf = new byte[1024];
             DatagramPacket response = new DatagramPacket(buf, buf.length);
             socket.receive(response);
             
-            // Note: 42 ou 44 octets selon l'implémentation de la spec.
-            // On a mis 44 dans Server.java (ByteBuffer.allocate(44))
-            // Mais l'opcode et le protocole prennent 2 octets, et le ByteBuffer peut être flip()é avant ou après.
-            // Dans Server.java: resp.allocate(44), resp.put(proto), resp.put(opcode), ...
-            // Donc la taille totale devrait bien être 44.
-            assertTrue(response.getLength() >= 42, "La taille de OP_GLOBSERVSTATRES doit être au moins de 42 octets, reçu: " + response.getLength());
+            // Note: 42 or 44 bytes depending on the spec implementation.
+            // Server.java uses 44 (ByteBuffer.allocate(44))
+            // But the opcode and the protocol take 2 bytes, and the ByteBuffer may be flip()ped before or after.
+            // In Server.java: resp.allocate(44), resp.put(proto), resp.put(opcode), ...
+            // So the total size should indeed be 44.
+            assertTrue(response.getLength() >= 42, "OP_GLOBSERVSTATRES must be at least 42 bytes long, received: " + response.getLength());
             
             ByteBuffer respBuf = ByteBuffer.wrap(buf, 0, response.getLength()).order(ByteOrder.LITTLE_ENDIAN);
             assertEquals(Packet.PROTOCOL_ED2K, respBuf.get());
             assertEquals((byte) 0x97, respBuf.get());
-            assertEquals(challenge, respBuf.getInt(), "Le challenge doit être identique à l'envoi");
+            assertEquals(challenge, respBuf.getInt(), "The challenge must match the one sent");
             
-            // Vérifier les champs restants (juste s'assurer qu'ils sont lisibles)
+            // Check the remaining fields (just make sure they are readable)
             int users = respBuf.getInt();
             int files = respBuf.getInt();
             int maxUsers = respBuf.getInt();
@@ -196,12 +196,12 @@ public class EmuleSpecTest {
             int tcpPort = respBuf.getShort() & 0xFFFF;
             int serverKey = respBuf.getInt();
             
-            assertEquals(TEST_PORT, tcpPort, "Le port TCP dans le paquet UDP est incorrect");
-            assertEquals(5000, maxUsers, "MaxUsers incorrect dans OP_GLOBSERVSTATRES");
-            assertEquals(1000000, softFiles, "SoftFiles incorrect dans OP_GLOBSERVSTATRES");
-            assertEquals(2000000, hardFiles, "HardFiles incorrect dans OP_GLOBSERVSTATRES");
-            assertTrue((udpFlags & 0x200) != 0, "Drapeau UDPOBFUSCATION (0x200) manquant dans OP_GLOBSERVSTATRES");
-            assertTrue((udpFlags & 0x400) != 0, "Drapeau TCPOBFUSCATION (0x400) manquant dans OP_GLOBSERVSTATRES");
+            assertEquals(TEST_PORT, tcpPort, "Wrong TCP port in the UDP packet");
+            assertEquals(5000, maxUsers, "Wrong MaxUsers in OP_GLOBSERVSTATRES");
+            assertEquals(1000000, softFiles, "Wrong SoftFiles in OP_GLOBSERVSTATRES");
+            assertEquals(2000000, hardFiles, "Wrong HardFiles in OP_GLOBSERVSTATRES");
+            assertTrue((udpFlags & 0x200) != 0, "UDPOBFUSCATION flag (0x200) missing in OP_GLOBSERVSTATRES");
+            assertTrue((udpFlags & 0x400) != 0, "TCPOBFUSCATION flag (0x400) missing in OP_GLOBSERVSTATRES");
         }
     }
 }

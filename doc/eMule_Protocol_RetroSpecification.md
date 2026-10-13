@@ -153,9 +153,9 @@ A tag consists of:
 * **Kademlia Versions**
 * **Server Capabilities** (`SRVCAP_...`)
 
-## 5. Diagrammes UML
+## 5. UML Diagrams
 
-### a. Diagramme de Séquence : Connexion Client-Serveur
+### a. Sequence Diagram: Client-Server Connection
 
 ```mermaid
 sequenceDiagram
@@ -172,7 +172,7 @@ sequenceDiagram
     Server->>Client: (Optionnel) OP_SERVERLIST (Count, [IP, Port]...)
 ```
 
-### b. Diagramme de Séquence : Recherche de Fichiers (Client-Serveur)
+### b. Sequence Diagram: File Search (Client-Server)
 
 ```mermaid
 sequenceDiagram
@@ -187,7 +187,7 @@ sequenceDiagram
     end
 ```
 
-### c. Diagramme de Séquence : Demande et Obtention de Sources (Client-Serveur)
+### c. Sequence Diagram: Requesting and Obtaining Sources (Client-Server)
 
 ```mermaid
 sequenceDiagram
@@ -198,7 +198,7 @@ sequenceDiagram
     Server->>Client: OP_FOUNDSOURCES (FileHash, Count, [ClientID, ClientPort]...)
 ```
 
-### d. Diagramme de Séquence : Transfert de Fichier (Client-Client)
+### d. Sequence Diagram: File Transfer (Client-Client)
 
 ```mermaid
 sequenceDiagram
@@ -213,7 +213,7 @@ sequenceDiagram
     ClientA->>ClientB: (Optionnel) OP_CANCELTRANSFER (FileHash)
 ```
 
-### e. Diagramme de Séquence : Kademlia - Bootstrap et Hello
+### e. Sequence Diagram: Kademlia - Bootstrap and Hello
 
 ```mermaid
 sequenceDiagram
@@ -227,7 +227,7 @@ sequenceDiagram
     NodeA->>NodeB: KADEMLIA2_HELLO_RES_ACK (NodeID, Tags)
 ```
 
-### f. Diagramme de Classes (Simplifié) : Entités Principales
+### f. Class Diagram (Simplified): Main Entities
 
 ```mermaid
 classDiagram
@@ -282,5 +282,5 @@ classDiagram
 ```
 
 ## Annex: Implementation notes
-Voir `doc/Protocol_Implementation_Notes.md` pour les détails d'implémentation (encodage des tags, compteur 4-octets, variantes ED2K/eMule, etc.)
+See `doc/Protocol_Implementation_Notes.md` for implementation details (tag encoding, 4-byte counter, ED2K/eMule variants, etc.)
 
