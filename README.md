@@ -12,6 +12,10 @@ Lugdunum was the reference for eDonkey2000 (ed2k) servers for years, but its cod
 became obsolete or difficult to run on modern systems. JEmuleServer aims to provide a modern, open-source (LGPLv3), and
 high-performance alternative using the latest Java features (such as Virtual Threads).
 
+Fighting the distribution of child sexual abuse material is also one of the goals of the project: a server must not
+help anyone find it. JEmuleServer refuses such files, bans their hashes for good and removes them from its database,
+with a filter that cannot be disabled (see [Child Abuse Filter](#child-abuse-filter)).
+
 ## Compilation
 
 Building requires a JDK 21 (Gradle toolchain). To compile the project and generate the executable JAR file (Fat JAR):
