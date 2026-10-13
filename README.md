@@ -1,9 +1,9 @@
 # JEmuleServer
 
-JEmuleServer is an eMule server written in Java (version 1.0.1).
+JEmuleServer is an eMule server written in Java (version 1.1).
 
 Downloads (installers and JAR) are on the [releases page](https://github.com/dagga/JEmuleServer/releases); the changes
-of each version are described in `doc/release-notes-v<version>.md` (latest: [1.0.1](doc/release-notes-v1.0.1.md)).
+of each version are described in `doc/release-notes-v<version>.md` (latest: [1.1](doc/release-notes-v1.1.md)).
 
 ## Why this project?
 
@@ -20,7 +20,7 @@ Building requires a JDK 21 (Gradle toolchain). To compile the project and genera
 ./gradlew build
 ```
 
-The JAR file will be generated in `build/libs/JEmuleServer-1.0.1.jar`.
+The JAR file will be generated in `build/libs/JEmuleServer-1.1.jar`.
 
 ## Installation from the release packages
 
@@ -53,7 +53,7 @@ This task starts the JVM with `-Djava.net.preferIPv4Stack=true` (IPv4 only); use
 Once the project is compiled, you can start the server with the following command:
 
 ```bash
-java -jar build/libs/JEmuleServer-1.0.1.jar [config_file] [port]
+java -jar build/libs/JEmuleServer-1.1.jar [config_file] [port]
 ```
 
 - Note: The server binds to the IPv6 wildcard when available, so IPv6 clients can connect. Avoid forcing the JVM to
@@ -199,7 +199,7 @@ This project is distributed under the **GNU Lesser General Public License v3.0 (
 ## Documentation
 
 More information can be found in the `doc/` directory:
-- [Release notes 1.0.1](doc/release-notes-v1.0.1.md) / [1.0](doc/release-notes-v1.0.md)
+- [Release notes 1.1](doc/release-notes-v1.1.md) / [1.0.1](doc/release-notes-v1.0.1.md) / [1.0](doc/release-notes-v1.0.md)
 - [Protocols Description](doc/protocols.md)
 - [Technical References](doc/references.md)
 - [Class Diagram](doc/class_diagram.puml)
