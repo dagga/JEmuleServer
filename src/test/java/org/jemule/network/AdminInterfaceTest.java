@@ -13,6 +13,7 @@ import java.io.PrintStream;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 public class AdminInterfaceTest {
     private Server server;
@@ -51,8 +52,16 @@ public class AdminInterfaceTest {
     void testBanCommand() {
         String hash = "1234567890ABCDEF1234567890ABCDEF";
         admin.handleCommand("ban " + hash + " SpamFile");
-        verify(fakeFileDetector).addBannedHash(hash);
+        verify(fakeFileDetector).ban(hash, "Manual ban: SpamFile");
+        verify(fileIndex).removeFile(hash);
         assertTrue(outContent.toString().contains("added to blacklist"));
+    }
+
+    @Test
+    void testBanRejectsInvalidHash() {
+        admin.handleCommand("ban 1234567890ABCDEF1234567890ABCDEZ");
+        verifyNoInteractions(fakeFileDetector, fileIndex);
+        assertTrue(outContent.toString().contains("Error"));
     }
 
     @Test

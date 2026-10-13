@@ -52,15 +52,14 @@ public class FakeFileDetector {
      * @return True if the file is detected as fake/malicious.
      */
     public boolean isFake(String hash, String name, long size) {
-        if (!enabled) return false;
-
         String upperHash = hash.toUpperCase();
 
-        // 1. Check Blacklist
+        // 1. Check Blacklist: banned hashes are rejected even when the heuristics are disabled
         if (bannedHashes.contains(upperHash)) {
             log.debug("File rejected: Hash {} is blacklisted", hash);
             return true;
         }
+        if (!enabled) return false;
 
         if (name == null || name.isEmpty()) return false;
         String lowerName = name.toLowerCase();
@@ -108,6 +107,15 @@ public class FakeFileDetector {
             }
         }
         return count;
+    }
+
+    /** Bans a hash for good: kept in memory and stored in the database, so that the ban survives a restart. */
+    public void ban(String hash, String reason) {
+        addBannedHash(hash);
+        DatabaseManager database = db;
+        if (database != null) {
+            database.addBannedHash(hash.toUpperCase(), reason.length() > 255 ? reason.substring(0, 255) : reason);
+        }
     }
 
     public void addBannedHash(String hash) {

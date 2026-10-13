@@ -135,14 +135,14 @@ public class AdminInterface implements Runnable {
             return;
         }
         String hash = parts[1].toUpperCase();
-        if (hash.length() != 32) {
+        if (!hash.matches("[0-9A-F]{32}")) {
             System.out.println("Error: Hash must be 32 characters (hex).");
             return;
         }
-        String reason = parts.length > 2 ? parts[2] : "Manual ban";
-        fakeFileDetector.addBannedHash(hash);
-        // We could also call db.addBannedHash if we passed it in.
-        System.out.println("Hash " + hash + " added to blacklist.");
+        String reason = "Manual ban" + (parts.length > 2 ? ": " + parts[2] : "");
+        fakeFileDetector.ban(hash, reason);
+        boolean removed = fileIndex.removeFile(hash);
+        System.out.println("Hash " + hash + " added to blacklist" + (removed ? " and removed from the index." : "."));
     }
 
     private void showHelp() {

@@ -160,6 +160,34 @@ public class FileIndex {
         client.publishedHashes().clear();
     }
 
+    /**
+     * Removes a file from the index and the database (e.g. after a ban). Its current sources are not told: they
+     * simply stop being returned.
+     *
+     * @return true if the file was indexed
+     */
+    public boolean removeFile(String hash) {
+        FileMetadata meta = byHash.remove(hash.toLowerCase(Locale.ROOT));
+        if (meta == null) meta = byHash.remove(hash.toUpperCase(Locale.ROOT));
+        if (meta == null) return false;
+        unindexTokens(meta);
+        searchCache.clear();
+        if (db != null) {
+            db.deleteFile(meta.hash());
+        }
+        return true;
+    }
+
+    private void unindexTokens(FileMetadata meta) {
+        if (meta.name() == null) return;
+        for (String t : Keywords.split(meta.name())) {
+            invertedIndex.computeIfPresent(t, (k, hashes) -> {
+                hashes.remove(meta.hash());
+                return hashes.isEmpty() ? null : hashes;
+            });
+        }
+    }
+
     /** Key of a client in {@link FileMetadata#sources()}: unique per connection (several clients may share one IP). */
     public static String sourceKey(ClientState client) {
         return String.valueOf(client.connectionId());
