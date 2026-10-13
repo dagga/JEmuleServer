@@ -35,6 +35,15 @@ public class LoginHandler {
         context.setState(state);
 
         parseLoginRequest(state, data);
+
+        // maxUsers: refused before the HighID test, which opens a connection to the client
+        int maxUsers = context.getConfig().maxUsers();
+        if (context.getRegistry().size() >= maxUsers) {
+            log.warn("Server full ({} users): login refused", maxUsers);
+            sendServerMessage(context, out, "ERROR : This server is full (" + maxUsers + " users).");
+            context.disconnect();
+            return;
+        }
         if (initialPacket.protocol() == Packet.PROTOCOL_ZLIB || (state.serverCaps() & ClientState.SRVCAP_ZLIB) != 0) {
             state.setZlibSupported(true);
         }
@@ -196,14 +205,14 @@ public class LoginHandler {
         ByteBuffer buf = ByteBuffer.allocate(4096).order(ByteOrder.LITTLE_ENDIAN);
         buf.put(hash);
 
-        byte[] addr = publicIp.getAddress();
-        if (addr.length == 4) {
-            buf.put(addr);
+        // ed2k addresses are IPv4: without an IPv4 public address, announce the one the client reached, if any
+        InetAddress local = context.getSocket().getLocalAddress();
+        if (publicIp instanceof java.net.Inet4Address) {
+            buf.put(publicIp.getAddress());
+        } else if (local instanceof java.net.Inet4Address && !local.isAnyLocalAddress()) {
+            buf.put(local.getAddress());
         } else {
-            buf.put((byte) 0x7F);
-            buf.put((byte) 0x00);
-            buf.put((byte) 0x00);
-            buf.put((byte) 0x01);
+            buf.putInt(0); // unknown
         }
         // Port is 2 bytes, written as LITTLE_ENDIAN as per ByteBuffer order
         buf.putShort((short) portInt);

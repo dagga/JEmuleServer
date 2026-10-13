@@ -47,4 +47,22 @@ public class FakeFileDetectorTest {
         detector.setEnabled(false);
         assertFalse(detector.isFake("12345678901234567890123456789012", "movie.mp4.exe", 1000));
     }
+
+    @Test
+    public void keywordsMatchWholeWordsOnly() {
+        FakeFileDetector detector = new FakeFileDetector();
+        assertFalse(detector.isFake("12345678901234567890123456789012", "Crackerjack (2002).avi", 1000));
+        assertFalse(detector.isFake("12345678901234567890123456789012", "Earthworm Jim.iso", 1000));
+        assertFalse(detector.isFake("12345678901234567890123456789012", "Spamalot - Original Cast.mp3", 1000));
+        assertTrue(detector.isFake("12345678901234567890123456789012", "Office 2010 Crack.zip", 1000));
+        assertTrue(detector.isFake("12345678901234567890123456789012", "credit-card generator.exe", 1000));
+    }
+
+    @Test
+    public void heuristicsDoNotBanTheHash() {
+        FakeFileDetector detector = new FakeFileDetector();
+        String hash = "12345678901234567890123456789012";
+        assertTrue(detector.isFake(hash, "movie.mp4.exe", 1000));
+        assertFalse(detector.isFake(hash, "movie.mp4", 1000), "the same file under a legitimate name is accepted");
+    }
 }

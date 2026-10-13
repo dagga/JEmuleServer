@@ -167,7 +167,7 @@ class ServerTagsTest {
         String desc = new String(descBytes, java.nio.charset.StandardCharsets.UTF_8);
         assertEquals(org.jemule.Main.SERVER_DESCRIPTION, desc);
         assertFalse(desc.toLowerCase().contains("experimental"));
-        assertTrue(desc.contains("version 1.0.1"));
+        assertTrue(desc.contains("version " + Main.VERSION));
     }
 
     @Test

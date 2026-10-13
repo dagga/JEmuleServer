@@ -26,6 +26,7 @@ import org.jemule.protocol.Tag;
 import org.jemule.core.event.ClientEvent;
 import org.jemule.core.event.EventManager;
 import org.jemule.core.event.FileEvent;
+import org.jemule.core.event.EventStatistics;
 import org.jemule.security.ChildAbuseFilter;
 import org.jemule.security.FakeFileDetector;
 import org.jemule.security.FloodProtector;
@@ -86,6 +87,7 @@ public class Server {
     }
 
     private final EventManager eventManager;
+    private final EventStatistics eventStatistics = new EventStatistics();
     private final ClientFactory clientFactory;
     private final AdminInterface admin;
     private final InetAddress publicIp;
@@ -124,11 +126,10 @@ public class Server {
                     config.cbWaitDurationInSeconds()
             );
             this.fakeFileDetector.setDatabaseManager(dbMgr);
-            if (config.fakeFileDetectionEnabled()) {
-                List<String> banned = dbMgr.loadBannedHashes();
-                banned.forEach(this.fakeFileDetector::addBannedHash);
-                log.info("Loaded {} banned hashes from database", banned.size());
-            }
+            // Bans apply even when the fake file heuristics are disabled
+            List<String> banned = dbMgr.loadBannedHashes();
+            banned.forEach(this.fakeFileDetector::addBannedHash);
+            log.info("Loaded {} banned hashes from database", banned.size());
         } catch (SQLException e) {
             log.error("Failed to initialize database: {}", e.getMessage());
         }
@@ -149,10 +150,16 @@ public class Server {
         System.arraycopy(md5, 0, serverHash, 0, 16);
     }
 
-    private static InetAddress resolvePublicIp(String configIp) {
+    /**
+     * The IPv4 address announced to the clients (OP_SERVERIDENT, server lists): ed2k carries only 4-byte addresses,
+     * so an IPv6 address is never returned.
+     */
+    static InetAddress resolvePublicIp(String configIp) {
         if (configIp != null && !configIp.isBlank()) {
             try {
-                return InetAddress.getByName(configIp);
+                InetAddress configured = InetAddress.getByName(configIp);
+                if (configured instanceof java.net.Inet4Address) return configured;
+                log.warn("publicIp {} is not an IPv4 address (ed2k announces IPv4 only), falling back to auto-detect", configIp);
             } catch (Exception e) {
                 log.warn("Invalid publicIp in config ({}), falling back to auto-detect", configIp);
             }
@@ -177,20 +184,29 @@ public class Server {
         }
         try {
             InetAddress local = InetAddress.getLocalHost();
-            if (!local.isLoopbackAddress()) {
+            if (local instanceof java.net.Inet4Address && !local.isLoopbackAddress()) {
                 log.info("Using InetAddress.getLocalHost(): {}", local.getHostAddress());
                 return local;
             }
         } catch (Exception ignored) {}
         log.warn("Could not resolve public IP, using 127.0.0.1 as fallback");
-        return InetAddress.getLoopbackAddress();
+        try {
+            return InetAddress.getByAddress(new byte[]{127, 0, 0, 1});
+        } catch (java.net.UnknownHostException e) {
+            throw new IllegalStateException(e); // never thrown for a 4-byte address
+        }
     }
 
     public InetAddress getPublicIp() {
         return publicIp;
     }
 
+    public EventStatistics getEventStatistics() {
+        return eventStatistics;
+    }
+
     private void setupDefaultListeners() {
+        eventManager.subscribeAll(eventStatistics);
         eventManager.subscribeAll(event -> {
             if (event instanceof ClientEvent ce) {
                 log.info("[CLIENT] {} - {} ({})", ce.getType(), ce.getUsername(), ce.getClientIp());
@@ -316,6 +332,33 @@ public class Server {
         Thread adminThread = new Thread(admin, "AdminInterface");
         adminThread.setDaemon(true);
         adminThread.start();
+        if (config.adminPort() > 0) {
+            Thread.ofVirtual().name("AdminPort").start(this::serveAdminPort);
+        }
+    }
+
+    /**
+     * Admin console over TCP, for a server running as a service without a terminal ("nc 127.0.0.1 &lt;adminPort&gt;").
+     * Bound to the loopback address only: there is no authentication, the access is that of the local machine.
+     */
+    private void serveAdminPort() {
+        try (ServerSocket adminSocket = new ServerSocket(config.adminPort(), 5, InetAddress.getLoopbackAddress())) {
+            log.info("Admin console listening on {}:{}", adminSocket.getInetAddress().getHostAddress(), config.adminPort());
+            while (running) {
+                Socket s = adminSocket.accept();
+                Thread.ofVirtual().name("AdminSession").start(() -> {
+                    try (s; var out = new java.io.PrintStream(s.getOutputStream(), true, java.nio.charset.StandardCharsets.UTF_8)) {
+                        log.info("Admin session opened from {}", s.getRemoteSocketAddress());
+                        new AdminInterface(admin, out).session(new java.io.BufferedReader(
+                                new java.io.InputStreamReader(s.getInputStream(), java.nio.charset.StandardCharsets.UTF_8)), true);
+                    } catch (IOException e) {
+                        log.debug("Admin session closed: {}", e.getMessage());
+                    }
+                });
+            }
+        } catch (IOException e) {
+            log.error("Admin port {} unavailable: {}", config.adminPort(), e.getMessage());
+        }
     }
 
     /** Destination of the answers to one UDP request; answers are obfuscated when {@code key != 0}. */

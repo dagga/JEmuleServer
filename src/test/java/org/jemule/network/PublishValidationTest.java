@@ -136,4 +136,19 @@ class PublishValidationTest {
         invokeHandlePublish(HASH, "holiday video.avi", 1024);
         assertEquals(0, index.fileCount());
     }
+
+    @Test
+    void testFullIndexRefusesNewFilesOnly() throws Exception {
+        // maxFiles = 1000 in this configuration: fill the index up to the limit
+        for (int i = 0; i < 1000; i++) {
+            index.addFile(new org.jemule.core.FileMetadata(String.format("%032x", i), "file " + i + ".avi", 1000, "Video"));
+        }
+        invokeHandlePublish(HASH, "one too many.avi", 1024);
+        assertEquals(1000, index.fileCount(), "a new file is refused");
+
+        // a known file is accepted: the client becomes one of its sources
+        invokeHandlePublish(EmuleTestSupport.hash(String.format("%032x", 7)), "file 7.avi", 1000);
+        assertEquals(1000, index.fileCount());
+        assertEquals(1, index.getSources(String.format("%032x", 7), null, 10).size());
+    }
 }

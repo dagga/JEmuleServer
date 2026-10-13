@@ -18,6 +18,6 @@ This annex documents implementation-specific details discovered in the codebase 
 - Packet.write will compress payloads larger than 64 bytes when `useCompression` is true and set the protocol to the corresponding ZLIB protocol byte. Packet.read detects ZLIB protocol bytes and decompresses the payload before returning the Packet object.
 
 5) UDP responses
-- UDP packets use the compact format [Protocol][Opcode][Data...] (no header size field). Server.handleUdp implements legacy responses (OP_GLOBSERVSTATRES, OP_GLOBFOUNDSOURCES) and an IPv6 extension (opcode 0x9C).
+- UDP packets use the compact format [Protocol][Opcode][Data...] (no header size field). Server.handleUdp implements the standard responses (OP_GLOBSERVSTATRES, OP_GLOBFOUNDSOURCES, OP_GLOBSEARCHRES...). There is no IPv6 extension: ed2k addresses are IPv4 only (see `doc/ipv6.md`).
 
 If desired, this annex can be merged into `doc/eMule_Protocol_RetroSpecification.md` as an "Implementation notes" section. It is also referenced by `doc/Implementation_vs_Spec.md`.

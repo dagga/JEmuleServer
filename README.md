@@ -1,9 +1,9 @@
 # JEmuleServer
 
-JEmuleServer is an eMule server written in Java (version 1.0.1).
+JEmuleServer is an eMule server written in Java (version 1.1).
 
 Downloads (installers and JAR) are on the [releases page](https://github.com/dagga/JEmuleServer/releases); the changes
-of each version are described in `doc/release-notes-v<version>.md` (latest: [1.0.1](doc/release-notes-v1.0.1.md)).
+of each version are described in `doc/release-notes-v<version>.md` (latest: [1.1](doc/release-notes-v1.1.md)).
 
 ## Why this project?
 
@@ -20,7 +20,7 @@ Building requires a JDK 21 (Gradle toolchain). To compile the project and genera
 ./gradlew build
 ```
 
-The JAR file will be generated in `build/libs/JEmuleServer-1.0.1.jar`.
+The JAR file will be generated in `build/libs/JEmuleServer-1.1.jar`.
 
 ## Installation from the release packages
 
@@ -53,11 +53,12 @@ This task starts the JVM with `-Djava.net.preferIPv4Stack=true` (IPv4 only); use
 Once the project is compiled, you can start the server with the following command:
 
 ```bash
-java -jar build/libs/JEmuleServer-1.0.1.jar [config_file] [port]
+java -jar build/libs/JEmuleServer-1.1.jar [config_file] [port]
 ```
 
-- Note: The server now supports IPv6 and will prefer binding to the IPv6 wildcard when available. Avoid forcing the JVM
-  to prefer IPv4 (i.e. do not use `-Djava.net.preferIPv4Stack=true`) if you expect IPv6 connectivity.
+- Note: The server binds to the IPv6 wildcard when available, so IPv6 clients can connect. Avoid forcing the JVM to
+  prefer IPv4 (i.e. do not use `-Djava.net.preferIPv4Stack=true`) if you expect IPv6 connectivity. The ed2k protocol
+  only carries IPv4 addresses: IPv6 clients get a LowID and cannot request callbacks (see [IPv6](doc/ipv6.md)).
 - `[config_file]`: Optional, path to a custom configuration file (defaults to `server.properties` if present).
 - `[port]`: Optional, overrides the port defined in the configuration.
 
@@ -68,7 +69,7 @@ JEmuleServer uses a `server.properties` file for its configuration. If the file 
 Example `server.properties`:
 ```properties
 port=4661
-maxUsers=100000
+maxUsers=1000000
 databasePath=./jemule_db
 fakeFileDetectionEnabled=true
 # ipFilterPath=ipfilter.dat
@@ -114,11 +115,24 @@ The server therefore needs to open outgoing TCP connections to the clients.
 
 JEmuleServer includes a command-line interface (CLI) for administration. When running the server, you can type commands directly into the terminal.
 
+A server running as a service (systemd, Windows service) has no terminal. Set `adminPort` in `server.properties` to
+open the same console on a TCP port bound to `127.0.0.1` only, then connect from the server machine:
+
+```bash
+nc 127.0.0.1 4670
+```
+
+The admin port has no authentication: anyone with a shell on the machine can use it. It is disabled by default
+(`adminPort=0`). In such a session, `exit` and `quit` close the session; `stop` still shuts the server down.
+
 Available commands:
 - `status`: Displays server performance, uptime, and core statistics.
 - `clients`: Lists connected clients with their IP, ID, type (HighID/LowID), and published files count.
 - `files`: Shows file indexing statistics and fake file detection status.
-- `ban <hash> [reason]`: Manually adds a file hash (32-char hex) to the blacklist.
+- `events`: Shows the number of events of each type (connections, logins, publications, searches...) since startup
+  and during the last minute.
+- `ban <hash> [reason]`: Bans a file hash (32-char hex) for good: it is stored in the database with its reason and the
+  file is removed from the index.
 - `help`: Shows the list of available commands.
 - `stop` / `exit` / `quit`: Safely shuts down the server.
 
@@ -171,7 +185,7 @@ Here is a comparison between JEmuleServer and the historical **eServer (Lugdunum
 | **Child Abuse Filter**              |        ✅ Supported        |        ❌ No         |
 | **External Config File**            |        ✅ Supported        |     ✅ Supported     |
 | **Admin Interface**                 |        ✅ Supported        |     ✅ Supported     |
-| **IPv6 Support**                    |        ✅ Supported        |        ❌ No         |
+| **IPv6 Connections**                | ⚠️ Partial ([limits](doc/ipv6.md)) |        ❌ No         |
 
 ## License
 
@@ -185,7 +199,7 @@ This project is distributed under the **GNU Lesser General Public License v3.0 (
 ## Documentation
 
 More information can be found in the `doc/` directory:
-- [Release notes 1.0.1](doc/release-notes-v1.0.1.md) / [1.0](doc/release-notes-v1.0.md)
+- [Release notes 1.1](doc/release-notes-v1.1.md) / [1.0.1](doc/release-notes-v1.0.1.md) / [1.0](doc/release-notes-v1.0.md)
 - [Protocols Description](doc/protocols.md)
 - [Technical References](doc/references.md)
 - [Class Diagram](doc/class_diagram.puml)

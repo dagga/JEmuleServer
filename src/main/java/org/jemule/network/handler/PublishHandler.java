@@ -121,6 +121,15 @@ public class PublishHandler {
             log.warn("Publish quota reached for client {} ({} files)", context.getState().clientId(), context.getConfig().maxFilesPerUser());
             return true;
         }
+        if (!context.getFileIndex().contains(hash) && context.getFileIndex().fileCount() >= context.getConfig().maxFiles()) {
+            // A known file still gets the client as a new source; only new files are refused
+            long now = System.currentTimeMillis();
+            long last = lastFullIndexWarning.get();
+            if (now - last >= 60_000 && lastFullIndexWarning.compareAndSet(last, now)) {
+                log.warn("File index full ({} files): new files are refused", context.getConfig().maxFiles());
+            }
+            return true;
+        }
         if (context.getFakeFileDetector() != null && context.getFakeFileDetector().isFake(hash, name, size)) {
             log.warn("Fake file detected and rejected: {} (hash={})", HandlerUtils.sanitize(name), hash);
             return false;
@@ -138,6 +147,9 @@ public class PublishHandler {
         context.getState().publishedFilesCount().incrementAndGet();
         return true;
     }
+
+    /** Time of the last "index full" warning: logged at most once a minute, not once per offered file. */
+    private static final java.util.concurrent.atomic.AtomicLong lastFullIndexWarning = new java.util.concurrent.atomic.AtomicLong();
 
     /** MAX_EMULE_FILE_SIZE in opcodes.h: 2^38 = 256 GB. */
     private static final long MAX_EMULE_FILE_SIZE = 0x4000000000L;
