@@ -91,4 +91,13 @@ public class AdminInterfaceTest {
         session.session(new java.io.BufferedReader(new java.io.StringReader("stop\n")), true);
         verify(server).stop();
     }
+
+    @Test
+    void eventsCommandShowsTheCounters() {
+        org.jemule.core.event.EventStatistics stats = new org.jemule.core.event.EventStatistics();
+        stats.accept(new org.jemule.core.event.FileEvent(org.jemule.core.event.FileEvent.SEARCHED, "q", "", "search"));
+        org.mockito.Mockito.when(server.getEventStatistics()).thenReturn(stats);
+        admin.handleCommand("events");
+        assertTrue(outContent.toString().matches("(?s).*FILE_SEARCHED\\s+1\\s+1.*"), outContent.toString());
+    }
 }

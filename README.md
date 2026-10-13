@@ -129,6 +129,8 @@ Available commands:
 - `status`: Displays server performance, uptime, and core statistics.
 - `clients`: Lists connected clients with their IP, ID, type (HighID/LowID), and published files count.
 - `files`: Shows file indexing statistics and fake file detection status.
+- `events`: Shows the number of events of each type (connections, logins, publications, searches...) since startup
+  and during the last minute.
 - `ban <hash> [reason]`: Bans a file hash (32-char hex) for good: it is stored in the database with its reason and the
   file is removed from the index.
 - `help`: Shows the list of available commands.

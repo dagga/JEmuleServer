@@ -26,6 +26,7 @@ import org.jemule.protocol.Tag;
 import org.jemule.core.event.ClientEvent;
 import org.jemule.core.event.EventManager;
 import org.jemule.core.event.FileEvent;
+import org.jemule.core.event.EventStatistics;
 import org.jemule.security.ChildAbuseFilter;
 import org.jemule.security.FakeFileDetector;
 import org.jemule.security.FloodProtector;
@@ -86,6 +87,7 @@ public class Server {
     }
 
     private final EventManager eventManager;
+    private final EventStatistics eventStatistics = new EventStatistics();
     private final ClientFactory clientFactory;
     private final AdminInterface admin;
     private final InetAddress publicIp;
@@ -199,7 +201,12 @@ public class Server {
         return publicIp;
     }
 
+    public EventStatistics getEventStatistics() {
+        return eventStatistics;
+    }
+
     private void setupDefaultListeners() {
+        eventManager.subscribeAll(eventStatistics);
         eventManager.subscribeAll(event -> {
             if (event instanceof ClientEvent ce) {
                 log.info("[CLIENT] {} - {} ({})", ce.getType(), ce.getUsername(), ce.getClientIp());

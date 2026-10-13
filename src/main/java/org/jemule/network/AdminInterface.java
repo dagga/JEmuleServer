@@ -33,6 +33,7 @@ import java.io.PrintStream;
 import java.lang.management.ManagementFactory;
 import java.lang.management.MemoryMXBean;
 import java.lang.management.OperatingSystemMXBean;
+import java.util.Map;
 
 /**
  * Provides a command-line interface for server administration: on the standard input of the server, and on the
@@ -83,6 +84,7 @@ public class AdminInterface implements Runnable {
             case "clients" -> showClients();
             case "files" -> showFiles();
             case "ban" -> handleBan(parts);
+            case "events" -> showEvents();
             case "help" -> showHelp();
             case "stop", "exit", "quit" -> {
                 out().println("Stopping server...");
@@ -188,12 +190,26 @@ public class AdminInterface implements Runnable {
         out().println("Hash " + hash + " added to blacklist" + (removed ? " and removed from the index." : "."));
     }
 
+    private void showEvents() {
+        org.jemule.core.event.EventStatistics stats = server != null ? server.getEventStatistics() : null;
+        if (stats == null) {
+            out().println("Event statistics are not available.");
+            return;
+        }
+        Map<String, Long> totals = stats.totals();
+        Map<String, Long> lastMinute = stats.lastMinute(java.time.Instant.now().getEpochSecond());
+        out().println("--- Events (total since startup / last minute) ---");
+        totals.forEach((type, total) -> out().printf("%-22s %10d %8d%n", type, total, lastMinute.getOrDefault(type, 0L)));
+        out().println("---------------------------------------------------");
+    }
+
     private void showHelp() {
         out().println("Available commands:");
         out().println("  status          - Show server performance and stats");
         out().println("  clients         - Show connected clients count");
         out().println("  files           - Show file indexing stats");
         out().println("  ban <hash> [R]  - Ban a file hash (32 hex chars)");
+        out().println("  events          - Show event counts (total and last minute)");
         out().println("  help            - Show this help message");
         out().println("  stop/exit/quit  - Shutdown the server");
     }
