@@ -24,3 +24,4 @@ Thumbs.db
 # Logs
 *.log
 /jemule_db.mv.db
+/jemule_db.trace.db
