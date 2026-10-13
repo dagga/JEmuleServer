@@ -336,6 +336,11 @@ public class FileIndex {
         return res;
     }
 
+    /** True if a file with this hash is indexed. */
+    public boolean contains(String hash) {
+        return byHash.containsKey(hash);
+    }
+
     /**
      * Returns the total number of files indexed.
      *
