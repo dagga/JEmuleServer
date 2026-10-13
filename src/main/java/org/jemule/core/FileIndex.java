@@ -104,39 +104,17 @@ public class FileIndex {
 
     /**
      * Removes a disconnected client from the sources of every file it offered. Files left without any
-     * source are removed from the in-memory index (they stay in the database as history).
+     * source stay indexed and searchable, like the files loaded from the database.
      */
     public void removeSource(ClientState client) {
         String key = sourceKey(client);
-        boolean removedFile = false;
         for (String hash : client.publishedHashes()) {
-            boolean[] gone = {false};
-            byHash.computeIfPresent(hash, (h, meta) -> {
+            FileMetadata meta = byHash.get(hash);
+            if (meta != null) {
                 meta.sources().remove(key);
-                if (meta.sources().isEmpty()) {
-                    gone[0] = true;
-                    unindexTokens(meta);
-                    return null;
-                }
-                return meta;
-            });
-            removedFile |= gone[0];
+            }
         }
         client.publishedHashes().clear();
-        if (removedFile) {
-            searchCache.clear();
-        }
-    }
-
-    private void unindexTokens(FileMetadata meta) {
-        if (meta.name() == null) return;
-        for (String t : Keywords.split(meta.name())) {
-            if (t.isEmpty()) continue;
-            invertedIndex.computeIfPresent(t, (k, hashes) -> {
-                hashes.remove(meta.hash());
-                return hashes.isEmpty() ? null : hashes;
-            });
-        }
     }
 
     /** Key of a client in {@link FileMetadata#sources()}: unique per connection (several clients may share one IP). */
@@ -210,7 +188,8 @@ public class FileIndex {
     }
 
     /**
-     * Executes a complex search query using boolean logic and filters, on files that have at least one source.
+     * Executes a complex search query using boolean logic and filters, on every known file, including the
+     * files loaded from the database and the files whose sources are all offline (FT_SOURCES = 0).
      *
      * @param query The parsed {@link SearchQuery}.
      * @param limit The maximum number of results.
@@ -220,9 +199,7 @@ public class FileIndex {
         if (eventManager != null) {
             eventManager.broadcast(new FileEvent(FileEvent.SEARCHED, query.toString(), "", "Complex search executed"));
         }
-        // Only files offered by at least one connected client can be downloaded: never return the others
         return byHash.values().stream()
-                .filter(m -> !m.sources().isEmpty())
                 .filter(query)
                 .limit(limit)
                 .toList();
