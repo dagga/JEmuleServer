@@ -20,6 +20,7 @@ package org.jemule.core;
 
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
+import io.github.resilience4j.core.functions.CheckedSupplier;
 import org.jemule.protocol.Tag;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -27,11 +28,18 @@ import org.slf4j.LoggerFactory;
 import java.sql.*;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.locks.ReentrantLock;
 
 public class DatabaseManager implements AutoCloseable {
     private static final Logger logger = LoggerFactory.getLogger(DatabaseManager.class);
     private final Connection connection;
     private final CircuitBreaker circuitBreaker;
+    /**
+     * Serializes the use of the single JDBC connection: its auto-commit mode is switched for the transaction of
+     * saveFile, which must not interleave with the statements of other threads. A lock rather than synchronized,
+     * which would pin the carrier thread of the calling virtual thread during the I/O.
+     */
+    private final ReentrantLock lock = new ReentrantLock();
 
     public DatabaseManager(String dbPath) throws SQLException {
         this(dbPath, 50.0f, 10, 60);
@@ -49,6 +57,18 @@ public class DatabaseManager implements AutoCloseable {
         this.circuitBreaker = CircuitBreaker.of("database", config);
         
         initSchema();
+    }
+
+    /** Runs a database operation through the circuit breaker, holding the connection lock. */
+    private <T> T locked(CheckedSupplier<T> operation) throws Throwable {
+        return circuitBreaker.executeCheckedSupplier(() -> {
+            lock.lock();
+            try {
+                return operation.get();
+            } finally {
+                lock.unlock();
+            }
+        });
     }
 
     private void initSchema() throws SQLException {
@@ -96,7 +116,7 @@ public class DatabaseManager implements AutoCloseable {
 
     public void addBannedHash(String hash, String reason) {
         try {
-            circuitBreaker.executeCheckedSupplier(() -> {
+            locked(() -> {
                 addBannedHashInternal(hash, reason);
                 return null;
             });
@@ -116,7 +136,7 @@ public class DatabaseManager implements AutoCloseable {
 
     public List<String> loadBannedHashes() {
         try {
-            return circuitBreaker.executeCheckedSupplier(this::loadBannedHashesInternal);
+            return locked(this::loadBannedHashesInternal);
         } catch (Throwable e) {
             logger.error("Circuit breaker prevented or caught error during loadBannedHashes: {}", e.getMessage());
             return new ArrayList<>();
@@ -137,7 +157,7 @@ public class DatabaseManager implements AutoCloseable {
     /** Banned hashes whose reason starts with the given prefix. */
     public List<String> loadBannedHashes(String reasonPrefix) {
         try {
-            return circuitBreaker.executeCheckedSupplier(() -> loadBannedHashesInternal(reasonPrefix));
+            return locked(() -> loadBannedHashesInternal(reasonPrefix));
         } catch (Throwable e) {
             logger.error("Circuit breaker prevented or caught error during loadBannedHashes: {}", e.getMessage());
             return new ArrayList<>();
@@ -161,7 +181,7 @@ public class DatabaseManager implements AutoCloseable {
     /** Deletes a file and its tags. */
     public void deleteFile(String hash) {
         try {
-            circuitBreaker.executeCheckedSupplier(() -> {
+            locked(() -> {
                 try (PreparedStatement ps = connection.prepareStatement("DELETE FROM files WHERE hash = ?")) {
                     ps.setString(1, hash);
                     ps.executeUpdate();
@@ -175,7 +195,7 @@ public class DatabaseManager implements AutoCloseable {
 
     public void saveFile(FileMetadata meta) {
         try {
-            circuitBreaker.executeCheckedSupplier(() -> {
+            locked(() -> {
                 saveFileInternal(meta);
                 return null;
             });
@@ -232,7 +252,7 @@ public class DatabaseManager implements AutoCloseable {
 
     public List<FileMetadata> loadFiles() {
         try {
-            return circuitBreaker.executeCheckedSupplier(this::loadFilesInternal);
+            return locked(this::loadFilesInternal);
         } catch (Throwable e) {
             logger.error("Circuit breaker prevented or caught error during loadFiles: {}", e.getMessage());
             return new ArrayList<>();
@@ -289,7 +309,7 @@ public class DatabaseManager implements AutoCloseable {
 
     public void setStat(String key, long value) {
         try {
-            circuitBreaker.executeCheckedSupplier(() -> {
+            locked(() -> {
                 setStatInternal(key, value);
                 return null;
             });
@@ -309,7 +329,7 @@ public class DatabaseManager implements AutoCloseable {
 
     public long getStat(String key, long defaultValue) {
         try {
-            return circuitBreaker.executeCheckedSupplier(() -> getStatInternal(key, defaultValue));
+            return locked(() -> getStatInternal(key, defaultValue));
         } catch (Throwable e) {
             logger.error("Circuit breaker prevented or caught error during getStat: {}", e.getMessage());
             return defaultValue;
@@ -328,8 +348,13 @@ public class DatabaseManager implements AutoCloseable {
 
     @Override
     public void close() throws SQLException {
-        if (connection != null && !connection.isClosed()) {
-            connection.close();
+        lock.lock();
+        try {
+            if (connection != null && !connection.isClosed()) {
+                connection.close();
+            }
+        } finally {
+            lock.unlock();
         }
     }
 }
