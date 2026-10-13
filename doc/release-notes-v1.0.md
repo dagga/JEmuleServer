@@ -1,46 +1,46 @@
 ## JEmuleServer 1.0
 
-Première version stable de JEmuleServer, serveur eD2K (eMule) en Java destiné à rendre aux clients eMule le
-même service, a minima, que le serveur historique Lugdunum.
+First stable release of JEmuleServer, an eD2K (eMule) server written in Java that aims to give eMule clients at
+least the same service as the historical Lugdunum server.
 
-Cette version corrige les 26 incompatibilités relevées par l'[audit de compatibilité avec le client eMule 0.50a](https://github.com/dagga/JEmuleServer/blob/v1.0/doc/AUDIT_compatibilite_client_eMule.md),
-mené à partir du code source du client.
+This release fixes the 26 incompatibilities found by the [compatibility audit against the eMule 0.50a client](https://github.com/dagga/JEmuleServer/blob/main/doc/eMule_client_compatibility_audit.md),
+carried out from the client's source code.
 
-### Nouveautés et corrections principales
+### Main changes and fixes
 
-- **Sources** : les demandes de sources (`OP_GETSOURCES` / `OP_GETSOURCES_OBFU`, TCP et UDP) aboutissent ; IP et
-  ports en little-endian ; port d'écoute réel des clients ; tous les clients partageant un fichier sont renvoyés ;
-  les sources disparaissent à la déconnexion.
-- **Publication** : décodage complet des tags eMule (chaînes compactes, entiers non signés, 64 bits), plus de
-  perte de publication selon le nombre de fichiers partagés, type de fichier normalisé (`Video`, `Audio`…).
-- **Recherche** : résultats correctement comptés, bouton « Plus » fonctionnel, mots-clés Unicode, filtres de
-  taille / disponibilité / sources complètes / bitrate / durée / codec, paramètres 64 bits, recherche globale UDP.
-- **HighID / LowID** : test de joignabilité au login (`OP_HELLO` → `OP_HELLOANSWER`), LowID sinon, et relais des
-  callbacks (`OP_CALLBACKREQUESTED` / `OP_CALLBACK_FAIL`).
-- **Obfuscation** : handshake TCP (Diffie-Hellman + RC4) et obfuscation UDP serveur conformes au client.
-- **Robustesse** : décompression zlib bornée, plus de paquets inconnus envoyés aux clients.
-- Nom affiché par les clients : `JEmuleServer v1.0`, description `eMule Server - version 1.0`.
+- **Sources**: source requests (`OP_GETSOURCES` / `OP_GETSOURCES_OBFU`, TCP and UDP) now succeed; IPs and ports in
+  little-endian; the clients' real listening port; every client sharing a file is returned; sources are removed when
+  their client disconnects.
+- **Publishing**: full decoding of eMule tags (compact strings, unsigned integers, 64-bit values), no more lost
+  publications depending on the number of shared files, normalized file type (`Video`, `Audio`…).
+- **Search**: results counted correctly, working "More" button, Unicode keywords, filters on size / availability /
+  complete sources / bitrate / length / codec, 64-bit parameters, UDP global search.
+- **HighID / LowID**: reachability test at login (`OP_HELLO` → `OP_HELLOANSWER`), LowID otherwise, and callback
+  relaying (`OP_CALLBACKREQUESTED` / `OP_CALLBACK_FAIL`).
+- **Obfuscation**: TCP handshake (Diffie-Hellman + RC4) and server UDP obfuscation matching the client.
+- **Robustness**: bounded zlib decompression, no more unknown packets sent to clients.
+- Name shown by clients: `JEmuleServer v1.0`, description `eMule Server - version 1.0`.
 
-### Téléchargements
+### Downloads
 
-| Fichier | Usage |
+| File | Use |
 |---|---|
-| `jemuleserver_1.0_amd64.deb` | Debian / Ubuntu (Java inclus) |
-| `jemuleserver-1.0-1.x86_64.rpm` | Fedora / RHEL / openSUSE (Java inclus) |
-| `JEmuleServer-1.0.exe` | Windows, installateur (Java inclus) |
-| `JEmuleServer-1.0.jar` | Toute plateforme avec Java 21 ou plus : `java -jar JEmuleServer-1.0.jar [server.properties] [port]` |
-| `jemuleserver.service` | Unité systemd pour les paquets Linux |
-| `SHA256SUMS` | Sommes de contrôle |
+| `jemuleserver_1.0_amd64.deb` | Debian / Ubuntu (Java included) |
+| `jemuleserver-1.0-1.x86_64.rpm` | Fedora / RHEL / openSUSE (Java included) |
+| `JEmuleServer-1.0.exe` | Windows installer (Java included) |
+| `JEmuleServer-1.0.jar` | Any platform with Java 21 or later: `java -jar JEmuleServer-1.0.jar [server.properties] [port]` |
+| `jemuleserver.service` | systemd unit for the Linux packages |
+| `SHA256SUMS` | Checksums |
 
-Les paquets installent l'application dans `/opt/jemuleserver` (Linux) ou `Program Files\JEmuleServer` (Windows).
-Lancé sans argument, le programme installé range sa configuration (`server.properties`, créée au premier
-démarrage) et sa base H2 dans `~/.local/share/jemuleserver` (Linux) ou `%LOCALAPPDATA%\JEmuleServer` (Windows).
-Avec un fichier de configuration en argument, les chemins relatifs restent relatifs au répertoire courant.
+The packages install the application in `/opt/jemuleserver` (Linux) or `Program Files\JEmuleServer` (Windows).
+Started without arguments, the installed program keeps its configuration (`server.properties`, created on first
+start) and its H2 database in `~/.local/share/jemuleserver` (Linux) or `%LOCALAPPDATA%\JEmuleServer` (Windows).
+With a configuration file as argument, relative paths stay relative to the current directory.
 
-### Installation en service (Linux)
+### Installing as a service (Linux)
 
 ```bash
-sudo dnf install ./jemuleserver-1.0-1.x86_64.rpm      # ou : sudo apt install ./jemuleserver_1.0_amd64.deb
+sudo dnf install ./jemuleserver-1.0-1.x86_64.rpm      # or: sudo apt install ./jemuleserver_1.0_amd64.deb
 sudo useradd --system --home-dir /var/lib/jemuleserver --create-home --shell /usr/sbin/nologin jemule
 sudo install -d /etc/jemuleserver
 sudo curl -L -o /etc/jemuleserver/server.properties https://raw.githubusercontent.com/dagga/JEmuleServer/v1.0/server.properties
@@ -48,14 +48,13 @@ sudo cp jemuleserver.service /etc/systemd/system/ && sudo systemctl daemon-reloa
 sudo systemctl enable --now jemuleserver
 ```
 
-Ports à ouvrir : **TCP 4661**, **UDP 4661, 4665 et 4673** (port + 4 : UDP ; port + 12 : UDP obfusqué).
-Le serveur doit aussi pouvoir ouvrir des connexions TCP sortantes vers les clients (test HighID).
+Ports to open: **TCP 4661**, **UDP 4661, 4665 and 4673** (port + 4: UDP; port + 12: obfuscated UDP).
+The server must also be able to open outgoing TCP connections to the clients (HighID test).
 
-### Mise à jour depuis une version précédente
+### Upgrading from a previous version
 
-La base H2 existante est conservée (schéma inchangé) : arrêter le serveur, sauvegarder `jemule_db.mv.db`,
-remplacer le JAR ou installer le paquet, relancer **depuis le même répertoire** (ou avec le même
-`databasePath`). Les fichiers présents en base réapparaissent dans les recherches dès que leurs sources
-se reconnectent et les republient.
+The existing H2 database is kept (unchanged schema): stop the server, back up `jemule_db.mv.db`, replace the JAR or
+install the package, and start it again **from the same directory** (or with the same `databasePath`). Files stored
+in the database show up in searches again as soon as their sources reconnect and publish them again.
 
-Nouveau paramètre facultatif : `lowIdCheckTimeoutSeconds` (5 par défaut, 0 = tout le monde en LowID).
+New optional parameter: `lowIdCheckTimeoutSeconds` (5 by default, 0 = everyone gets a LowID).
