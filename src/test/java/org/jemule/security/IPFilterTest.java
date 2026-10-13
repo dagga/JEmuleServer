@@ -68,4 +68,53 @@ class IPFilterTest {
         assertFalse(filter.isBlocked("not.an.ip"));
         assertFalse(filter.isBlocked("999.999.999.999"));
     }
+
+    @Test
+    void rangesAtOrAboveTheFilterLevelAreAllowed(@TempDir Path tempDir) throws IOException {
+        Path filterFile = tempDir.resolve("ipfilter.dat");
+        Files.write(filterFile, List.of(
+            "001.000.000.000 - 001.000.000.255 , 000 , Blocked",
+            "002.000.000.000 - 002.000.000.255 , 099 , Blocked",
+            "003.000.000.000 - 003.000.000.255 , 100 , Allowed",
+            "004.000.000.000 - 004.000.000.255 , 127 , Allowed",
+            "005.000.000.000 - 005.000.000.255"
+        ));
+        IPFilter filter = new IPFilter();
+        filter.loadFromFile(filterFile.toString());
+
+        assertTrue(filter.isBlocked("1.0.0.1"));
+        assertTrue(filter.isBlocked("2.0.0.1"));
+        assertFalse(filter.isBlocked("3.0.0.1"));
+        assertFalse(filter.isBlocked("4.0.0.1"));
+        assertTrue(filter.isBlocked("5.0.0.1"), "a line without level blocks");
+    }
+
+    @Test
+    void overlappingRangesAreAllFound(@TempDir Path tempDir) throws IOException {
+        Path filterFile = tempDir.resolve("ipfilter.dat");
+        Files.write(filterFile, List.of(
+            "010.000.000.000 - 010.255.255.255 , 000 , Large range",
+            "010.001.000.000 - 010.001.000.010 , 000 , Nested range",
+            "010.200.000.000 - 011.000.000.255 , 000 , Overlapping range",
+            "011.000.001.000 - 011.000.001.255 , 000 , Adjacent range"
+        ));
+        IPFilter filter = new IPFilter();
+        filter.loadFromFile(filterFile.toString());
+
+        // Before the merge, 10.2.0.0 was only compared with the nested range 10.1.0.0-10.1.0.10
+        assertTrue(filter.isBlocked("10.2.0.0"));
+        assertTrue(filter.isBlocked("10.255.255.255"));
+        assertTrue(filter.isBlocked("11.0.0.128"));
+        assertTrue(filter.isBlocked("11.0.1.255"));
+        assertFalse(filter.isBlocked("11.0.2.0"));
+        assertEquals(1, filter.getFilterCount());
+    }
+
+    @Test
+    void hostNamesAreNeverResolved() {
+        assertEquals(-1, IPFilter.ipToLong("localhost"));
+        assertEquals(-1, IPFilter.ipToLong("1.2.3"));
+        assertEquals(-1, IPFilter.ipToLong("::1"));
+        assertEquals(0x01020304L, IPFilter.ipToLong("001.002.003.004"));
+    }
 }
