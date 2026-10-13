@@ -35,6 +35,15 @@ public class LoginHandler {
         context.setState(state);
 
         parseLoginRequest(state, data);
+
+        // maxUsers: refused before the HighID test, which opens a connection to the client
+        int maxUsers = context.getConfig().maxUsers();
+        if (context.getRegistry().size() >= maxUsers) {
+            log.warn("Server full ({} users): login refused", maxUsers);
+            sendServerMessage(context, out, "ERROR : This server is full (" + maxUsers + " users).");
+            context.disconnect();
+            return;
+        }
         if (initialPacket.protocol() == Packet.PROTOCOL_ZLIB || (state.serverCaps() & ClientState.SRVCAP_ZLIB) != 0) {
             state.setZlibSupported(true);
         }

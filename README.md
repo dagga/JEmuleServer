@@ -69,7 +69,7 @@ JEmuleServer uses a `server.properties` file for its configuration. If the file 
 Example `server.properties`:
 ```properties
 port=4661
-maxUsers=100000
+maxUsers=1000000
 databasePath=./jemule_db
 fakeFileDetectionEnabled=true
 # ipFilterPath=ipfilter.dat
