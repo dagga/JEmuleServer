@@ -25,7 +25,7 @@ The JAR file will be generated in `build/libs/JEmuleServer-1.0.1.jar`.
 ## Installation from the release packages
 
 Each release on GitHub provides installers bundling their own Java runtime:
-`jemuleserver_<version>-1_amd64.deb` (Debian/Ubuntu), `jemuleserver-<version>-1.x86_64.rpm` (Fedora/RHEL) and
+`jemuleserver_<version>_amd64.deb` (Debian/Ubuntu), `jemuleserver-<version>-1.x86_64.rpm` (Fedora/RHEL) and
 `JEmuleServer-<version>.exe` (Windows), plus the plain JAR and a systemd unit (`packaging/jemuleserver.service`).
 
 - The application is installed in `/opt/jemuleserver` (Linux) or `Program Files\JEmuleServer` (Windows).

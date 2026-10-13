@@ -19,7 +19,7 @@ Version corrective de la 1.0.
 
 | Fichier | Usage |
 |---|---|
-| `jemuleserver_1.0.1-1_amd64.deb` | Debian / Ubuntu (Java inclus) |
+| `jemuleserver_1.0.1_amd64.deb` | Debian / Ubuntu (Java inclus) |
 | `jemuleserver-1.0.1-1.x86_64.rpm` | Fedora / RHEL / openSUSE (Java inclus) |
 | `JEmuleServer-1.0.1.exe` | Windows, installateur (Java inclus) |
 | `JEmuleServer-1.0.1.jar` | Toute plateforme avec Java 21 ou plus : `java -jar JEmuleServer-1.0.1.jar [server.properties] [port]` |

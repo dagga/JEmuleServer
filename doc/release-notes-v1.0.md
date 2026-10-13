@@ -25,7 +25,7 @@ mené à partir du code source du client.
 
 | Fichier | Usage |
 |---|---|
-| `jemuleserver_1.0-1_amd64.deb` | Debian / Ubuntu (Java inclus) |
+| `jemuleserver_1.0_amd64.deb` | Debian / Ubuntu (Java inclus) |
 | `jemuleserver-1.0-1.x86_64.rpm` | Fedora / RHEL / openSUSE (Java inclus) |
 | `JEmuleServer-1.0.exe` | Windows, installateur (Java inclus) |
 | `JEmuleServer-1.0.jar` | Toute plateforme avec Java 21 ou plus : `java -jar JEmuleServer-1.0.jar [server.properties] [port]` |
@@ -40,7 +40,7 @@ Avec un fichier de configuration en argument, les chemins relatifs restent relat
 ### Installation en service (Linux)
 
 ```bash
-sudo dnf install ./jemuleserver-1.0-1.x86_64.rpm      # ou : sudo apt install ./jemuleserver_1.0-1_amd64.deb
+sudo dnf install ./jemuleserver-1.0-1.x86_64.rpm      # ou : sudo apt install ./jemuleserver_1.0_amd64.deb
 sudo useradd --system --home-dir /var/lib/jemuleserver --create-home --shell /usr/sbin/nologin jemule
 sudo install -d /etc/jemuleserver
 sudo curl -L -o /etc/jemuleserver/server.properties https://raw.githubusercontent.com/dagga/JEmuleServer/v1.0/server.properties
