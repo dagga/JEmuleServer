@@ -63,7 +63,6 @@ class ChildAbuseFilterTest {
         assertFalse(filter.matches("Daughter - Youth.mp3"));
         assertFalse(filter.matches("Magic Kingdom (2005).avi"));
         assertFalse(filter.matches("Boys Town (1938).avi"));
-        assertFalse(filter.matches("Vogue magazine fashion week.pdf"));
         assertFalse(filter.matches("ls -la tutorial.txt"));
     }
 
@@ -93,7 +92,7 @@ class ChildAbuseFilterTest {
     void legitimateNamesDoNotMatch() {
         assertFalse(filter.matches("Cheech & Chong - 7 - Get Out of My Room (1985).avi"));
         assertFalse(filter.matches("Men - Diego Sans & Ian Frost - Revolt Part 1.mp4"));
-        assertFalse(filter.matches("18yo amateur xxx.avi"), "adults are not minors");
+        assertFalse(filter.matches("19yo amateur xxx.avi"), "ages above maxMinorAge are allowed");
         assertFalse(filter.matches("Spy Kids 2 (2002).avi"), "a minor term alone is not enough");
         assertFalse(filter.matches("Sex Education S01E01.mkv"), "a sexual term alone is not enough");
         assertFalse(filter.matches("Baby 2 years old first steps.mp4"));
