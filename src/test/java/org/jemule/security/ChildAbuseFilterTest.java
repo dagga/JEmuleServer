@@ -37,11 +37,34 @@ class ChildAbuseFilterTest {
     }
 
     @Test
+    void thirdPartyListMarkersMatchAlone() {
+        assertTrue(filter.matches("LS-Models Issue 05.zip"));
+        assertTrue(filter.matches("Candydoll TV set 12.rar"));
+        assertTrue(filter.matches("ukrainian-nymphets.com 01.jpg"));
+        assertTrue(filter.matches("vladmodels.ru Y123.zip"));
+        assertTrue(filter.matches("www.primejailbait.com.avi"));
+        assertTrue(filter.matches("SiberianMouse Masha.avi"));
+    }
+
+    @Test
+    void thirdPartyListPhrasesNeedASexualTerm() {
+        assertTrue(filter.matches("Silver Dreams nude 03.jpg"));
+        assertTrue(filter.matches("star sessions naked.avi"));
+        assertFalse(filter.matches("Silver Dreams - Ocean.mp3"));
+        assertFalse(filter.matches("Star Sessions Vol 1.mp3"));
+    }
+
+    @Test
     void ambiguousNamesStayAllowed() {
         assertFalse(filter.matches("Lolita (1997).avi"));
         assertFalse(filter.matches("Nina Simone - Feeling Good.mp3"));
         assertFalse(filter.matches("Pedometer Pro.apk"));
         assertFalse(filter.matches("Top 10 y mas.avi"), "an age without a sexual term is not enough");
+        assertFalse(filter.matches("Daughter - Youth.mp3"));
+        assertFalse(filter.matches("Magic Kingdom (2005).avi"));
+        assertFalse(filter.matches("Boys Town (1938).avi"));
+        assertFalse(filter.matches("Vogue magazine fashion week.pdf"));
+        assertFalse(filter.matches("ls -la tutorial.txt"));
     }
 
     @Test
