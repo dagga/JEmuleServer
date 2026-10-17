@@ -31,7 +31,7 @@ public class EmuleSpecTest {
     static void setup() throws IOException {
         ServerConfig config = new ServerConfig(
                 TEST_PORT, 1024 * 1024, 100, 100, 5000, 100000, 1000, 100,
-                "jemule_test_db", "ipfilter.dat", false, 0.5f, 10, 60, 300, 60, "127.0.0.1"
+                "jemule_test_db", null, false, 0.5f, 10, 60, 300, 60, "127.0.0.1"
         );
         server = new Server(config, new ClientFactory());
         serverThread = new Thread(() -> {

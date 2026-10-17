@@ -105,6 +105,13 @@ lowIdCheckTimeoutSeconds=5
 All parameters can be tuned in this file, including quotas, flood protection thresholds, and circuit breaker settings.
 The commented [`server.properties`](server.properties) at the root of the repository lists all of them.
 
+### IP filter updates
+
+Set `ipFilterPath` to enable the IPv4 filter and its automatic daily refresh from the HTTPS source bundled with the
+server. A downloaded filter is installed only when fewer than 10% of its normalized blocked ranges differ from the
+current filter. Larger changes and invalid downloads leave the current filter untouched and are recorded in the
+adjacent `<ipFilterPath>.trace` file. If no filter path is configured, automatic updates are disabled.
+
 ## Child Abuse Filter
 
 The server refuses files whose name advertises child sexual abuse material, and announces it in its name
