@@ -234,29 +234,28 @@ public class KadSearchBridge implements AutoCloseable {
 
         KadId keywordHash = KadId.fromKeyword(primaryToken);
 
-        // Check if an existing active search session is already running for this keyword hash
-        KadSearchSession session = activeSessions.computeIfAbsent(keywordHash, k -> {
-            KadSearchSession s = new KadSearchSession(k, keyword);
-            if (dispatchSearchRequest(s) == 0) {
+        // Searches running at the same time for this keyword hash share one session. The session is registered
+        // before the requests are sent, so that an immediate answer finds it.
+        KadSearchSession created = new KadSearchSession(keywordHash, keyword);
+        KadSearchSession existing = activeSessions.putIfAbsent(keywordHash, created);
+        KadSearchSession session = existing != null ? existing : created;
+        if (existing == null) {
+            if (dispatchSearchRequest(created) == 0) {
                 // DHT isolated or socket closed: nothing can answer, the local results must not wait for the timeout
-                s.complete();
-                return s;
+                created.complete();
+                activeSessions.remove(keywordHash, created);
+            } else {
+                // Schedule completion after searchTimeoutMs
+                Thread.ofVirtual().name("KadSearchTimeout-" + keywordHash.toHexString()).start(() -> {
+                    try {
+                        Thread.sleep(searchTimeoutMs);
+                    } catch (InterruptedException ignored) {
+                    } finally {
+                        created.complete();
+                        activeSessions.remove(keywordHash, created);
+                    }
+                });
             }
-            // Schedule completion after searchTimeoutMs
-            Thread.ofVirtual().name("KadSearchTimeout-" + k.toHexString()).start(() -> {
-                try {
-                    Thread.sleep(searchTimeoutMs);
-                } catch (InterruptedException ignored) {
-                } finally {
-                    s.complete();
-                    activeSessions.remove(k);
-                }
-            });
-            return s;
-        });
-
-        if (session.future().isDone()) {
-            activeSessions.remove(keywordHash, session);
         }
 
         searchesForked.incrementAndGet();

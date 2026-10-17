@@ -419,9 +419,9 @@ class KadSearchBridgeTest {
             List<FileMetadata> results = future.get(5, TimeUnit.SECONDS);
 
             // Only the clean file should be in results
-            assertEquals(1, results.size(), "Only clean file should pass through filters");
-            assertEquals(cleanHash, results.get(0).hash());
-            assertEquals("nature-documentary.avi", results.get(0).name());
+            assertEquals(List.of(cleanHash + " nature-documentary.avi"),
+                    results.stream().map(f -> f.hash() + " " + f.name()).toList(),
+                    "Only clean file should pass through filters");
 
             // The illicit hash should be auto-banned
             assertTrue(bridge.isHashBanned(illicitHash));
