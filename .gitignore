@@ -25,3 +25,6 @@ Thumbs.db
 *.log
 /jemule_db.mv.db
 /jemule_db.trace.db
+
+# Specifications (kept local)
+/SFD_*.md

@@ -21,6 +21,12 @@ package org.jemule.network;
 import org.jemule.Main;
 import org.jemule.core.ClientRegistry;
 import org.jemule.core.FileIndex;
+import org.jemule.kad.KadBootstrapManager;
+import org.jemule.kad.KadContact;
+import org.jemule.kad.KadHashBanService;
+import org.jemule.kad.KadMaintenanceService;
+import org.jemule.kad.KadNode;
+import org.jemule.kad.KadSearchBridge;
 import org.jemule.security.FakeFileDetector;
 import org.jemule.security.IPFilter;
 import org.slf4j.Logger;
@@ -33,6 +39,9 @@ import java.io.PrintStream;
 import java.lang.management.ManagementFactory;
 import java.lang.management.MemoryMXBean;
 import java.lang.management.OperatingSystemMXBean;
+import java.net.InetAddress;
+import java.util.Comparator;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -41,6 +50,8 @@ import java.util.Map;
  */
 public class AdminInterface implements Runnable {
     private static final Logger log = LoggerFactory.getLogger(AdminInterface.class);
+    /** Maximum number of contacts listed by 'kad contacts'. */
+    static final int MAX_LISTED_KAD_CONTACTS = 20;
     private final Server server;
     private final ClientRegistry registry;
     private final FileIndex fileIndex;
@@ -85,6 +96,7 @@ public class AdminInterface implements Runnable {
             case "files" -> showFiles();
             case "ban" -> handleBan(parts);
             case "events" -> showEvents();
+            case "kad" -> handleKad(parts);
             case "help" -> showHelp();
             case "stop", "exit", "quit" -> {
                 out().println("Stopping server...");
@@ -203,6 +215,108 @@ public class AdminInterface implements Runnable {
         out().println("---------------------------------------------------");
     }
 
+    /** 'kad [status|contacts|bootstrap &lt;ip&gt; &lt;port&gt;|stats]': supervision of the embedded Kademlia node. */
+    private void handleKad(String[] parts) {
+        KadNode node = server != null ? server.getKadNode() : null;
+        if (node == null) {
+            out().println("Kademlia is disabled (kadEnabled=false).");
+            return;
+        }
+        String sub = parts.length > 1 ? parts[1].toLowerCase() : "status";
+        switch (sub) {
+            case "status" -> showKadStatus(node);
+            case "contacts" -> showKadContacts(node);
+            case "bootstrap" -> handleKadBootstrap(node, parts);
+            case "stats" -> showKadStats(node);
+            default -> out().println("Usage: kad [status|contacts|bootstrap <ip> <port>|stats]");
+        }
+    }
+
+    private void showKadStatus(KadNode node) {
+        out().println("--- Kademlia Status ---");
+        out().println("Status: " + node.status());
+        out().println("Node ID: " + node.localId().toHexString().toUpperCase());
+        out().println("UDP Port: " + node.getUdpPort() + (node.isRunning() ? "" : " (not bound)"));
+        out().println("Contacts: " + node.getRoutingTable().size() + " / " + node.getRoutingTable().maxContacts());
+        out().println("Bootstrap from clients: " + (node.getConfig().bootstrapFromClients() ? "ENABLED" : "DISABLED"));
+        out().println("Forked search: " + (node.getConfig().forkSearchEnabled() ? "ENABLED" : "DISABLED"));
+        out().println("H2 ingestion: " + (node.getConfig().autoIngestToH2() ? "ENABLED" : "DISABLED")
+                + " (min sources: " + node.getConfig().minSourcesForIngest() + ")");
+        out().println("-----------------------");
+    }
+
+    private void showKadContacts(KadNode node) {
+        List<KadContact> contacts = node.getRoutingTable().getAllContacts();
+        contacts.sort(Comparator.comparingLong(KadContact::lastSeen).reversed());
+        out().println("--- Kademlia Contacts (" + contacts.size() + ") ---");
+        out().printf("%-32s | %-21s | %-7s | %-9s | %s%n", "ID", "Address", "Version", "Last seen", "Liveness");
+        out().println("-------------------------------------------------------------------------------------------");
+        long now = System.currentTimeMillis();
+        for (KadContact c : contacts.subList(0, Math.min(MAX_LISTED_KAD_CONTACTS, contacts.size()))) {
+            String liveness = c.isDead() ? "DEAD" : c.failedPings() > 0 ? "UNANSWERED (" + c.failedPings() + ")" : "ALIVE";
+            out().printf("%-32s | %-21s | %-7d | %-9s | %s%n",
+                    c.id().toHexString().toUpperCase(),
+                    c.address().getHostAddress() + ":" + c.udpPort(),
+                    c.kadVersion() & 0xFF,
+                    Math.max(0, (now - c.lastSeen()) / 1000) + "s",
+                    liveness);
+        }
+        if (contacts.size() > MAX_LISTED_KAD_CONTACTS) {
+            out().println("... and " + (contacts.size() - MAX_LISTED_KAD_CONTACTS) + " more");
+        }
+        out().println("-------------------------------------------------------------------------------------------");
+    }
+
+    private void handleKadBootstrap(KadNode node, String[] parts) {
+        String[] args = parts.length > 2 ? parts[2].trim().split("\\s+") : new String[0];
+        if (args.length != 2) {
+            out().println("Usage: kad bootstrap <ip> <port>");
+            return;
+        }
+        int port;
+        try {
+            port = Integer.parseInt(args[1]);
+        } catch (NumberFormatException e) {
+            port = -1;
+        }
+        if (port < 1 || port > 65535) {
+            out().println("Error: Port must be between 1 and 65535.");
+            return;
+        }
+        InetAddress address;
+        try {
+            address = InetAddress.getByName(args[0]);
+        } catch (java.net.UnknownHostException e) {
+            out().println("Error: Unknown host " + args[0] + ".");
+            return;
+        }
+        if (node.bootstrap(address, port)) {
+            out().println("Bootstrap request sent to " + address.getHostAddress() + ":" + port + ".");
+        } else {
+            out().println("Error: The Kademlia node is not running.");
+        }
+    }
+
+    private void showKadStats(KadNode node) {
+        KadSearchBridge bridge = node.getSearchBridge();
+        KadBootstrapManager bootstrap = node.getBootstrapManager();
+        KadMaintenanceService maintenance = node.getMaintenanceService();
+        KadHashBanService bans = node.getHashBanService();
+        out().println("--- Kademlia Statistics ---");
+        out().println("Searches forked: " + bridge.getSearchesForked());
+        out().println("Active searches: " + bridge.getActiveSessionCount());
+        out().println("Results received: " + bridge.getResultsReceived());
+        out().println("Files ingested: " + bridge.getFilesIngested());
+        out().println("Illicit files blocked: " + bridge.getIllicitFilesBlocked());
+        out().println("Hashes banned: " + (bans != null ? bans.getTotalBanned() : 0));
+        out().println("Bootstrap requests: " + bootstrap.getBootstrapAttempts()
+                + " (answered: " + bootstrap.getBootstrapSuccesses()
+                + ", contacts discovered: " + bootstrap.getContactsDiscovered() + ")");
+        out().println("Maintenance: " + maintenance.getPingsSent() + " pings, " + maintenance.getRefreshCount()
+                + " bucket refreshes, " + maintenance.getContactsEvicted() + " contacts evicted");
+        out().println("---------------------------");
+    }
+
     private void showHelp() {
         out().println("Available commands:");
         out().println("  status          - Show server performance and stats");
@@ -210,6 +324,10 @@ public class AdminInterface implements Runnable {
         out().println("  files           - Show file indexing stats");
         out().println("  ban <hash> [R]  - Ban a file hash (32 hex chars)");
         out().println("  events          - Show event counts (total and last minute)");
+        out().println("  kad status      - Show the Kademlia node status, UDP port and contact count");
+        out().println("  kad contacts    - List the " + MAX_LISTED_KAD_CONTACTS + " most recent Kademlia contacts");
+        out().println("  kad bootstrap <ip> <port> - Send a bootstrap request to a Kademlia node");
+        out().println("  kad stats       - Show the Kademlia counters (searches, ingestion, bans)");
         out().println("  help            - Show this help message");
         out().println("  stop/exit/quit  - Shutdown the server");
     }

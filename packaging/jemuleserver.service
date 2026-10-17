@@ -18,6 +18,9 @@ User=jemule
 Group=jemule
 WorkingDirectory=/var/lib/jemuleserver
 ExecStart=/opt/jemuleserver/bin/JEmuleServer /etc/jemuleserver/server.properties
+# The JVM takes at most 1/4 of the RAM by default: too little on a small dedicated server (about 500 MB of heap
+# for 1,000,000 files). MaxRAMPercentage is a ceiling, the heap only grows as needed.
+Environment=JAVA_TOOL_OPTIONS=-XX:MaxRAMPercentage=75
 # SIGTERM runs the shutdown hook, which closes the H2 database cleanly
 KillSignal=SIGTERM
 TimeoutStopSec=30

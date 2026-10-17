@@ -54,6 +54,7 @@ public final class EmuleTestSupport {
         private final FakeFileDetector fakeFileDetector = new FakeFileDetector();
         private final EventManager eventManager = new EventManager();
         private final ClientFactory clientFactory = new ClientFactory();
+        private org.jemule.kad.KadSearchBridge kadSearchBridge;
         private ClientState state;
         private OutputStream wrappedOut;
 
@@ -63,6 +64,12 @@ public final class EmuleTestSupport {
             this.registry = registry;
             this.fileIndex = fileIndex;
         }
+
+        public void setKadSearchBridge(org.jemule.kad.KadSearchBridge bridge) {
+            this.kadSearchBridge = bridge;
+        }
+
+        @Override public org.jemule.kad.KadSearchBridge getKadSearchBridge() { return kadSearchBridge; }
 
         @Override public Socket getSocket() { return socket; }
         @Override public ServerConfig getConfig() { return config; }

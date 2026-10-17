@@ -87,6 +87,11 @@ public class LoginHandler {
         sendServerStatus(context, out);
         sendServerMessage(context, out, "Welcome to JEmuleServer version " + Main.VERSION + "\n" +
                 "Your ID is: " + Long.toUnsignedString(clientId));
+
+        // FR-KAD-02: HighID clients are used to bootstrap the embedded Kademlia node
+        if (context.getServer() != null) {
+            context.getServer().onClientLoggedIn(state);
+        }
     }
 
     /**

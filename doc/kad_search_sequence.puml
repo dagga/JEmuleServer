@@ -1,0 +1,63 @@
+@startuml
+actor Client
+participant "SearchHandler" as SH
+participant "FileIndex" as FI
+participant "KadSearchBridge" as KB
+participant "KadUdpService" as UDP
+participant "Kad contacts\n(3 closest)" as KAD
+participant "ChildAbuseFilter\nFakeFileDetector" as CAF
+participant "KadHashBanService" as BAN
+database "H2" as DB
+
+Client -> SH: OP_SEARCHREQUEST
+SH -> FI: searchComplex(query)
+FI --> SH: local results
+
+SH -> KB: forkSearch(query)
+alt no contact or Kad socket closed
+    KB --> SH: empty list (completed at once)
+else contacts available
+    KB -> UDP: KADEMLIA2_SEARCH_KEY_REQ(MD4(keyword))
+    UDP -> KAD: UDP
+end
+
+alt cold search (no local result)
+    SH -> SH: wait for the Kad session\n(at most kadSearchTimeoutSeconds)
+else warm search (1 to 49 local results)
+    SH -> Client: OP_SEARCHRESULT (local results, more = 0)
+else 50 local results or more
+    SH -> Client: OP_SEARCHRESULT (50 results, more = 1)
+end
+
+KAD -> UDP: KADEMLIA2_SEARCH_RES
+UDP -> KB: handleSearchRes()
+loop each file
+    KB -> CAF: banned hash? illicit name? fake?
+    alt illicit
+        KB -> BAN: onIllicitFile(file)
+        BAN -> DB: INSERT banned_hashes
+    else clean and sources >= kadMinSourcesForIngest
+        KB -> FI: addFile(file)
+        FI -> DB: INSERT files, file_tags
+        KB -> KB: add to the session results
+    else no source
+        KB -> KB: drop
+    end
+end
+
+alt cold search
+    KB --> SH: Kad results (at the timeout)
+    SH -> Client: OP_SEARCHRESULT (first 50 deduplicated files,\nmore = 1 if others remain)
+    opt "More" button
+        Client -> SH: OP_QUERY_MORE_RESULT
+        SH -> Client: OP_SEARCHRESULT (next batch)
+    end
+else 50 local results or more
+    KB --> SH: Kad results join the pending results\n(OP_QUERY_MORE_RESULT)
+end
+
+note over Client, DB
+  The next searches on the same terms find the ingested
+  files in FileIndex: they are answered at once, in the first batch.
+end note
+@enduml

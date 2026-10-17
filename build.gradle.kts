@@ -7,7 +7,7 @@ plugins {
 }
 
 group = "org.jemule"
-version = "1.1"
+version = "1.2"
 
 configure<JavaPluginExtension> {
     toolchain {
@@ -31,9 +31,30 @@ dependencies {
     "testRuntimeOnly"("org.junit.platform:junit-platform-launcher")
 }
 
-tasks.withType<Test>().configureEach {
-    useJUnitPlatform()
+tasks.named<Test>("test").configure {
+    useJUnitPlatform {
+        excludeTags("benchmark")
+    }
     finalizedBy(tasks.named("jacocoTestReport"))
+}
+
+// Measures the server with a large database (./gradlew benchmark -Pfiles=1000000), outside the regular test suite
+tasks.register<Test>("benchmark") {
+    description = "Runs the large database benchmarks."
+    group = "verification"
+    testClassesDirs = sourceSets["test"].output.classesDirs
+    classpath = sourceSets["test"].runtimeClasspath
+    useJUnitPlatform {
+        includeTags("benchmark")
+    }
+    maxHeapSize = (project.findProperty("heap") ?: "2g").toString()
+    // A low-cost server has 1 or 2 vCPUs
+    jvmArgs("-XX:ActiveProcessorCount=" + (project.findProperty("cpus") ?: "2").toString())
+    systemProperty("jemule.benchmark.files", (project.findProperty("files") ?: "1000000").toString())
+    testLogging {
+        showStandardStreams = true
+    }
+    outputs.upToDateWhen { false }
 }
 
 tasks.named<JacocoReport>("jacocoTestReport").configure {

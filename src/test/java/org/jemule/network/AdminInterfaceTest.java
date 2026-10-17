@@ -92,6 +92,106 @@ public class AdminInterfaceTest {
         verify(server).stop();
     }
 
+    private static org.jemule.kad.KadNode startedKadNode() throws Exception {
+        int port;
+        try (java.net.DatagramSocket s = new java.net.DatagramSocket(0)) {
+            port = s.getLocalPort();
+        }
+        org.jemule.kad.KadNode node = new org.jemule.kad.KadNode(
+                new org.jemule.config.KadConfig(true, port, true, 500, true, 4, true, 1), 4661, null, null,
+                org.jemule.security.ChildAbuseFilter.defaults(), new FakeFileDetector());
+        node.start();
+        return node;
+    }
+
+    @Test
+    void kadCommandsReportADisabledNode() {
+        admin.handleCommand("kad status");
+        assertTrue(outContent.toString().contains("Kademlia is disabled"));
+    }
+
+    @Test
+    void kadStatusShowsStatusPortAndContacts() throws Exception {
+        try (org.jemule.kad.KadNode node = startedKadNode()) {
+            org.mockito.Mockito.when(server.getKadNode()).thenReturn(node);
+            admin.handleCommand("kad status");
+            String out = outContent.toString();
+            assertTrue(out.contains("Kademlia Status"), out);
+            assertTrue(out.contains("Status: DISCONNECTED"), out);
+            assertTrue(out.contains("UDP Port: " + node.getUdpPort()), out);
+            assertTrue(out.contains("Contacts: 0 / 500"), out);
+            assertTrue(out.contains(node.localId().toHexString().toUpperCase()), out);
+
+            outContent.reset();
+            admin.handleCommand("kad");
+            assertTrue(outContent.toString().contains("Kademlia Status"), "'kad' alone shows the status");
+        }
+    }
+
+    @Test
+    void kadContactsListsAtMostTwentyContacts() throws Exception {
+        try (org.jemule.kad.KadNode node = startedKadNode()) {
+            org.mockito.Mockito.when(server.getKadNode()).thenReturn(node);
+            org.jemule.kad.KadRoutingTable table = node.getRoutingTable();
+            for (int i = 0; i < 25; i++) {
+                table.addOrUpdate(new org.jemule.kad.KadContact(table.generateRandomIdForBucket(i % 100 + 1),
+                        java.net.InetAddress.getByName("10.0.0." + (i + 1)), 4672));
+            }
+            int total = table.size();
+            admin.handleCommand("kad contacts");
+            String out = outContent.toString();
+            assertTrue(out.contains("Kademlia Contacts (" + total + ")"), out);
+            assertEquals(AdminInterface.MAX_LISTED_KAD_CONTACTS, out.split(":4672 ", -1).length - 1, out);
+            assertTrue(out.contains("ALIVE"), out);
+            assertTrue(out.contains("... and " + (total - AdminInterface.MAX_LISTED_KAD_CONTACTS) + " more"), out);
+        }
+    }
+
+    @Test
+    void kadBootstrapValidatesItsArgumentsAndSendsTheRequest() throws Exception {
+        try (org.jemule.kad.KadNode node = startedKadNode()) {
+            org.mockito.Mockito.when(server.getKadNode()).thenReturn(node);
+
+            admin.handleCommand("kad bootstrap 127.0.0.1");
+            assertTrue(outContent.toString().contains("Usage: kad bootstrap <ip> <port>"));
+
+            outContent.reset();
+            admin.handleCommand("kad bootstrap 127.0.0.1 70000");
+            assertTrue(outContent.toString().contains("Error: Port"));
+
+            outContent.reset();
+            long before = node.getBootstrapManager().getBootstrapAttempts();
+            admin.handleCommand("kad bootstrap 127.0.0.1 4672");
+            assertTrue(outContent.toString().contains("Bootstrap request sent to 127.0.0.1:4672"), outContent.toString());
+            assertEquals(before + 1, node.getBootstrapManager().getBootstrapAttempts());
+        }
+    }
+
+    @Test
+    void kadStatsShowsTheCounters() throws Exception {
+        try (org.jemule.kad.KadNode node = startedKadNode()) {
+            org.mockito.Mockito.when(server.getKadNode()).thenReturn(node);
+            admin.handleCommand("kad stats");
+            String out = outContent.toString();
+            assertTrue(out.contains("Searches forked: 0"), out);
+            assertTrue(out.contains("Results received: 0"), out);
+            assertTrue(out.contains("Files ingested: 0"), out);
+            assertTrue(out.contains("Hashes banned: 0"), out);
+
+            outContent.reset();
+            admin.handleCommand("kad unknown");
+            assertTrue(outContent.toString().contains("Usage: kad"));
+        }
+    }
+
+    @Test
+    void helpListsTheKadCommands() {
+        admin.handleCommand("help");
+        String out = outContent.toString();
+        assertTrue(out.contains("kad status") && out.contains("kad contacts")
+                && out.contains("kad bootstrap") && out.contains("kad stats"), out);
+    }
+
     @Test
     void eventsCommandShowsTheCounters() {
         org.jemule.core.event.EventStatistics stats = new org.jemule.core.event.EventStatistics();

@@ -3,16 +3,24 @@ package org.jemule.network;
 import org.jemule.config.ServerConfig;
 import org.jemule.core.ClientRegistry;
 import org.jemule.core.FileIndex;
+import org.jemule.core.FileMetadata;
+import org.jemule.kad.*;
 import org.jemule.network.handler.PublishHandler;
 import org.jemule.network.handler.SearchHandler;
 import org.jemule.protocol.OpCode;
 import org.jemule.protocol.Tag;
+import org.jemule.security.ChildAbuseFilter;
+import org.jemule.security.FakeFileDetector;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.net.InetAddress;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import static org.jemule.network.EmuleTestSupport.*;
 import static org.junit.jupiter.api.Assertions.*;
@@ -178,5 +186,340 @@ class SearchCompatibilityTest {
         SearchAnswer a = search(new SearchTree().keyword("holiday").toBytes());
         assertEquals(0, a.more());
         assertEquals(1, a.trailingBytes());
+    }
+
+    // ===============================================================
+    // Point 4.2 — Unified Delivery & Result Merging Tests
+    // ===============================================================
+
+    @Test
+    void testForkedKadSearchWithLocalResultsAnswersAtOnce() throws Exception {
+        // 1. Publish 1 local file
+        String localHash = "11111111111111111111111111111111";
+        publish(localHash, "matrix-reloaded.avi", 700_000_000L, 2);
+
+        // 2. Set up Kad bridge
+        KadId localId = KadId.random();
+        KadRoutingTable table = new KadRoutingTable(localId);
+
+        try (KadUdpService serverUdp = new KadUdpService(0);
+             KadUdpService peerUdp = new KadUdpService(0);
+             KadSearchBridge bridge = new KadSearchBridge(table, serverUdp,
+                     ChildAbuseFilter.defaults(), new FakeFileDetector(), 3, 2000)) {
+
+            serverUdp.start();
+            peerUdp.start();
+            bridge.start();
+
+            KadId peerId = table.generateRandomIdForBucket(1);
+            KadContact peerContact = new KadContact(peerId, InetAddress.getLoopbackAddress(), peerUdp.getPort());
+            table.addOrUpdate(peerContact);
+
+            CountDownLatch reqLatch = new CountDownLatch(1);
+            peerUdp.registerListener(KadOpCode.SEARCH_KEY_REQ, (packet, addr, port) -> reqLatch.countDown());
+
+            client.setKadSearchBridge(bridge);
+
+            // Warm search: the local result is sent without waiting for the 2 s Kad timeout
+            long start = System.nanoTime();
+            SearchAnswer answer = search(new SearchTree().keyword("matrix").toBytes());
+            long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+
+            assertEquals(List.of(localHash), answer.results().stream().map(SearchResult::hash).toList());
+            assertEquals(0, answer.more());
+            assertTrue(elapsedMs < 1000, "the local results must not wait for Kad: " + elapsedMs + " ms");
+            assertTrue(reqLatch.await(3, TimeUnit.SECONDS), "the search is still forked to Kad");
+        }
+    }
+
+    @Test
+    void testForkedKadSearchDeduplicatesKadResults() throws Exception {
+        KadId localId = KadId.random();
+        KadRoutingTable table = new KadRoutingTable(localId);
+
+        try (KadUdpService serverUdp = new KadUdpService(0);
+             KadUdpService peerA = new KadUdpService(0);
+             KadUdpService peerB = new KadUdpService(0);
+             KadSearchBridge bridge = new KadSearchBridge(table, serverUdp,
+                     ChildAbuseFilter.defaults(), new FakeFileDetector(), 3, 1000)) {
+
+            serverUdp.start();
+            peerA.start();
+            peerB.start();
+            bridge.start();
+
+            table.addOrUpdate(new KadContact(table.generateRandomIdForBucket(1), InetAddress.getLoopbackAddress(), peerA.getPort()));
+            table.addOrUpdate(new KadContact(table.generateRandomIdForBucket(2), InetAddress.getLoopbackAddress(), peerB.getPort()));
+
+            String sharedHash = "22222222222222222222222222222222";
+            KadId keywordHash = KadId.fromKeyword("matrix");
+            FileMetadata shared = new FileMetadata(sharedHash, "matrix-revolutions.avi", 800_000_000L, "Video",
+                    List.of(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, 5)));
+
+            // Both peers announce the same file, each one also knows another file
+            CountDownLatch reqLatch = new CountDownLatch(2);
+            for (KadUdpService peer : List.of(peerA, peerB)) {
+                String ownHash = peer == peerA ? "33333333333333333333333333333333" : "44444444444444444444444444444444";
+                peer.registerListener(KadOpCode.SEARCH_KEY_REQ, (packet, addr, port) -> {
+                    reqLatch.countDown();
+                    List<FileMetadata> files = List.of(shared, new FileMetadata(ownHash, "matrix-" + ownHash + ".avi",
+                            700_000_000L, "Video", List.of(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, 2))));
+                    try {
+                        peer.send(KadPacket.createSearchRes(keywordHash, files), addr, port);
+                    } catch (Exception e) {
+                        fail(e);
+                    }
+                });
+            }
+
+            client.setKadSearchBridge(bridge);
+
+            // Cold search: the Kad answers are merged, the file announced twice is sent once
+            SearchAnswer answer = search(new SearchTree().keyword("matrix").toBytes());
+            assertTrue(reqLatch.await(3, TimeUnit.SECONDS), "Both peers should receive the search request");
+
+            assertEquals(List.of(sharedHash, "33333333333333333333333333333333", "44444444444444444444444444444444"),
+                    answer.results().stream().map(SearchResult::hash).sorted().toList());
+            assertEquals(0, answer.more());
+        }
+    }
+
+    @Test
+    void testForkedKadSearchMissingLocallyDeliversKadResults() throws Exception {
+        // No local files published
+        KadId localId = KadId.random();
+        KadRoutingTable table = new KadRoutingTable(localId);
+
+        try (KadUdpService serverUdp = new KadUdpService(0);
+             KadUdpService peerUdp = new KadUdpService(0);
+             KadSearchBridge bridge = new KadSearchBridge(table, serverUdp,
+                     ChildAbuseFilter.defaults(), new FakeFileDetector(), 3, 2000)) {
+
+            serverUdp.start();
+            peerUdp.start();
+            bridge.start();
+
+            KadId peerId = table.generateRandomIdForBucket(1);
+            KadContact peerContact = new KadContact(peerId, InetAddress.getLoopbackAddress(), peerUdp.getPort());
+            table.addOrUpdate(peerContact);
+
+            String hash1 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+            String hash2 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+            KadId keywordHash = KadId.fromKeyword("cyberpunk");
+
+            CountDownLatch reqLatch = new CountDownLatch(1);
+            peerUdp.registerListener(KadOpCode.SEARCH_KEY_REQ, (packet, addr, port) -> {
+                reqLatch.countDown();
+                List<FileMetadata> files = List.of(
+                        new FileMetadata(hash1, "cyberpunk-2077.iso", 50_000_000_000L, "Archive",
+                                List.of(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, 10))),
+                        new FileMetadata(hash2, "cyberpunk-edgerunners.mkv", 2_000_000_000L, "Video",
+                                List.of(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, 8)))
+                );
+                KadPacket resPkt = KadPacket.createSearchRes(keywordHash, files);
+                try {
+                    peerUdp.send(resPkt, addr, port);
+                } catch (Exception e) {
+                    fail(e);
+                }
+            });
+
+            client.setKadSearchBridge(bridge);
+
+            SearchAnswer answer = search(new SearchTree().keyword("cyberpunk").toBytes());
+            assertTrue(reqLatch.await(3, TimeUnit.SECONDS), "Peer should receive search request");
+
+            assertEquals(2, answer.results().size());
+            assertEquals(0, answer.more());
+        }
+    }
+
+    @Test
+    void testForkedKadSearchColdDiscoveryPagination() throws Exception {
+        // No local files published
+        KadId localId = KadId.random();
+        KadRoutingTable table = new KadRoutingTable(localId);
+
+        try (KadUdpService serverUdp = new KadUdpService(0);
+             KadUdpService peerUdp = new KadUdpService(0);
+             KadSearchBridge bridge = new KadSearchBridge(table, serverUdp,
+                     ChildAbuseFilter.defaults(), new FakeFileDetector(), 3, 2000)) {
+
+            serverUdp.start();
+            peerUdp.start();
+            bridge.start();
+
+            KadId peerId = table.generateRandomIdForBucket(1);
+            KadContact peerContact = new KadContact(peerId, InetAddress.getLoopbackAddress(), peerUdp.getPort());
+            table.addOrUpdate(peerContact);
+
+            KadId keywordHash = KadId.fromKeyword("anime");
+            List<FileMetadata> sixtyFiles = new ArrayList<>();
+            for (int i = 0; i < 60; i++) {
+                sixtyFiles.add(new FileMetadata(
+                        String.format("%032x", i + 100),
+                        "anime-episode-" + i + ".mkv",
+                        500_000_000L + i,
+                        "Video",
+                        List.of(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, 2))
+                ));
+            }
+
+            CountDownLatch reqLatch = new CountDownLatch(1);
+            peerUdp.registerListener(KadOpCode.SEARCH_KEY_REQ, (packet, addr, port) -> {
+                reqLatch.countDown();
+                KadPacket resPkt = KadPacket.createSearchRes(keywordHash, sixtyFiles);
+                try {
+                    peerUdp.send(resPkt, addr, port);
+                } catch (Exception e) {
+                    fail(e);
+                }
+            });
+
+            client.setKadSearchBridge(bridge);
+
+            // First batch (50 items, more=1)
+            SearchAnswer first = search(new SearchTree().keyword("anime").toBytes());
+            assertTrue(reqLatch.await(3, TimeUnit.SECONDS), "Peer should receive search request");
+            assertEquals(50, first.results().size());
+            assertEquals(1, first.more(), "More results flag must be set for cold search > 50 items");
+
+            // Query more (remaining 10 items, more=0)
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            new SearchHandler().handleQueryMoreResult(client, out);
+            Packet p = Packet.read(new ByteArrayInputStream(out.toByteArray()), 1 << 20);
+            SearchAnswer second = readSearchAnswer(p.data());
+            assertEquals(10, second.results().size());
+            assertEquals(0, second.more(), "More results flag must be 0 for last batch");
+        }
+    }
+
+    // ===============================================================
+    // Point 4.3 — Direct Retrieval on Subsequent Searches (Warm Cache)
+    // ===============================================================
+
+    @Test
+    void testWarmSearchDirectRetrievalFromMemoryWithoutMoreResults() throws Exception {
+        String dbPath = "mem:warm_search_test_" + System.currentTimeMillis();
+        try (org.jemule.core.DatabaseManager db = new org.jemule.core.DatabaseManager(dbPath);
+             KadUdpService serverUdp = new KadUdpService(0);
+             KadUdpService peerUdp = new KadUdpService(0)) {
+
+            FileIndex sharedIndex = new FileIndex(db);
+            ClientRegistry sharedRegistry = new ClientRegistry();
+
+            KadId localId = KadId.random();
+            KadRoutingTable table = new KadRoutingTable(localId);
+
+            try (KadSearchBridge bridge = new KadSearchBridge(
+                    table, serverUdp, ChildAbuseFilter.defaults(), new FakeFileDetector(),
+                    sharedIndex, db, 3, 2000, true, 1)) {
+
+                serverUdp.start();
+                peerUdp.start();
+                bridge.start();
+
+                KadId peerId = table.generateRandomIdForBucket(1);
+                KadContact peerContact = new KadContact(peerId, InetAddress.getLoopbackAddress(), peerUdp.getPort());
+                table.addOrUpdate(peerContact);
+
+                String hash1 = "1234567890abcdef1234567890abcdef";
+                String hash2 = "fedcba0987654321fedcba0987654321";
+                KadId keywordHash = KadId.fromKeyword("ubuntu");
+
+                CountDownLatch peerLatch = new CountDownLatch(1);
+                peerUdp.registerListener(KadOpCode.SEARCH_KEY_REQ, (packet, addr, port) -> {
+                    peerLatch.countDown();
+                    List<FileMetadata> files = List.of(
+                            new FileMetadata(hash1, "ubuntu-desktop.iso", 4_500_000_000L, "Archive",
+                                    List.of(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, 5))),
+                            new FileMetadata(hash2, "ubuntu-server.iso", 2_000_000_000L, "Archive",
+                                    List.of(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, 3)))
+                    );
+                    KadPacket resPkt = KadPacket.createSearchRes(keywordHash, files);
+                    try {
+                        peerUdp.send(resPkt, addr, port);
+                    } catch (Exception e) {
+                        fail(e);
+                    }
+                });
+
+                // Phase 1: Client A executes Cold Search (discovers and auto-ingests into H2 + FileIndex)
+                FakeContext clientA = loggedInContext("10.1.1.1", 50001, ServerConfig.DEFAULT, sharedRegistry, sharedIndex);
+                clientA.setKadSearchBridge(bridge);
+
+                ByteArrayOutputStream outA = new ByteArrayOutputStream();
+                new SearchHandler().handleSearch(clientA, new SearchTree().keyword("ubuntu").toBytes(), outA);
+                assertTrue(peerLatch.await(3, TimeUnit.SECONDS));
+
+                Packet pA = Packet.read(new ByteArrayInputStream(outA.toByteArray()), 1 << 20);
+                SearchAnswer answerA = readSearchAnswer(pA.data());
+                assertEquals(2, answerA.results().size());
+
+                // Verify files are now saved in H2 Database and FileIndex
+                assertTrue(sharedIndex.contains(hash1));
+                assertTrue(sharedIndex.contains(hash2));
+                assertEquals(2, db.loadFiles().size());
+
+                // Phase 2: Client B connects later and executes Warm Search
+                // No Kad bridge attached to Client B (or Kad offline) -> files served directly from local memory/H2
+                FakeContext clientB = loggedInContext("10.2.2.2", 50002, ServerConfig.DEFAULT, sharedRegistry, sharedIndex);
+
+                ByteArrayOutputStream outB = new ByteArrayOutputStream();
+                long startMs = System.currentTimeMillis();
+                new SearchHandler().handleSearch(clientB, new SearchTree().keyword("ubuntu").toBytes(), outB);
+                long durationMs = System.currentTimeMillis() - startMs;
+
+                Packet pB = Packet.read(new ByteArrayInputStream(outB.toByteArray()), 1 << 20);
+                SearchAnswer answerB = readSearchAnswer(pB.data());
+
+                // Must be returned instantly (< 100ms in test VM, < 5ms in production) in the first batch with more=0
+                assertEquals(2, answerB.results().size(), "Warm search must return both ingested files directly");
+                assertEquals(0, answerB.more(), "Warm search with <= 50 results must have more=0 (no 'More results' needed)");
+                assertTrue(durationMs < 500, "Warm search should execute instantaneously without network waits");
+
+                List<String> bHashes = answerB.results().stream().map(SearchResult::hash).toList();
+                assertTrue(bHashes.contains(hash1));
+                assertTrue(bHashes.contains(hash2));
+            }
+        }
+    }
+
+    @Test
+    void testWarmSearchPersistentAcrossServerRestart() throws Exception {
+        String dbPath = "mem:restart_search_test_" + System.currentTimeMillis() + ";DB_CLOSE_DELAY=-1";
+        String hash = "abcdef0123456789abcdef0123456789";
+
+        // 1. Initial server run: Kad file is ingested into H2 database
+        try (org.jemule.core.DatabaseManager db = new org.jemule.core.DatabaseManager(dbPath)) {
+            FileIndex index1 = new FileIndex(db);
+            FileMetadata kadFile = new FileMetadata(hash, "debian-netinst.iso", 650_000_000L, "Archive",
+                    List.of(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, 8)));
+            index1.addFile(kadFile);
+
+            // Verified saved in DB
+            assertEquals(1, db.loadFiles().size());
+        }
+
+        // 2. Simulated server restart: new FileIndex loads files from the existing DatabaseManager
+        try (org.jemule.core.DatabaseManager db = new org.jemule.core.DatabaseManager(dbPath)) {
+            FileIndex index2 = new FileIndex(db);
+            ClientRegistry registry2 = new ClientRegistry();
+
+            assertTrue(index2.contains(hash), "FileIndex must load ingested Kad files from DB upon startup");
+
+            FakeContext newClient = loggedInContext("10.3.3.3", 50003, ServerConfig.DEFAULT, registry2, index2);
+
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            new SearchHandler().handleSearch(newClient, new SearchTree().keyword("debian").toBytes(), out);
+
+            Packet p = Packet.read(new ByteArrayInputStream(out.toByteArray()), 1 << 20);
+            SearchAnswer answer = readSearchAnswer(p.data());
+
+            assertEquals(1, answer.results().size(), "Search after server restart must find ingested Kad file");
+            assertEquals(hash, answer.results().get(0).hash());
+            assertEquals("debian-netinst.iso", answer.results().get(0).tag(Tag.NAME_FILENAME));
+            assertEquals(0, answer.more());
+        }
     }
 }

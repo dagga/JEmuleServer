@@ -57,7 +57,16 @@ This document lists the sources and technical references used for the implementa
     *   *Historical Context*
     *   Description: Reference server implementation (Lugdunum) which introduced critical extensions like OpCodes 0x40-0x42 and the 0xFB tag.
 
-11. **Wireshark Wiki**
+11. **Kademlia (Petar Maymounkov & David Mazières)**
+    *   *Kademlia: A Peer-to-peer Information System Based on the XOR Metric (IPTPS 2002)*
+    *   URL: [https://pdos.csail.mit.edu/~petar/papers/maymounkov-kademlia-lncs.pdf](https://pdos.csail.mit.edu/~petar/papers/maymounkov-kademlia-lncs.pdf)
+    *   Description: The original paper on the XOR metric, k-buckets and node lookups used by the embedded Kad node.
+
+12. **RFC 1320 - The MD4 Message-Digest Algorithm**
+    *   URL: [https://www.rfc-editor.org/rfc/rfc1320](https://www.rfc-editor.org/rfc/rfc1320)
+    *   Description: Hash function of the ed2k file hashes and of the Kad keyword hashes (`MD4`, `KadId.fromKeyword`).
+
+13. **Wireshark Wiki**
     *   *eDonkey Protocol Dissector*
     *   URL: [https://wiki.wireshark.org/eDonkey](https://wiki.wireshark.org/eDonkey)
     *   Description: Information on how ed2k packets are dissected and identified in network traffic.

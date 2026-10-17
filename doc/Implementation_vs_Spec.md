@@ -36,9 +36,11 @@ Inspected files (reference):
 - Server implementation: The server provides relay and callback primitives (OpCode.CALLBACK) and accepts some opcodes (a COMPRESSED_PART handler exists), but direct client->client transfer is handled by the clients themselves. The server does not implement peer-to-peer file block exchange (this is expected).
 - Conclusion: Matches the intent (the server is not supposed to act as a client for P2P transfers); the server supports the callbacks and responses needed to set the transfer up.
 
-5) Kademlia (Bootstrap / Hello)
-- Spec: KADEMLIA opcodes listed.
-- Implementation: partial OpCode support (OpCode.fromByte handles some cases); `Server` does not expose full Kademlia handling over UDP in `handleUdp` (a full KAD implementation lives elsewhere or is limited). Recommendation: add KAD tests/implementation if required.
+5) Kademlia (Bootstrap / Hello / Search)
+- Spec: Kad2 opcodes under the `OP_KADEMLIAHEADER` (0xE4) header: `KADEMLIA2_BOOTSTRAP_REQ` (0x01) / `RES` (0x09), `KADEMLIA2_HELLO_REQ` (0x11) / `RES` (0x19), `KADEMLIA2_REQ` (0x21) / `RES` (0x29), `KADEMLIA2_SEARCH_KEY_REQ` (0x33), `KADEMLIA2_SEARCH_RES` (0x3B), `KADEMLIA2_PING` (0x60) / `PONG` (0x61).
+- Implementation (version 1.2): the embedded node `KadNode` runs on its own UDP socket (`KadUdpService`, port `kadPort`, default TCP port + 11), separate from `Server.handleUdp`. It sends `BOOTSTRAP_REQ`, `HELLO_REQ`, `REQ` and `SEARCH_KEY_REQ`, and processes `BOOTSTRAP_RES`, `HELLO_RES` and `SEARCH_RES` (`KadOpCode`, `KadPacket`). It answers no request from other nodes and publishes nothing. See `doc/kademlia.md`.
+- Divergence: `KadOpCode` uses the protocol byte `0x3A` instead of `0xE4`, and the response opcodes `BOOTSTRAP_RES` = 0x02, `HELLO_RES` = 0x12 and `RES` = 0x22 instead of 0x09, 0x19 and 0x29. The payloads are also simplified (no UDP verification key, no obfuscation). The server and its tests are consistent with each other, but exchanges with real eMule / aMule Kad nodes are not validated.
+- Recommendation: align `KadOpCode` and `KadPacket` with the Kad2 framing of eMule 0.50a (header 0xE4, opcodes and payloads of `Kademlia/net/KademliaUDPListener.cpp`) and add a capture-based test against a real client.
 
 Tags (TLV)
 -----------
