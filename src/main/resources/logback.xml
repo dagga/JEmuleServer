@@ -5,8 +5,8 @@
         </encoder>
     </appender>
 
-    <logger name="org.jemule.network.Packet" level="DEBUG"/>
-    <logger name="org.jemule.network.ClientHandler" level="DEBUG"/>
+    <logger name="org.jemule.network.Packet" level="INFO"/>
+    <logger name="org.jemule.network.ClientHandler" level="INFO"/>
 
     <root level="INFO">
         <appender-ref ref="STDOUT"/>
