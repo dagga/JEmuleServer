@@ -27,6 +27,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -40,6 +41,7 @@ class CallbackTest {
     private ClientState state1;
     private ClientHandler handler2;
     private ClientState state2;
+    private final AtomicReference<Packet> receivedPacket1 = new AtomicReference<>();
     private final AtomicReference<Packet> receivedPacket2 = new AtomicReference<>();
 
     @BeforeEach
@@ -63,7 +65,7 @@ class CallbackTest {
         handler1 = new ClientHandler(socket1, config, registry, index, flood, fakes, events, factory);
         state1 = new ClientState(InetAddress.getByName("1.1.1.1"), 1111, 111, System.currentTimeMillis(), new AtomicLong(System.currentTimeMillis()));
         injectState(handler1, state1);
-        registry.add(state1, p -> {}); // Requester messenger doesn't matter much here
+        registry.add(state1, receivedPacket1::set);
 
         // Client 2 (The Target)
         Socket socket2 = mock(Socket.class);
@@ -90,12 +92,16 @@ class CallbackTest {
         state1.setListenPort(4662);
         state1.setUserHash(EmuleTestSupport.hash("00112233445566778899aabbccddeeff"));
         state1.setServerCaps(EmuleTestSupport.EMULE_DEFAULT_SRVCAPS);
+        state2.setListenPort(4663);
+        state2.setUserHash(EmuleTestSupport.hash("ffeeddccbbaa99887766554433221100"));
+        state2.setServerCaps(EmuleTestSupport.EMULE_DEFAULT_SRVCAPS);
 
         // Client 1 sends OP_CALLBACKREQUEST for Client 2
         ByteBuffer data = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN);
         data.putInt(222); // Target ID
 
-        new org.jemule.network.handler.SourceHandler().handleCallback(handler1, data.array(), new ByteArrayOutputStream());
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        new org.jemule.network.handler.SourceHandler().handleCallback(handler1, data.array(), out);
 
         // Client 2 receives OP_CALLBACKREQUESTED, decoded like CServerSocket::ProcessPacket (size >= 23)
         Packet p = receivedPacket2.get();
@@ -111,6 +117,32 @@ class CallbackTest {
         byte[] hash = new byte[16];
         payload.get(hash);
         assertArrayEquals(state1.userHash(), hash);
+
+        Packet reciprocal = Packet.read(new java.io.ByteArrayInputStream(out.toByteArray()), 1024);
+        assertEquals(OpCode.CALLBACK_REQUESTED.value, reciprocal.opcode(),
+                "LowID requester should receive the target endpoint to initiate a simultaneous connection");
+        ByteBuffer reciprocalPayload = ByteBuffer.wrap(reciprocal.data()).order(ByteOrder.LITTLE_ENDIAN);
+        assertEquals((int) ClientState.ipToLong(state2.address()), reciprocalPayload.getInt());
+        assertEquals(4663, Short.toUnsignedInt(reciprocalPayload.getShort()), "target's listen port");
+        assertEquals(0x01, reciprocalPayload.get(), "target crypt layer support");
+        byte[] targetHash = new byte[16];
+        reciprocalPayload.get(targetHash);
+        assertArrayEquals(state2.userHash(), targetHash);
+    }
+
+    @Test
+    void highIdRequesterKeepsTheOneWayCallbackBehavior() throws Exception {
+        state1.setClientId(0x01020304L);
+        state1.setListenPort(4662);
+        state2.setListenPort(4663);
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        new org.jemule.network.handler.SourceHandler().handleCallback(handler1,
+                ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(222).array(), out);
+
+        assertNotNull(receivedPacket2.get(), "LowID target should still receive the callback");
+        assertNull(receivedPacket1.get(), "HighID requester should not receive a reciprocal callback");
+        assertEquals(0, out.size(), "HighID requester should not receive a reciprocal callback");
     }
 
     @Test

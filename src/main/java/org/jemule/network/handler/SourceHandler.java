@@ -102,8 +102,9 @@ public class SourceHandler {
     /**
      * OP_CALLBACKREQUEST <code>&lt;ID 4&gt;</code> (CUpDownClient::TryToConnect): a client wants to reach a LowID client of
      * this server. The target receives OP_CALLBACKREQUESTED <code>&lt;IP 4&gt;&lt;port 2&gt;&lt;cryptOptions 1&gt;&lt;userhash 16&gt;</code>
-     * describing the requester, and connects to it; if the target is not connected the requester gets
-     * OP_CALLBACK_FAIL (CServerSocket::ProcessPacket).
+     * describing the requester, and connects to it. When both clients have a LowID, the requester also receives
+     * the target's endpoint so both clients can initiate TCP connections for NAT hole punching. If the target is
+     * not connected the requester gets OP_CALLBACK_FAIL (CServerSocket::ProcessPacket).
      */
     public void handleCallback(ClientContext context, byte[] data, OutputStream out) throws IOException {
         if (data == null || data.length < 4) {
@@ -121,13 +122,17 @@ public class SourceHandler {
             return;
         }
 
-        ByteBuffer relayData = ByteBuffer.allocate(4 + 2 + 1 + 16).order(ByteOrder.LITTLE_ENDIAN);
-        relayData.putInt((int) requesterIp);
-        relayData.putShort((short) requester.listenPort());
-        relayData.put((byte) cryptOptions(requester));
-        relayData.put(requester.userHash());
-        context.getRegistry().sendTo(targetId, new Packet(Packet.PROTOCOL_ED2K, OpCode.CALLBACK_REQUESTED.value, relayData.array()));
+        context.getRegistry().sendTo(targetId, callbackRequested(requester));
         log.debug("Relayed callback request from {} to LowID {}", requester.clientId(), targetId);
+
+        if (!requester.isHighId() && !target.isHighId()) {
+            long targetIp = ClientState.ipToLong(target.address());
+            if (targetIp != 0 && target.listenPort() > 0) {
+                callbackRequested(target).write(out, requester.isZlibSupported());
+                log.debug("Sent reciprocal callback from LowID {} to LowID {} for TCP hole punching",
+                        requester.clientId(), target.clientId());
+            }
+        }
 
         if (context.getEventManager() != null) {
             context.getEventManager().broadcast(new ClientEvent("CALLBACK_RELAY",
@@ -135,5 +140,15 @@ public class SourceHandler {
                     String.valueOf(requester.clientId()),
                     "Relaying callback request"));
         }
+    }
+
+    private static Packet callbackRequested(ClientState peer) {
+        long peerIp = ClientState.ipToLong(peer.address());
+        ByteBuffer data = ByteBuffer.allocate(4 + 2 + 1 + 16).order(ByteOrder.LITTLE_ENDIAN);
+        data.putInt((int) peerIp);
+        data.putShort((short) peer.listenPort());
+        data.put((byte) cryptOptions(peer));
+        data.put(peer.userHash());
+        return new Packet(Packet.PROTOCOL_ED2K, OpCode.CALLBACK_REQUESTED.value, data.array());
     }
 }

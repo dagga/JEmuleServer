@@ -1,9 +1,9 @@
 - [x] Inverted keyword index with boolean search trees and numeric size filters. Results are ranked by source count, the result cap is configurable, and a query word no indexed file contains no longer empties the search.
 - [x] Regularly update `ipfilter.dat`; apply the update only when fewer than 10% of normalized ranges differ. Otherwise, keep the existing filter and record the rejection in the adjacent `.trace` file.
 - [x] Java memory-optimized index: store database-loaded `FT_SOURCES` tags compactly and reconstruct them lazily; share one source map among files without online sources. The index measured 363 MB of heap for 999,913 files, below half of the roughly 800 MB Lugdunum reference. Rust-specific slabs, intrusive indexes, and jemalloc tuning do not apply to this Java server.
-- [ ] Partial: client-server TCP/UDP obfuscation, fake-file heuristics and persistent hash bans are implemented; a Lugdunum-compatible server-to-server UDP obfuscation codec is now implemented.
-- [ ] Still needed: gossip peer discovery and exchange, plus verification-based mldonkey/junk-server filtering.
-- NAT traversal (NAT-T) hole-punch coordination for LowID↔LowID transfers.
+- [x] Client-server TCP/UDP obfuscation, fake-file heuristics and persistent hash bans; added a Lugdunum-compatible server-to-server UDP obfuscation codec with per-peer key derivation, randomized salt and padding, and RC4 framing.
+- [ ] Still needed: integrate the codec into server-to-server gossip with peer discovery and list exchange, and add verification-based mldonkey/junk-server filtering.
+- [x] NAT traversal (NAT-T) hole-punch coordination for LowID↔LowID transfers: callback requests now notify both clients of each other's observed public IP, listening port, crypt options, and user hash so they can initiate TCP connections simultaneously.
 - IPv6 (opt-in): clients can connect over IPv6, and a client that is LowID on IPv4 but has a public IPv6 is published as an IPv6 source to peers that can parse it — see IPv6 below.
 - OFFERFILES v1 (opt-in): tells capable clients how many files per batch and how often they may publish, and holds them to it, so a large library is published in minutes instead of hours — see OFFERFILES v1 below.
 - HighID verified by a client-to-client hello, not only a TCP connect: a port forwarded to a different client behind the same NAT no longer earns HighID.
