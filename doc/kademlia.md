@@ -59,7 +59,9 @@ Client ──OP_SEARCHREQUEST──▶ SearchHandler ──▶ FileIndex (H2 + m
 1. The query is answered from `FileIndex`.
 2. The first significant keyword (3 characters or more) is hashed and sent in `SEARCH_KEY_REQ` to the 3 closest
    contacts. Identical searches running at the same time share one Kad session.
-3. Each file of a `SEARCH_RES` is checked, in this order: banned hashes, `ChildAbuseFilter`, `FakeFileDetector`.
+3. A `SEARCH_RES` is only accepted from a contact the search was sent to: an unsolicited answer, from any other
+   address, is ignored, so that nobody can fill the database with files of their choice. Each file of an accepted
+   `SEARCH_RES` is checked, in this order: banned hashes, `ChildAbuseFilter`, `FakeFileDetector`.
    A file rejected by the child abuse filter has its hash banned in memory and in `banned_hashes`.
 4. A clean file with at least `kadMinSourcesForIngest` sources (`FT_SOURCES`) is added to `FileIndex`, which stores it
    in the H2 tables `files` and `file_tags` (when `kadAutoIngestToH2=true`), then becomes a result of the session.

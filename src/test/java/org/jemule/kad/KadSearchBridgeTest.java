@@ -157,6 +157,46 @@ class KadSearchBridgeTest {
     }
 
     @Test
+    void testUnsolicitedSearchAnswersAreIgnored() throws Exception {
+        KadRoutingTable table = new KadRoutingTable(KadId.random());
+
+        try (KadUdpService serverUdp = new KadUdpService(0);
+             KadUdpService peerUdp = new KadUdpService(0);
+             KadUdpService intruderUdp = new KadUdpService(0);
+             KadSearchBridge bridge = new KadSearchBridge(table, serverUdp, 3, 500)) {
+            serverUdp.start();
+            peerUdp.start();
+            intruderUdp.start();
+            bridge.start();
+            table.addOrUpdate(new KadContact(table.generateRandomIdForBucket(1), InetAddress.getLoopbackAddress(), peerUdp.getPort()));
+
+            KadId keywordHash = KadId.fromKeyword("ubuntu");
+            FileMetadata genuine = new FileMetadata("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "ubuntu desktop.iso", 4_000_000_000L, "Archive",
+                    List.of(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, 5)));
+            FileMetadata injected = new FileMetadata("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "ubuntu spam.iso", 1_000_000L, "Archive",
+                    List.of(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, 50)));
+            CountDownLatch answered = new CountDownLatch(1);
+            peerUdp.registerListener(KadOpCode.SEARCH_KEY_REQ, (packet, addr, port) -> {
+                try {
+                    // A node that was not queried answers first, then the queried peer
+                    intruderUdp.send(KadPacket.createSearchRes(keywordHash, List.of(injected)), addr, port);
+                    Thread.sleep(50);
+                    peerUdp.send(KadPacket.createSearchRes(keywordHash, List.of(genuine)), addr, port);
+                    answered.countDown();
+                } catch (Exception e) {
+                    fail(e);
+                }
+            });
+
+            CompletableFuture<List<FileMetadata>> future = bridge.forkSearch("ubuntu");
+            assertTrue(answered.await(3, TimeUnit.SECONDS));
+            assertEquals(List.of(genuine.hash()), future.get(3, TimeUnit.SECONDS).stream().map(FileMetadata::hash).toList(),
+                    "only the answer of the queried contact is accepted");
+            assertEquals(1, bridge.getResultsReceived());
+        }
+    }
+
+    @Test
     void testForkSearchOnClosedSocketCompletesWithoutWaitingForTheTimeout() throws Exception {
         KadRoutingTable table = new KadRoutingTable(KadId.random());
         table.addOrUpdate(new KadContact(table.generateRandomIdForBucket(1), InetAddress.getLoopbackAddress(), 4672));

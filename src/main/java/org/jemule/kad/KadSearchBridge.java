@@ -31,6 +31,7 @@ import org.jemule.security.FakeFileDetector;
 
 import java.io.IOException;
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -85,6 +86,8 @@ public class KadSearchBridge implements AutoCloseable {
         private final String keyword;
         private final long createdAt;
         private final List<FileMetadata> results = new CopyOnWriteArrayList<>();
+        /** Contacts the search was sent to: the only ones whose answers are accepted. */
+        private final Set<InetSocketAddress> queried = ConcurrentHashMap.newKeySet();
         private final CompletableFuture<List<FileMetadata>> future = new CompletableFuture<>();
 
         public KadSearchSession(KadId targetId, String keyword) {
@@ -103,6 +106,14 @@ public class KadSearchBridge implements AutoCloseable {
 
         public long createdAt() {
             return createdAt;
+        }
+
+        void addQueried(InetAddress address, int port) {
+            queried.add(new InetSocketAddress(address, port));
+        }
+
+        public boolean wasQueried(InetAddress address, int port) {
+            return queried.contains(new InetSocketAddress(address, port));
         }
 
         public List<FileMetadata> getResults() {
@@ -278,6 +289,7 @@ public class KadSearchBridge implements AutoCloseable {
         int sent = 0;
         for (KadContact contact : targetNodes) {
             try {
+                session.addQueried(contact.address(), contact.udpPort()); // before the answer can arrive
                 udpService.send(req, contact.address(), contact.udpPort());
                 sent++;
                 log.debug("Sent KADEMLIA2_SEARCH_KEY_REQ for '{}' ({}) to {}:{}",
@@ -296,6 +308,12 @@ public class KadSearchBridge implements AutoCloseable {
         KadSearchSession session = activeSessions.get(parsed.targetId());
         if (session == null) {
             log.debug("Received SEARCH_RES for unknown or expired target: {}", parsed.targetId());
+            return;
+        }
+        if (!session.wasQueried(remoteAddress, remotePort)) {
+            // Unsolicited answer: accepting it would let anyone fill the database with the files of their choice
+            log.debug("Ignored SEARCH_RES from {}:{}, not queried for target {}",
+                    remoteAddress.getHostAddress(), remotePort, parsed.targetId());
             return;
         }
 
