@@ -290,7 +290,7 @@ public class DatabaseManager implements AutoCloseable {
             while (rs.next()) {
                 String rowHash = rs.getString(1);
                 if (!rowHash.equals(hash)) {
-                    if (hash != null) consumer.accept(new FileMetadata(hash, name, size, type, List.copyOf(tags)));
+                    if (hash != null) consumer.accept(FileMetadata.withoutSources(hash, name, size, type, List.copyOf(tags)));
                     hash = rowHash;
                     name = rs.getString(2);
                     size = rs.getLong(3);
@@ -303,7 +303,7 @@ public class DatabaseManager implements AutoCloseable {
                     if (tag != null) tags.add(tag);
                 }
             }
-            if (hash != null) consumer.accept(new FileMetadata(hash, name, size, type, List.copyOf(tags)));
+            if (hash != null) consumer.accept(FileMetadata.withoutSources(hash, name, size, type, List.copyOf(tags)));
         }
     }
 

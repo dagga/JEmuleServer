@@ -22,7 +22,10 @@ package org.jemule.core;
 import org.jemule.protocol.Tag;
 
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.BiFunction;
+import java.util.function.Function;
 
 /**
  * Represents metadata for a file indexed by the server.
@@ -43,8 +46,32 @@ public record FileMetadata(
         List<Tag> tags,
         ConcurrentHashMap<String, ClientState> sources
 ) {
+    /**
+     * Sources of the files known without any online source: shared by all of them, so that a million files loaded
+     * from the database cost no map each. It cannot be filled: {@link FileIndex} replaces such a file with the
+     * published one, which has its own map.
+     */
+    private static final ConcurrentHashMap<String, ClientState> NO_SOURCES = new ConcurrentHashMap<>(1) {
+        @Override public ClientState put(String key, ClientState value) { throw readOnly(); }
+        @Override public ClientState putIfAbsent(String key, ClientState value) { throw readOnly(); }
+        @Override public void putAll(Map<? extends String, ? extends ClientState> m) { if (!m.isEmpty()) throw readOnly(); }
+        @Override public ClientState compute(String key, BiFunction<? super String, ? super ClientState, ? extends ClientState> f) { throw readOnly(); }
+        @Override public ClientState computeIfAbsent(String key, Function<? super String, ? extends ClientState> f) { throw readOnly(); }
+        @Override public ClientState computeIfPresent(String key, BiFunction<? super String, ? super ClientState, ? extends ClientState> f) { throw readOnly(); }
+        @Override public ClientState merge(String key, ClientState value, BiFunction<? super ClientState, ? super ClientState, ? extends ClientState> f) { throw readOnly(); }
+
+        private UnsupportedOperationException readOnly() {
+            return new UnsupportedOperationException("A file known without source cannot get one: publish a new FileMetadata");
+        }
+    };
+
     public FileMetadata(String hash, String name, long size, String type) {
         this(hash, name, size, type, List.of(), new ConcurrentHashMap<>());
+    }
+
+    /** A file known without any online source (loaded from the database, found on Kad): no source map of its own. */
+    public static FileMetadata withoutSources(String hash, String name, long size, String type, List<Tag> tags) {
+        return new FileMetadata(hash, name, size, type, tags, NO_SOURCES);
     }
 
     public FileMetadata(String hash, String name, long size, String type, List<Tag> tags) {

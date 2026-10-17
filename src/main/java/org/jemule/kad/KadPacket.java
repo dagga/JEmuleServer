@@ -346,7 +346,7 @@ public final class KadPacket {
             }
 
             long size = sizeHi != 0 ? (sizeHi << 32) | (sizeLo & 0xFFFFFFFFL) : sizeLo;
-            FileMetadata meta = new FileMetadata(hashHex, name, size, type, tags);
+            FileMetadata meta = FileMetadata.withoutSources(hashHex, name, size, type, tags);
             files.add(meta);
         }
 
