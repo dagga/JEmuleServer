@@ -137,6 +137,12 @@ Available commands:
   and during the last minute.
 - `ban <hash> [reason]`: Bans a file hash (32-char hex) for good: it is stored in the database with its reason and the
   file is removed from the index.
+- `kad status`: Shows the status of the embedded Kademlia node (`DISCONNECTED`, `BOOTSTRAPPING`, `CONNECTED`), its
+  node ID, UDP port and number of contacts (`kad` alone does the same).
+- `kad contacts`: Lists the 20 most recently seen Kademlia contacts (ID, address, version, liveness).
+- `kad bootstrap <ip> <port>`: Sends a bootstrap request to a given Kademlia node.
+- `kad stats`: Shows the Kademlia counters (searches forked, results received, files ingested, illicit files blocked,
+  hashes banned, bootstrap and maintenance activity).
 - `help`: Shows the list of available commands.
 - `stop` / `exit` / `quit`: Safely shuts down the server.
 

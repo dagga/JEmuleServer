@@ -436,7 +436,7 @@ Implementation is divided into **5 operational sub-lots**:
 | **Sub-Lot 2** | **UDP Network Service & Automated Bootstrapping** | ✅ **Completed** | [`f61ee2e`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadUdpService.java), [`4e6b180`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadBootstrapManager.java), [`f6f59b5`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadMaintenanceService.java) |
 | **Sub-Lot 3** | **Search Forking Bridge & Protective Filtering** | ✅ **Completed** | [`cedd534`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadSearchBridge.java), [`9525071`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadSearchBridge.java), [`6366da3`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadHashBanService.java) |
 | **Sub-Lot 4** | **Conditional H2 Ingestion & Unified Results Delivery** | ✅ **Completed** | [`0bd3d1e`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadSearchBridge.java), [`21a17b7`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/network/handler/SearchHandler.java), [`f3e021d`](file:///home/dagga/IdeaProjects/JEmuleServer/src/test/java/org/jemule/network/SearchCompatibilityTest.java) |
-| **Sub-Lot 5** | **Configuration, Admin CLI & End-to-End Acceptance** | 🚧 **In Progress** | Point 5.1 (configuration & runtime wiring) |
+| **Sub-Lot 5** | **Configuration, Admin CLI & End-to-End Acceptance** | 🚧 **In Progress** | [`5572b6d`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadNode.java), Point 5.2 (admin CLI) |
 
 ---
 
@@ -500,7 +500,7 @@ Implementation is divided into **5 operational sub-lots**:
   - Validated by integration tests in [`SearchCompatibilityTest`](file:///home/dagga/IdeaProjects/JEmuleServer/src/test/java/org/jemule/network/SearchCompatibilityTest.java) (`testWarmSearchDirectRetrievalFromMemoryWithoutMoreResults`, `testWarmSearchPersistentAcrossServerRestart`).
 
 #### Sub-Lot 5: Configuration, Administration CLI & End-to-End Acceptance (Status: 🚧 In Progress)
-- [x] **Point 5.1 — Configuration Keys & Runtime Wiring**:
+- [x] **Point 5.1 — Configuration Keys & Runtime Wiring** *(Commit `5572b6d`)*:
   - The eight `kad*` keys of section 6.1 documented in [`server.properties`](file:///home/dagga/IdeaProjects/JEmuleServer/server.properties) and bound by the new [`KadConfig`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/config/KadConfig.java) record (defaults, validation, `effectivePort()`), carried by [`ServerConfig.kad()`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/config/ServerConfig.java) (`fromProperties`, `withPort`, `withPathsRelativeTo` and `withKad` keep it; legacy constructors use `KadConfig.DEFAULT`).
   - `kadPort=0` (default) binds the TCP port + 11 (`4672` with port `4661`), the ports already bound by the UDP responder (port, port + 4, port + 12) being avoided.
   - New [`KadNode`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadNode.java) orchestrator assembling routing table, UDP service, bootstrap and maintenance engines, search bridge and hash ban service; the 128-bit node ID is persisted in the H2 `stats` table as two 64-bit halves (`kad_node_id_hi`, `kad_node_id_lo`) and survives restarts.
@@ -508,7 +508,13 @@ Implementation is divided into **5 operational sub-lots**:
   - [`Server`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/network/Server.java) creates the node when `kadEnabled=true`, starts it with the UDP responder (an unavailable Kad port only disables Kad, the local server keeps running), exposes the search bridge to [`SearchHandler`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/network/handler/SearchHandler.java) only when `kadForkSearchEnabled=true`, and closes it before the database.
   - [`LoginHandler`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/network/handler/LoginHandler.java) hands every logged-in client to the node, which bootstraps from HighID clients only when `kadBootstrapFromClients=true`.
   - Validated by [`KadConfigTest`](file:///home/dagga/IdeaProjects/JEmuleServer/src/test/java/org/jemule/config/KadConfigTest.java), [`KadNodeTest`](file:///home/dagga/IdeaProjects/JEmuleServer/src/test/java/org/jemule/kad/KadNodeTest.java) and `KadRoutingTableTest.testMaxContactsLimitRefusesNewContactsButRefreshesKnownOnes`.
-- [ ] **Point 5.2 — Administration CLI Commands**:
-  - Commands `kad status`, `kad contacts`, `kad stats` in [`AdminInterface`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/network/AdminInterface.java).
+- [x] **Point 5.2 — Administration CLI Commands**:
+  - Commands of section 6.2 in [`AdminInterface`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/network/AdminInterface.java), available on the console and on the admin TCP port (`adminPort`):
+    - `kad status` (also `kad` alone): node status, node ID, UDP port, contacts / `kadMaxRoutingContacts`, and the bootstrap / forked search / H2 ingestion settings.
+    - `kad contacts`: the 20 most recently seen contacts (ID, address, Kad version, last seen, liveness `ALIVE` / `UNANSWERED (n)` / `DEAD`).
+    - `kad bootstrap <ip> <port>`: argument validation, then `KADEMLIA2_BOOTSTRAP_REQ` dispatched through [`KadNode.bootstrap()`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadNode.java).
+    - `kad stats`: searches forked, active searches, results received, files ingested, illicit files blocked, hashes banned, bootstrap and maintenance counters.
+  - Reports `Kademlia is disabled (kadEnabled=false).` when the node is off; commands listed by `help` and in the [`README`](file:///home/dagga/IdeaProjects/JEmuleServer/README.md).
+  - Validated by [`AdminInterfaceTest`](file:///home/dagga/IdeaProjects/JEmuleServer/src/test/java/org/jemule/network/AdminInterfaceTest.java) (`kadCommandsReportADisabledNode`, `kadStatusShowsStatusPortAndContacts`, `kadContactsListsAtMostTwentyContacts`, `kadBootstrapValidatesItsArgumentsAndSendsTheRequest`, `kadStatsShowsTheCounters`, `helpListsTheKadCommands`).
 - [ ] **Point 5.3 — Full Test Suite Validation**:
   - Final test execution (`./gradlew test`) and verification of acceptance criteria.
