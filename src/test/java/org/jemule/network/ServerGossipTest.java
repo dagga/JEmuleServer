@@ -28,6 +28,28 @@ class ServerGossipTest {
     }
 
     @Test
+    void collectsClientReportedServersAndReturnsOnlyVerifiedServers() throws Exception {
+        ServerGossip gossip = new ServerGossip("");
+        byte[] report = ByteBuffer.allocate(1 + 2 * 6).order(ByteOrder.LITTLE_ENDIAN)
+                .put((byte) 2)
+                .put(new byte[]{(byte) 198, 51, 100, 21}).putShort((short) 4661)
+                .put(new byte[]{127, 0, 0, 1}).putShort((short) 4661)
+                .array();
+
+        assertEquals(1, gossip.addClientReportedServerList(report));
+        assertEquals(1, gossip.candidateEndpoints().size());
+        assertEquals(0, gossip.addClientReportedServerList(java.util.Arrays.copyOf(report, report.length - 1)));
+
+        byte[] response = gossip.clientServerList(InetAddress.getByName("203.0.113.2"), 4661);
+        assertEquals(7, response.length);
+        assertEquals(1, response[0] & 0xFF);
+        List<ServerGossip.Endpoint> returned = ServerGossip.decodeServerList(
+                ByteBuffer.allocate(2 + response.length).put((byte) 0xE3).put((byte) 0xA1).put(response).array());
+        assertEquals(InetAddress.getByName("203.0.113.2"), returned.get(0).address());
+        assertEquals(4661, returned.get(0).tcpPort());
+    }
+
+    @Test
     void acceptsOnlyChallengeMatchedPlausibleServerStatus() throws Exception {
         byte[] status = statusPacket(CHALLENGE, 100, 200, 1000, 500);
 
@@ -133,6 +155,7 @@ class ServerGossipTest {
 
             InetAddress discoveredAddress = InetAddress.getByName("192.0.2.77");
             assertEquals("Verified server", gossip.verifiedPeers().iterator().next().name());
+            assertEquals(1, gossip.clientServerList(loopback, localTcpPort)[0] & 0xFF);
             assertTrue(gossip.candidateEndpoints().stream().anyMatch(endpoint ->
                     endpoint.address().equals(discoveredAddress) && endpoint.tcpPort() == 4665));
         }

@@ -52,57 +52,23 @@ public class SearchHandler {
             }
         }
 
-        KadSearchBridge kadBridge = context.getKadSearchBridge();
-        if (kadBridge != null && query != null) {
-            try {
-                CompletableFuture<List<FileMetadata>> kadFuture = kadBridge.forkSearch(query);
-                if (kadFuture != null) {
-                    // Warm search (1 to 49 local results): answered at once, the Kad answers are still filtered and
-                    // ingested into H2 by the bridge, so that the next searches find them locally
-                    if (dedupMap.isEmpty()) {
-                        // Cold search: nothing is known locally, the Kad answers are awaited (bounded by the Kad timeout)
-                        try {
-                            List<FileMetadata> kadResults = kadFuture.get(kadBridge.getSearchTimeoutMs() + 1000, TimeUnit.MILLISECONDS);
-                            if (kadResults != null) {
-                                for (FileMetadata kf : kadResults) {
-                                    if (kf != null && kf.hash() != null) {
-                                        String upperHash = kf.hash().toUpperCase(Locale.ROOT);
-                                        if (!dedupMap.containsKey(upperHash) && query.test(kf)) {
-                                            dedupMap.put(upperHash, kf);
-                                        }
-                                    }
-                                }
-                            }
-                        } catch (TimeoutException e) {
-                            log.debug("Kad search fork timed out for query: {}", query);
-                        } catch (Exception e) {
-                            log.debug("Kad search fork error for query {}: {}", query, e.getMessage());
-                        }
-                    } else if (dedupMap.size() >= BATCH_SIZE) {
-                        // Full first batch: the Kad answers join the results left for OP_QUERY_MORE_RESULT
-                        final SearchQuery activeQuery = query;
-                        kadFuture.thenAccept(kadResults -> {
-                            if (kadResults != null && !kadResults.isEmpty() && context.getState() != null) {
-                                List<FileMetadata> pending = context.getState().getPendingSearchResults();
-                                if (pending != null) {
-                                    synchronized (pending) {
-                                        for (FileMetadata kf : kadResults) {
-                                            if (kf != null && kf.hash() != null) {
-                                                String upperHash = kf.hash().toUpperCase(Locale.ROOT);
-                                                boolean exists = pending.stream().anyMatch(p -> p.hash().equalsIgnoreCase(upperHash));
-                                                if (!exists && activeQuery.test(kf)) {
-                                                    pending.add(kf);
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        });
-                    }
+        CompletableFuture<List<FileMetadata>> remoteResults = startRemoteSearches(context, query, data);
+        if (remoteResults != null) {
+            if (dedupMap.isEmpty()) {
+                long timeoutMs = Math.max(
+                        context.getKadSearchBridge() == null ? 0 : context.getKadSearchBridge().getSearchTimeoutMs(),
+                        context.getServerSearchBridge() == null ? 0 : context.getServerSearchBridge().getSearchTimeoutMs());
+                try {
+                    addMatchingResults(dedupMap,
+                            remoteResults.get(timeoutMs + 1000, TimeUnit.MILLISECONDS), query);
+                } catch (TimeoutException e) {
+                    log.debug("Remote search timed out for query: {}", query);
+                } catch (Exception e) {
+                    log.debug("Remote search failed for query {}: {}", query, e.getMessage());
                 }
-            } catch (Exception e) {
-                log.debug("Error initiating Kad search fork: {}", e.getMessage());
+            } else if (dedupMap.size() >= BATCH_SIZE) {
+                SearchQuery activeQuery = query;
+                remoteResults.thenAccept(results -> addRemoteResultsToPending(context, activeQuery, results));
             }
         }
 
@@ -114,6 +80,61 @@ public class SearchHandler {
             context.getState().setPendingSearchResults(new ArrayList<>(combined.subList(BATCH_SIZE, combined.size())));
         } else {
             context.getState().setPendingSearchResults(null);
+        }
+    }
+
+    private CompletableFuture<List<FileMetadata>> startRemoteSearches(ClientContext context, SearchQuery query,
+                                                                       byte[] searchTree) {
+        if (query == null) return null;
+        List<CompletableFuture<List<FileMetadata>>> futures = new ArrayList<>();
+        try {
+            KadSearchBridge kadBridge = context.getKadSearchBridge();
+            if (kadBridge != null) {
+                CompletableFuture<List<FileMetadata>> future = kadBridge.forkSearch(query);
+                if (future != null) futures.add(future);
+            }
+            if (context.getServerSearchBridge() != null) {
+                futures.add(context.getServerSearchBridge().forkSearch(query, searchTree));
+            }
+        } catch (Exception e) {
+            log.debug("Error initiating remote search for {}: {}", query, e.getMessage());
+        }
+        if (futures.isEmpty()) return null;
+        List<CompletableFuture<List<FileMetadata>>> safeFutures = futures.stream()
+                .map(future -> future.handle((results, error) -> {
+                    if (error != null) {
+                        log.debug("Remote search failed: {}", error.getMessage());
+                        return List.<FileMetadata>of();
+                    }
+                    return results == null ? List.<FileMetadata>of() : results;
+                }))
+                .toList();
+        return CompletableFuture.allOf(safeFutures.toArray(CompletableFuture[]::new))
+                .thenApply(ignored -> safeFutures.stream().flatMap(future -> future.join().stream()).toList());
+    }
+
+    private static void addMatchingResults(LinkedHashMap<String, FileMetadata> results,
+                                           List<FileMetadata> discovered, SearchQuery query) {
+        if (discovered == null) return;
+        for (FileMetadata file : discovered) {
+            if (file != null && file.hash() != null && query.test(file)) {
+                results.putIfAbsent(file.hash().toUpperCase(Locale.ROOT), file);
+            }
+        }
+    }
+
+    private static void addRemoteResultsToPending(ClientContext context, SearchQuery query,
+                                                  List<FileMetadata> discovered) {
+        if (discovered == null || discovered.isEmpty() || context.getState() == null) return;
+        List<FileMetadata> pending = context.getState().getPendingSearchResults();
+        if (pending == null) return;
+        synchronized (pending) {
+            for (FileMetadata file : discovered) {
+                if (file == null || file.hash() == null || !query.test(file)) continue;
+                boolean exists = pending.stream().anyMatch(result ->
+                        result != null && result.hash() != null && result.hash().equalsIgnoreCase(file.hash()));
+                if (!exists) pending.add(file);
+            }
         }
     }
 

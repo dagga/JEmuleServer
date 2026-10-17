@@ -18,6 +18,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /** Verified eD2K UDP server peers and their server-list gossip transactions. */
 final class ServerGossip {
@@ -57,6 +58,8 @@ final class ServerGossip {
     private final Map<Endpoint, VerifiedPeer> verified = new ConcurrentHashMap<>();
     private final Map<Endpoint, Boolean> candidates = new ConcurrentHashMap<>();
     private final Map<Endpoint, Boolean> rejected = new ConcurrentHashMap<>();
+    private final Map<Endpoint, Integer> missedStatusProbes = new ConcurrentHashMap<>();
+    private final AtomicInteger candidateCursor = new AtomicInteger();
     private volatile long lastProbeAtMillis;
 
     ServerGossip(String configuredPeers) {
@@ -75,21 +78,60 @@ final class ServerGossip {
         expirePending(now);
         if (now - lastProbeAtMillis < PROBE_INTERVAL_MILLIS) return;
         lastProbeAtMillis = now;
-        int sent = 0;
-        for (Endpoint endpoint : candidates.keySet()) {
-            if (sent >= 16 || pending.containsKey(endpoint)) continue;
+        List<Endpoint> endpoints = new ArrayList<>(candidates.keySet());
+        if (endpoints.isEmpty()) return;
+        int first = Math.floorMod(candidateCursor.getAndAdd(32), endpoints.size());
+        int attempts = Math.min(32, endpoints.size());
+        for (int offset = 0; offset < attempts; offset++) {
+            Endpoint endpoint = endpoints.get((first + offset) % endpoints.size());
+            if (pending.containsKey(endpoint)) continue;
             int challenge = nextChallenge();
             pending.put(endpoint, new Pending(Stage.STATUS, challenge, now));
             send(socket, endpoint, frame(OP_GLOBSERVSTATREQ, intPayload(challenge)));
-            sent++;
         }
-        for (VerifiedPeer peer : verified.values()) {
-            if (sent >= 32 || pending.containsKey(peer.endpoint())) continue;
-            int challenge = nextChallenge();
-            pending.put(peer.endpoint(), new Pending(Stage.STATUS, challenge, now));
-            send(socket, peer.endpoint(), frame(OP_GLOBSERVSTATREQ, intPayload(challenge)));
-            sent++;
+    }
+
+    int addClientReportedServerList(byte[] data) {
+        if (data == null || data.length < 1) return 0;
+        int count = data[0] & 0xFF;
+        if (data.length != 1 + count * 6) return 0;
+        ByteBuffer input = ByteBuffer.wrap(data, 1, data.length - 1).order(ByteOrder.LITTLE_ENDIAN);
+        int before = candidates.size();
+        for (int i = 0; i < count; i++) {
+            byte[] ip = new byte[4];
+            input.get(ip);
+            int port = Short.toUnsignedInt(input.getShort());
+            try {
+                InetAddress address = InetAddress.getByAddress(ip);
+                if (port > 0 && port <= 65531 && !address.isAnyLocalAddress()
+                        && !address.isMulticastAddress() && !address.isLoopbackAddress()) {
+                    addCandidate(new Endpoint(address, port));
+                }
+            } catch (UnknownHostException | IllegalArgumentException ignored) {
+                // Invalid endpoints are not candidates; valid entries in the same list remain usable.
+            }
         }
+        return candidates.size() - before;
+    }
+
+    byte[] clientServerList(InetAddress publicIp, int tcpPort) {
+        List<Endpoint> endpoints = new ArrayList<>();
+        if (publicIp instanceof Inet4Address && !publicIp.isAnyLocalAddress()
+                && !publicIp.isLoopbackAddress() && tcpPort > 0 && tcpPort <= 65531) {
+            endpoints.add(new Endpoint(publicIp, tcpPort));
+        }
+        verified.values().stream().map(VerifiedPeer::endpoint)
+                .filter(endpoint -> !endpoints.contains(endpoint))
+                .sorted(Comparator.comparing((Endpoint endpoint) -> endpoint.address().getHostAddress())
+                        .thenComparingInt(Endpoint::tcpPort))
+                .limit(255 - endpoints.size())
+                .forEach(endpoints::add);
+        ByteBuffer result = ByteBuffer.allocate(1 + endpoints.size() * 6).order(ByteOrder.LITTLE_ENDIAN);
+        result.put((byte) endpoints.size());
+        for (Endpoint endpoint : endpoints) {
+            result.put(endpoint.address().getAddress()).putShort((short) endpoint.tcpPort());
+        }
+        return result.array();
     }
 
     boolean handle(DatagramSocket socket, InetAddress source, int sourcePort, byte[] packet, boolean wasObfuscated,
@@ -129,6 +171,7 @@ final class ServerGossip {
                 return true;
             }
             statusKeys.put(endpoint, status.udpKey());
+            missedStatusProbes.remove(endpoint);
             int challenge = nextDescriptionChallenge();
             pending.put(endpoint, new Pending(Stage.DESCRIPTION, challenge, now));
             byte[] request = frame(OP_SERVER_DESC_REQ, intPayload(challenge));
@@ -356,7 +399,21 @@ final class ServerGossip {
     }
 
     private void expirePending(long now) {
-        pending.entrySet().removeIf(entry -> now - entry.getValue().startedAtMillis() > TRANSACTION_TIMEOUT_MILLIS);
+        pending.entrySet().removeIf(entry -> {
+            if (now - entry.getValue().startedAtMillis() <= TRANSACTION_TIMEOUT_MILLIS) return false;
+            Endpoint endpoint = entry.getKey();
+            Pending transaction = entry.getValue();
+            if (transaction.stage() == Stage.STATUS) {
+                int misses = missedStatusProbes.merge(endpoint, 1, Integer::sum);
+                if (misses >= 3) {
+                    verified.remove(endpoint);
+                    statusKeys.remove(endpoint);
+                }
+            } else {
+                statusKeys.remove(endpoint);
+            }
+            return true;
+        });
     }
 
     private static int nextChallenge() {

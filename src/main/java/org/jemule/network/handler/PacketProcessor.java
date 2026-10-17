@@ -38,6 +38,7 @@ public class PacketProcessor {
             case COMPRESSED_PART -> handleCompressedPart(context, p.data(), out);
             case FOUND_SOURCES, SOURCES_RESULT_OBFU -> handleSourcesResult(context, p, out);
             case GET_SERVER_LIST -> sendServerList(context, out);
+            case SERVER_LIST -> collectClientServerList(context, p.data());
             case DISCONNECT -> handleDisconnect(context);
             default -> log.debug("Unhandled: {} (Proto: 0x{})", op, String.format("%02X", p.protocol()));
         }
@@ -86,9 +87,17 @@ public class PacketProcessor {
     }
 
     private void sendServerList(ClientContext context, OutputStream out) throws IOException {
-        ByteBuffer buf = ByteBuffer.allocate(1).order(ByteOrder.LITTLE_ENDIAN);
-        buf.put((byte) 0);
-        new Packet(Packet.PROTOCOL_ED2K, OpCode.SERVER_LIST.value, buf.array()).write(out, context.getState().isZlibSupported());
-        log.debug("Sent SERVER_LIST (empty) to client {}", context.getState().clientId());
+        byte[] servers = context.getServer() == null ? new byte[]{0} : context.getServer().getClientServerList();
+        new Packet(Packet.PROTOCOL_ED2K, OpCode.SERVER_LIST.value, servers)
+                .write(out, context.getState().isZlibSupported());
+        log.debug("Sent SERVER_LIST with {} peer(s) to client {}", servers[0] & 0xFF,
+                context.getState().clientId());
+    }
+
+    private void collectClientServerList(ClientContext context, byte[] data) {
+        if (context.getServer() == null) return;
+        int added = context.getServer().onClientReportedServerList(data);
+        log.debug("Collected {} candidate server(s) from connected client {}",
+                added, context.getState().clientId());
     }
 }

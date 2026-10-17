@@ -60,6 +60,7 @@ public class Server {
     private static final Logger log = LoggerFactory.getLogger(Server.class);
     private final ServerConfig config;
     private final ServerGossip serverGossip;
+    private final ServerSearchBridge serverSearchBridge;
     private final ClientRegistry registry = new ClientRegistry();
     private final FileIndex fileIndex;
     private final FloodProtector floodProtector;
@@ -111,6 +112,20 @@ public class Server {
 
     public void setKadSearchBridge(KadSearchBridge kadSearchBridge) {
         this.kadSearchBridge = kadSearchBridge;
+    }
+
+    /** Active bridge for keyword searches against verified server peers. */
+    public ServerSearchBridge getServerSearchBridge() {
+        return serverSearchBridge;
+    }
+
+    /** Adds server endpoints explicitly reported by a connected client for normal gossip verification. */
+    public int onClientReportedServerList(byte[] data) {
+        return serverGossip.addClientReportedServerList(data);
+    }
+
+    public byte[] getClientServerList() {
+        return serverGossip.clientServerList(publicIp, config.port());
     }
 
     /** The embedded Kademlia node, or null when {@code kadEnabled=false}. */
@@ -168,6 +183,8 @@ public class Server {
         this.db = dbMgr;
         ChildAbuseFilter abuseFilter = ChildAbuseFilter.load(config.childAbuseKeywordsPath());
         this.fileIndex = new FileIndex(db, eventManager, abuseFilter);
+        this.serverSearchBridge = new ServerSearchBridge(serverGossip::verifiedPeers,
+                () -> boundUdpSockets.get(config.port() + 4), fileIndex, fakeFileDetector);
         this.kadNode = config.kad().enabled()
                 ? new KadNode(config.kad(), config.port(), db, fileIndex, abuseFilter, fakeFileDetector)
                 : null;
@@ -496,6 +513,8 @@ public class Server {
         } else if (serverGossip.handle(reply.socket(), reply.address(), reply.port(), recv,
                 reply.serverObfuscated(), publicIp, config.port(), System.currentTimeMillis())) {
             return;
+        } else if (serverSearchBridge.handle(reply.address(), reply.port(), recv)) {
+            return;
         } else if (opcode == (byte) 0x98 || opcode == (byte) 0x92 || opcode == (byte) 0x90) {
             handleGlobalSearch(reply, opcode, recv);
         } else if (opcode == (byte) 0x9A) { // OP_GLOBGETSOURCES: <hash 16>[<hash 16>...] (up to 35 with SRV_UDPFLG_EXT_GETSOURCES)
@@ -698,6 +717,7 @@ public class Server {
     public void stop() {
         running = false;
         executor.shutdownNow();
+        serverSearchBridge.close();
         if (ipFilterUpdater != null) ipFilterUpdater.close();
         kadSearchBridge = null;
         if (kadNode != null) {
