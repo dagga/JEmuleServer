@@ -1,5 +1,5 @@
 - Inverted keyword index with boolean search trees and numeric size filters. Results are ranked by source count, the result cap is configurable, and a query word no indexed file contains no longer empties the search.
-- ensure than ipfilter.dat is regularly updated and avoid le remplacement complet de l'ipfilter précedent, do an update if the diff is less than 10%.if not keep the old one and .trace file.
+- [x] Regularly update `ipfilter.dat`; apply the update only when fewer than 10% of normalized ranges differ. Otherwise, keep the existing filter and record the rejection in the adjacent `.trace` file.
 - Memory-optimized in-memory index (sharded slab, intrusive hash index, name interning, jemalloc tuning) — roughly half the RAM of the Lugdunum reference at the same scale.
 - Mandatory multi-layer CSAM content filter on every published file (age+context heuristics in code; operator-supplied jargon, hash, and extra-term lists loaded at runtime — see Content filter below).
 - Server-to-server gossip with obfuscation; mldonkey/junk-server filtering via verification.
