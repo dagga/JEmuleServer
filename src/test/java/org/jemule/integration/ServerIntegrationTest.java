@@ -193,6 +193,28 @@ public class ServerIntegrationTest {
         });
     }
 
+    @Test
+    public void udpServerListRequestReturnsABoundedVerifiedPeerList() throws Exception {
+        Assertions.assertTimeoutPreemptively(Duration.ofSeconds(5), () -> {
+            try (java.net.DatagramSocket socket = new java.net.DatagramSocket()) {
+                socket.setSoTimeout(3000);
+                byte[] request = {Packet.PROTOCOL_ED2K, (byte) 0xA4};
+                socket.send(new java.net.DatagramPacket(request, request.length,
+                        java.net.InetAddress.getByName(loopbackHost), serverPort + 4));
+
+                byte[] bytes = new byte[2048];
+                java.net.DatagramPacket response = new java.net.DatagramPacket(bytes, bytes.length);
+                socket.receive(response);
+                Assertions.assertTrue(response.getLength() >= 3);
+                Assertions.assertEquals(Packet.PROTOCOL_ED2K, response.getData()[0]);
+                Assertions.assertEquals((byte) 0xA1, response.getData()[1], "OP_SERVER_LIST_RES");
+                int count = response.getData()[2] & 0xFF;
+                Assertions.assertEquals(3 + count * 6, response.getLength());
+            }
+            return null;
+        });
+    }
+
     // Helper method to read a packet or null if EOF
     private Packet readPacketOrEOF(InputStream in) {
         try {

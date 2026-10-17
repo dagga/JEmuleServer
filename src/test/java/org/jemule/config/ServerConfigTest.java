@@ -31,6 +31,7 @@ class ServerConfigTest {
         props.setProperty("maxUsers", "500");
         props.setProperty("databasePath", "/tmp/testdb");
         props.setProperty("fakeFileDetectionEnabled", "false");
+        props.setProperty("serverPeers", "127.0.0.1:4661,192.0.2.10:4661");
 
         ServerConfig cfg = ServerConfig.fromProperties(props);
 
@@ -38,6 +39,7 @@ class ServerConfigTest {
         assertEquals(500, cfg.maxUsers());
         assertEquals("/tmp/testdb", cfg.databasePath());
         assertFalse(cfg.fakeFileDetectionEnabled());
+        assertEquals("127.0.0.1:4661,192.0.2.10:4661", cfg.serverPeers());
         
         // Defaults
         assertEquals(ServerConfig.DEFAULT.maxPacketSize(), cfg.maxPacketSize());
@@ -86,6 +88,14 @@ class ServerConfigTest {
         org.junit.jupiter.api.Assertions.assertEquals(4242, moved.port());
         org.junit.jupiter.api.Assertions.assertEquals(9, moved.lowIdCheckTimeoutSeconds());
         org.junit.jupiter.api.Assertions.assertEquals("./db", moved.databasePath());
+    }
+
+    @Test
+    void withPortKeepsServerPeerSeeds() {
+        Properties properties = new Properties();
+        properties.setProperty("serverPeers", "127.0.0.1:4661");
+        ServerConfig cfg = ServerConfig.fromProperties(properties);
+        assertEquals("127.0.0.1:4661", cfg.withPort(4662).serverPeers());
     }
 
     @org.junit.jupiter.api.Test
