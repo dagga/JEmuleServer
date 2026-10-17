@@ -185,7 +185,8 @@ jobs:
 
       - name: Smoke test of the .dmg
         run: |
-          hdiutil attach "dist/JEmuleServer-$VERSION-macos-arm64.dmg" -mountpoint /tmp/jemule -nobrowse
+          # The disk image shows the license before mounting: accept it, as a user does
+          yes | PAGER=cat hdiutil attach "dist/JEmuleServer-$VERSION-macos-arm64.dmg" -mountpoint /tmp/jemule -nobrowse
           test -x /tmp/jemule/JEmuleServer.app/Contents/MacOS/JEmuleServer
           test -f /tmp/jemule/JEmuleServer.app/Contents/runtime/Contents/Home/lib/server/libjvm.dylib
           hdiutil detach /tmp/jemule
