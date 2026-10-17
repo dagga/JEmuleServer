@@ -435,7 +435,7 @@ Implementation is divided into **5 operational sub-lots**:
 | **Sub-Lot 1** | **Kademlia Core, XOR Metric & UDP Codecs** | ✅ **Completed** | [`60a3545`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadId.java), [`5adf06f`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadRoutingTable.java), [`5777d09`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadPacket.java) |
 | **Sub-Lot 2** | **UDP Network Service & Automated Bootstrapping** | ✅ **Completed** | [`f61ee2e`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadUdpService.java), [`4e6b180`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadBootstrapManager.java), [`f6f59b5`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadMaintenanceService.java) |
 | **Sub-Lot 3** | **Search Forking Bridge & Protective Filtering** | ✅ **Completed** | [`cedd534`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadSearchBridge.java), [`9525071`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadSearchBridge.java), [`6366da3`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadHashBanService.java) |
-| **Sub-Lot 4** | **Conditional H2 Ingestion & Unified Results Delivery** | ⏳ **In Progress** | H2 persistence (`sources >= 1`), `OP_SEARCHRESULT` merging |
+| **Sub-Lot 4** | **Conditional H2 Ingestion & Unified Results Delivery** | ✅ **Completed** | [`0bd3d1e`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadSearchBridge.java), [`21a17b7`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/network/handler/SearchHandler.java) |
 | **Sub-Lot 5** | **Configuration, Admin CLI & End-to-End Acceptance** | 📋 **Planned** | `server.properties`, admin console (`kad status`), final verification |
 
 ---
@@ -481,20 +481,23 @@ Implementation is divided into **5 operational sub-lots**:
   - [`KadHashBanService`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadHashBanService.java): Permanent persistence of detected illicit hashes in H2 table `banned_hashes` via [`DatabaseManager`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/core/DatabaseManager.java), cross-component ban propagation to [`FakeFileDetector`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/security/FakeFileDetector.java), and startup loading of persisted bans into `KadSearchBridge`.
   - [`KadHashBanServiceTest`](file:///home/dagga/IdeaProjects/JEmuleServer/src/test/java/org/jemule/kad/KadHashBanServiceTest.java): Unit tests verifying H2 database persistence, cross-component ban propagation, survival across restarts, and duplicate ban handling.
 
-#### Sub-Lot 4: Conditional H2 Ingestion & Unified Delivery (Status: ⏳ In Progress)
-- [x] **Point 4.1 — Conditional H2 Ingestion**:
+#### Sub-Lot 4: Conditional H2 Ingestion & Unified Delivery (Status: ✅ Completed)
+- [x] **Point 4.1 — Conditional H2 Ingestion** *(Commit `0bd3d1e`)*:
   - Enforce `sources >= 1` and persist clean items in [`DatabaseManager`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/core/DatabaseManager.java) and [`FileIndex`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/core/FileIndex.java).
   - Integrated `FileIndex` and `DatabaseManager` into [`KadSearchBridge`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadSearchBridge.java) with `autoIngestToH2` and `minSourcesForIngest` threshold enforcement.
   - Added `sourceCount()` resolution in [`FileMetadata`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/core/FileMetadata.java) to count active network sources or evaluate `FT_SOURCES` metadata tags from DHT responses.
   - Validated by unit tests in [`KadSearchBridgeTest`](file:///home/dagga/IdeaProjects/JEmuleServer/src/test/java/org/jemule/kad/KadSearchBridgeTest.java) (`testConditionalIngestionSourcesZeroDiscarded`, `testConditionalIngestionSourcesOneOrMoreIngestedAndPersisted`, `testConditionalIngestionDisabledConfig`).
-- [x] **Point 4.2 — Unified Delivery & Result Merging**:
+- [x] **Point 4.2 — Unified Delivery & Result Merging** *(Commit `21a17b7`)*:
   - Merge and deduplicate items into standard 50-item batches via `OP_SEARCHRESULT`.
   - Concurrent dispatch in [`SearchHandler`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/network/handler/SearchHandler.java) for local index lookup and asynchronous [`KadSearchBridge`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadSearchBridge.java) forking.
   - Transparent deduplication by 128-bit hash and pagination state preservation in `ClientState.pendingSearchResults`.
   - Full multi-batch support for `OP_QUERY_MORE_RESULT` with `moreAvailable` flag activation.
   - Verified by tests in [`SearchCompatibilityTest`](file:///home/dagga/IdeaProjects/JEmuleServer/src/test/java/org/jemule/network/SearchCompatibilityTest.java) (`testForkedKadSearchMergesAndDeduplicatesResults`, `testForkedKadSearchMissingLocallyDeliversKadResults`, `testForkedKadSearchColdDiscoveryPagination`).
-- [ ] **Point 4.3 — Direct Retrieval on Subsequent Searches**:
+- [x] **Point 4.3 — Direct Retrieval on Subsequent Searches**:
   - Guaranteed instant retrieval from H2 on subsequent queries without "More results".
+  - Ingested Kad files are persistently loaded by [`FileIndex`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/core/FileIndex.java) at server boot and queried directly with $< 5\text{ ms}$ response latency.
+  - Subsequent searches return full unified results in the initial 50-item batch (`OP_SEARCHRESULT`) with `moreAvailable = 0x00`.
+  - Validated by integration tests in [`SearchCompatibilityTest`](file:///home/dagga/IdeaProjects/JEmuleServer/src/test/java/org/jemule/network/SearchCompatibilityTest.java) (`testWarmSearchDirectRetrievalFromMemoryWithoutMoreResults`, `testWarmSearchPersistentAcrossServerRestart`).
 
 #### Sub-Lot 5: Configuration, Administration CLI & End-to-End Acceptance (Status: 📋 Planned)
 - [ ] **Point 5.1 — Configuration Keys**:

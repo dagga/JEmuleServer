@@ -359,4 +359,133 @@ class SearchCompatibilityTest {
             assertEquals(0, second.more(), "More results flag must be 0 for last batch");
         }
     }
+
+    // ===============================================================
+    // Point 4.3 — Direct Retrieval on Subsequent Searches (Warm Cache)
+    // ===============================================================
+
+    @Test
+    void testWarmSearchDirectRetrievalFromMemoryWithoutMoreResults() throws Exception {
+        String dbPath = "mem:warm_search_test_" + System.currentTimeMillis();
+        try (org.jemule.core.DatabaseManager db = new org.jemule.core.DatabaseManager(dbPath);
+             KadUdpService serverUdp = new KadUdpService(0);
+             KadUdpService peerUdp = new KadUdpService(0)) {
+
+            FileIndex sharedIndex = new FileIndex(db);
+            ClientRegistry sharedRegistry = new ClientRegistry();
+
+            KadId localId = KadId.random();
+            KadRoutingTable table = new KadRoutingTable(localId);
+
+            try (KadSearchBridge bridge = new KadSearchBridge(
+                    table, serverUdp, ChildAbuseFilter.defaults(), new FakeFileDetector(),
+                    sharedIndex, db, 3, 2000, true, 1)) {
+
+                serverUdp.start();
+                peerUdp.start();
+                bridge.start();
+
+                KadId peerId = table.generateRandomIdForBucket(1);
+                KadContact peerContact = new KadContact(peerId, InetAddress.getLoopbackAddress(), peerUdp.getPort());
+                table.addOrUpdate(peerContact);
+
+                String hash1 = "1234567890abcdef1234567890abcdef";
+                String hash2 = "fedcba0987654321fedcba0987654321";
+                KadId keywordHash = KadId.fromKeyword("ubuntu");
+
+                CountDownLatch peerLatch = new CountDownLatch(1);
+                peerUdp.registerListener(KadOpCode.SEARCH_KEY_REQ, (packet, addr, port) -> {
+                    peerLatch.countDown();
+                    List<FileMetadata> files = List.of(
+                            new FileMetadata(hash1, "ubuntu-desktop.iso", 4_500_000_000L, "Archive",
+                                    List.of(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, 5))),
+                            new FileMetadata(hash2, "ubuntu-server.iso", 2_000_000_000L, "Archive",
+                                    List.of(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, 3)))
+                    );
+                    KadPacket resPkt = KadPacket.createSearchRes(keywordHash, files);
+                    try {
+                        peerUdp.send(resPkt, addr, port);
+                    } catch (Exception e) {
+                        fail(e);
+                    }
+                });
+
+                // Phase 1: Client A executes Cold Search (discovers and auto-ingests into H2 + FileIndex)
+                FakeContext clientA = loggedInContext("10.1.1.1", 50001, ServerConfig.DEFAULT, sharedRegistry, sharedIndex);
+                clientA.setKadSearchBridge(bridge);
+
+                ByteArrayOutputStream outA = new ByteArrayOutputStream();
+                new SearchHandler().handleSearch(clientA, new SearchTree().keyword("ubuntu").toBytes(), outA);
+                assertTrue(peerLatch.await(3, TimeUnit.SECONDS));
+
+                Packet pA = Packet.read(new ByteArrayInputStream(outA.toByteArray()), 1 << 20);
+                SearchAnswer answerA = readSearchAnswer(pA.data());
+                assertEquals(2, answerA.results().size());
+
+                // Verify files are now saved in H2 Database and FileIndex
+                assertTrue(sharedIndex.contains(hash1));
+                assertTrue(sharedIndex.contains(hash2));
+                assertEquals(2, db.loadFiles().size());
+
+                // Phase 2: Client B connects later and executes Warm Search
+                // No Kad bridge attached to Client B (or Kad offline) -> files served directly from local memory/H2
+                FakeContext clientB = loggedInContext("10.2.2.2", 50002, ServerConfig.DEFAULT, sharedRegistry, sharedIndex);
+
+                ByteArrayOutputStream outB = new ByteArrayOutputStream();
+                long startMs = System.currentTimeMillis();
+                new SearchHandler().handleSearch(clientB, new SearchTree().keyword("ubuntu").toBytes(), outB);
+                long durationMs = System.currentTimeMillis() - startMs;
+
+                Packet pB = Packet.read(new ByteArrayInputStream(outB.toByteArray()), 1 << 20);
+                SearchAnswer answerB = readSearchAnswer(pB.data());
+
+                // Must be returned instantly (< 100ms in test VM, < 5ms in production) in the first batch with more=0
+                assertEquals(2, answerB.results().size(), "Warm search must return both ingested files directly");
+                assertEquals(0, answerB.more(), "Warm search with <= 50 results must have more=0 (no 'More results' needed)");
+                assertTrue(durationMs < 500, "Warm search should execute instantaneously without network waits");
+
+                List<String> bHashes = answerB.results().stream().map(SearchResult::hash).toList();
+                assertTrue(bHashes.contains(hash1));
+                assertTrue(bHashes.contains(hash2));
+            }
+        }
+    }
+
+    @Test
+    void testWarmSearchPersistentAcrossServerRestart() throws Exception {
+        String dbPath = "mem:restart_search_test_" + System.currentTimeMillis() + ";DB_CLOSE_DELAY=-1";
+        String hash = "abcdef0123456789abcdef0123456789";
+
+        // 1. Initial server run: Kad file is ingested into H2 database
+        try (org.jemule.core.DatabaseManager db = new org.jemule.core.DatabaseManager(dbPath)) {
+            FileIndex index1 = new FileIndex(db);
+            FileMetadata kadFile = new FileMetadata(hash, "debian-netinst.iso", 650_000_000L, "Archive",
+                    List.of(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, 8)));
+            index1.addFile(kadFile);
+
+            // Verified saved in DB
+            assertEquals(1, db.loadFiles().size());
+        }
+
+        // 2. Simulated server restart: new FileIndex loads files from the existing DatabaseManager
+        try (org.jemule.core.DatabaseManager db = new org.jemule.core.DatabaseManager(dbPath)) {
+            FileIndex index2 = new FileIndex(db);
+            ClientRegistry registry2 = new ClientRegistry();
+
+            assertTrue(index2.contains(hash), "FileIndex must load ingested Kad files from DB upon startup");
+
+            FakeContext newClient = loggedInContext("10.3.3.3", 50003, ServerConfig.DEFAULT, registry2, index2);
+
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            new SearchHandler().handleSearch(newClient, new SearchTree().keyword("debian").toBytes(), out);
+
+            Packet p = Packet.read(new ByteArrayInputStream(out.toByteArray()), 1 << 20);
+            SearchAnswer answer = readSearchAnswer(p.data());
+
+            assertEquals(1, answer.results().size(), "Search after server restart must find ingested Kad file");
+            assertEquals(hash, answer.results().get(0).hash());
+            assertEquals("debian-netinst.iso", answer.results().get(0).tag(Tag.NAME_FILENAME));
+            assertEquals(0, answer.more());
+        }
+    }
 }
