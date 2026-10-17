@@ -474,3 +474,75 @@ Le module [`AdminInterface`](file:///home/dagga/IdeaProjects/JEmuleServer/src/ma
 2. Aucun fichier identifié comme pédopornographique par le filtre ne peut franchir le serveur vers un client lors d'une recherche forkée.
 3. Les fichiers sains découverts sur Kad avec $\ge 1$ source sont consultables dans la table `files` de la base H2 après exécution de la recherche.
 4. Les performances de traitement des clients TCP ed2k ne subissent aucune régression mesurable (> 95% de requêtes locales traitées en < 10 ms).
+
+---
+
+## 9. Plan d'Implémentation et Suivi des Sous-Lots
+
+Pour garantir une livraison maîtrisée, incrémentale et vérifiée par des tests automatisés sans régression, l'implémentation est découpée en **5 sous-lots opérationnels** :
+
+### Tableau de Suivi d'Avancement
+
+| Sous-Lot | Intitulé & Périmètre | Statut | Livrables / Commits |
+| :--- | :--- | :---: | :--- |
+| **Sous-Lot 1** | **Socle Kademlia, Distance XOR & Codecs UDP** | ✅ **Terminé** | [`60a3545`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadId.java), [`5adf06f`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadRoutingTable.java), [`5777d09`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadPacket.java) |
+| **Sous-Lot 2** | **Service Réseau UDP & Auto-Bootstrap via Clients** | ⏳ **En cours** | `KadUdpService`, `BootstrapManager`, hooks `LoginHandler` |
+| **Sous-Lot 3** | **Passerelle de Recherche Forkée & Filtrage Protecteur** | 📋 **Planifié** | `KadSearchBridge`, branchement `ChildAbuseFilter`, `banned_hashes` |
+| **Sous-Lot 4** | **Ingestion H2 Conditionnelle & Restitution Unifiée** | 📋 **Planifié** | Sauvegarde H2 (`sources >= 1`), déduplication `OP_SEARCHRESULT` |
+| **Sous-Lot 5** | **Configuration, Administration CLI & Recette Complète** | 📋 **Planifié** | `server.properties`, CLI admin (`kad status`), validation globale |
+
+---
+
+### Détail des Tâches par Sous-Lot
+
+#### Sous-Lot 1 : Socle Kademlia & Table de Routage (Statut : ✅ Terminé)
+- [x] **Point 1.1 — Identifiant 128 bits & Hachage MD4** *(Commit `60a3545`)* :
+  - [`MD4`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/MD4.java) : implémentation autonome RFC 1320 pour les hashes Kad et mots-clés.
+  - [`KadId`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadId.java) : métrique XOR, calculs de préfixe, comparaisons et conversion hexadécimale.
+  - [`KadIdTest`](file:///home/dagga/IdeaProjects/JEmuleServer/src/test/java/org/jemule/kad/KadIdTest.java) : tests de conformité des vecteurs de test MD4 et calculs de distance.
+- [x] **Point 1.2 — Table de Routage & K-Buckets** *(Commit `5adf06f`)* :
+  - [`KadContact`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadContact.java) : structure d'un pair Kad avec gestion du cycle de vie et liveness.
+  - [`KadBucket`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadBucket.java) : gestionnaire de seau ($k=20$) avec file de remplacement et promotion.
+  - [`KadRoutingTable`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadRoutingTable.java) : table à 128 buckets, recherche de proximité `findClosest` et cibles de rafraîchissement.
+  - [`KadRoutingTableTest`](file:///home/dagga/IdeaProjects/JEmuleServer/src/test/java/org/jemule/kad/KadRoutingTableTest.java) : validation des capacités, évictions et lookups.
+- [x] **Point 1.3 — Sérialisation des Paquets Kad2 UDP** *(Commit `5777d09`)* :
+  - [`KadOpCode`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadOpCode.java) : opcodes protocolaires Kad2 (`0x3A`).
+  - [`KadPacket`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadPacket.java) : encodeurs/décodeurs `BOOTSTRAP`, `HELLO`, `REQ/RES`, `SEARCH_KEY_REQ/RES`.
+  - [`KadPacketTest`](file:///home/dagga/IdeaProjects/JEmuleServer/src/test/java/org/jemule/kad/KadPacketTest.java) : tests de sérialisation et d'intégrité des messages binaires.
+
+#### Sous-Lot 2 : Service Réseau UDP & Auto-Bootstrap (Statut : ⏳ En cours)
+- [ ] **Point 2.1 — Moteur Réseau UDP Asynchrone** :
+  - Socket UDP dédié sur Virtual Threads pour la réception et l'émission multiplexée de paquets Kad2.
+  - Boucle d'écoute et dispatcheur de paquets entrants (`BOOTSTRAP_RES`, `HELLO_RES`, `RES`, `SEARCH_RES`).
+- [ ] **Point 2.2 — Auto-Bootstrap via les Clients Connectés** :
+  - Capture des clients éligibles (HighID, port UDP) lors du handshake dans [`LoginHandler`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/network/handler/LoginHandler.java).
+  - Émission de `BOOTSTRAP_REQ` et ingestion automatique des contacts renvoyés dans [`KadRoutingTable`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadRoutingTable.java).
+- [ ] **Point 2.3 — Maintien et Rafraîchissement Périodique** :
+  - Tâche d'arrière-plan pour rafraîchir les K-Buckets inactifs et vérifier la liveness des pairs.
+
+#### Sous-Lot 3 : Passerelle de Recherche Forkée & Sécurité (Statut : 📋 Planifié)
+- [ ] **Point 3.1 — Dédoublement Asynchrone des Recherches** :
+  - Interception dans [`SearchHandler`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/network/handler/SearchHandler.java) et transmission au composant `KadSearchBridge`.
+  - Émission de `SEARCH_KEY_REQ` vers les nœuds les plus proches du hash du mot-clé.
+- [ ] **Point 3.2 — Filtrage Protecteur Strict par Construction** :
+  - Soumission systématique de chaque résultat Kad à [`ChildAbuseFilter`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/security/ChildAbuseFilter.java) et [`FakeFileDetector`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/security/FakeFileDetector.java).
+- [ ] **Point 3.3 — Bannissement Automatique des Contenus Illicites** :
+  - Inscription immédiate et persistance des hashes incriminés dans `banned_hashes` de la base H2.
+
+#### Sous-Lot 4 : Ingestion H2 Conditionnelle & Restitution Unifiée (Statut : 📋 Planifié)
+- [ ] **Point 4.1 — Ingestion Conditionnelle en Base H2** :
+  - Contrôle strict `sources >= 1` et persistance dans [`DatabaseManager`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/core/DatabaseManager.java).
+  - Indexation immédiate en mémoire dans [`FileIndex`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/core/FileIndex.java).
+- [ ] **Point 4.2 — Fusion et Distribution `OP_SEARCHRESULT`** :
+  - Restitution par lots de 50 résultats et prise en charge de `OP_QUERY_MORE_RESULT`.
+- [ ] **Point 4.3 — Restitution Directe aux Recherches Suivantes** :
+  - Garantie de service direct depuis H2 sans recours à « More results » pour les requêtes ultérieures.
+
+#### Sous-Lot 5 : Configuration, Administration CLI & Recette Complète (Statut : 📋 Planifié)
+- [ ] **Point 5.1 — Paramétrage Externe** :
+  - Clés de configuration dans [`server.properties`](file:///home/dagga/IdeaProjects/JEmuleServer/server.properties) et mapping dans [`ServerConfig`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/config/ServerConfig.java).
+- [ ] **Point 5.2 — Commandes d'Administration** :
+  - Ajout des commandes `kad status`, `kad contacts`, `kad stats` dans [`AdminInterface`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/network/AdminInterface.java).
+- [ ] **Point 5.3 — Validation Finale & Recette** :
+  - Exécution complète de la suite de tests (`./gradlew test`) et validation des critères d'acceptation.
+
