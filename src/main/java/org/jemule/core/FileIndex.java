@@ -35,6 +35,8 @@ import java.util.concurrent.ConcurrentSkipListMap;
  */
 public class FileIndex {
     private static final Logger log = LoggerFactory.getLogger(FileIndex.class);
+    private static final Comparator<FileMetadata> SOURCE_COUNT_ORDER =
+            Comparator.comparingInt(FileMetadata::sourceCount).reversed();
     private final ConcurrentHashMap<String, FileMetadata> byHash = new ConcurrentHashMap<>();
     private final ConcurrentSkipListMap<String, Postings> invertedIndex = new ConcurrentSkipListMap<>();
     /** Words of {@link #invertedIndex}, searched by substring. */
@@ -291,11 +293,13 @@ public class FileIndex {
         if (eventManager != null) {
             eventManager.broadcast(new FileEvent(FileEvent.SEARCHED, query.toString(), "", "Complex search executed"));
         }
+        if (limit <= 0) return List.of();
         List<Postings> postings = candidates(query);
         if (postings == null) {
             // No keyword constrains the file name (e.g. a type or size filter alone): every file is tested
             return byHash.values().stream()
                     .filter(query)
+                    .sorted(SOURCE_COUNT_ORDER)
                     .limit(limit)
                     .toList();
         }
@@ -307,11 +311,13 @@ public class FileIndex {
                 FileMetadata meta = byHash.get(hash);
                 if (meta != null && query.test(meta)) {
                     results.put(hash, meta);
-                    if (results.size() >= limit) return List.copyOf(results.values());
                 }
             }
         }
-        return List.copyOf(results.values());
+        return results.values().stream()
+                .sorted(SOURCE_COUNT_ORDER)
+                .limit(limit)
+                .toList();
     }
 
     /**

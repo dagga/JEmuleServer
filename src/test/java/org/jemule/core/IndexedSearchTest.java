@@ -1,5 +1,6 @@
 package org.jemule.core;
 
+import org.jemule.protocol.Tag;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -93,6 +94,31 @@ class IndexedSearchTest {
         files.set(0, new FileMetadata(hash, "brand new title.avi", 1000, "Video"));
         assertSameAsFullScan(term("brand"));
         assertSameAsFullScan(term(files.get(1).name().split("[^\\p{L}\\p{N}]+")[0]));
+    }
+
+    @Test
+    void resultsAreRankedBySourceCountBeforeApplyingLimit() {
+        FileIndex rankedIndex = new FileIndex(null);
+        rankedIndex.addFile(withSources("00000000000000000000000000000001", "ranking low.mp3", 2));
+        rankedIndex.addFile(withSources("00000000000000000000000000000002", "ranking high.mp3", 9));
+        rankedIndex.addFile(withSources("00000000000000000000000000000003", "ranking medium.mp3", 5));
+
+        assertEquals(List.of(
+                        "00000000000000000000000000000002",
+                        "00000000000000000000000000000003"),
+                rankedIndex.searchComplex(term("ranking"), 2).stream().map(FileMetadata::hash).toList());
+
+        SearchQuery sizeFilter = new SearchQuery.NumericQuery(SearchQuery.ID_FILESIZE, SearchQuery.OP_GREATER, 0);
+        assertEquals(List.of(
+                        "00000000000000000000000000000002",
+                        "00000000000000000000000000000003",
+                        "00000000000000000000000000000001"),
+                rankedIndex.searchComplex(sizeFilter, 3).stream().map(FileMetadata::hash).toList());
+    }
+
+    private static FileMetadata withSources(String hash, String name, int sourceCount) {
+        return new FileMetadata(hash, name, 1000, "Audio",
+                List.of(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, sourceCount)));
     }
 
     @Test
