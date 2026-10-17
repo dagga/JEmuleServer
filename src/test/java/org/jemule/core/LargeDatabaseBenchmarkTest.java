@@ -153,14 +153,27 @@ class LargeDatabaseBenchmarkTest {
         System.out.printf("%n=== Large database benchmark: %,d files ===%n", count);
         System.out.printf("Database filled in %.1f s%n", (System.nanoTime() - start) / 1e9);
 
+        // Startup breakdown: database read alone, then the child abuse filter on every name
+        try (DatabaseManager db = new DatabaseManager(dbPath)) {
+            List<String> names = new java.util.ArrayList<>();
+            start = System.nanoTime();
+            db.forEachFile(meta -> names.add(meta.name()));
+            System.out.printf("Database read alone: %.1f s%n", (System.nanoTime() - start) / 1e9);
+            org.jemule.security.ChildAbuseFilter filter = org.jemule.security.ChildAbuseFilter.defaults();
+            start = System.nanoTime();
+            long rejected = names.stream().filter(filter::matches).count();
+            System.out.printf("Child abuse filter on every name: %.1f s (%d rejected)%n", (System.nanoTime() - start) / 1e9, rejected);
+        }
+
         long heapBefore = usedHeapMb();
         try (DatabaseManager db = new DatabaseManager(dbPath)) {
             start = System.nanoTime();
             FileIndex index = new FileIndex(db);
             System.out.printf("Startup load: %,d files in %.1f s%n", index.fileCount(), (System.nanoTime() - start) / 1e9);
             System.out.printf("Distinct words in the index: %,d%n", index.wordCount());
-            System.out.printf("Heap used by the index: %,d MB (%,d bytes per file)%n", usedHeapMb() - heapBefore,
-                    (usedHeapMb() - heapBefore) * 1024 * 1024 / Math.max(1, count));
+            long heapMb = usedHeapMb() - heapBefore;
+            System.out.printf("Heap used by the index: %,d MB (%,d bytes per file)%n", heapMb,
+                    heapMb * 1024 * 1024 / Math.max(1, count));
 
             System.out.println("searchComplex (limit 300):");
             measure(index, "common word", keywords(vocabulary[0]));
