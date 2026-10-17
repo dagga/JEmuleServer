@@ -37,6 +37,8 @@ public class FileIndex {
     private static final Logger log = LoggerFactory.getLogger(FileIndex.class);
     private final ConcurrentHashMap<String, FileMetadata> byHash = new ConcurrentHashMap<>();
     private final ConcurrentSkipListMap<String, Set<String>> invertedIndex = new ConcurrentSkipListMap<>();
+    /** Words of {@link #invertedIndex}, searched by substring. */
+    private final WordDictionary dictionary = new WordDictionary();
     private final DatabaseManager db;
     private final EventManager eventManager;
     private final ChildAbuseFilter abuseFilter;
@@ -204,7 +206,16 @@ public class FileIndex {
         String[] tokens = Keywords.split(name);
         for (String t : tokens) {
             if (!t.isEmpty()) {
-                invertedIndex.computeIfAbsent(t, k -> ConcurrentHashMap.newKeySet()).add(meta.hash());
+                Set<String> hashes = invertedIndex.get(t);
+                if (hashes == null) {
+                    Set<String> created = ConcurrentHashMap.newKeySet();
+                    hashes = invertedIndex.putIfAbsent(t, created);
+                    if (hashes == null) {
+                        hashes = created;
+                        dictionary.add(t); // once in the index, so that a dictionary rebuild cannot miss it
+                    }
+                }
+                hashes.add(meta.hash());
             }
         }
     }
@@ -270,10 +281,82 @@ public class FileIndex {
         if (eventManager != null) {
             eventManager.broadcast(new FileEvent(FileEvent.SEARCHED, query.toString(), "", "Complex search executed"));
         }
-        return byHash.values().stream()
-                .filter(query)
-                .limit(limit)
-                .toList();
+        List<Set<String>> postings = candidates(query);
+        if (postings == null) {
+            // No keyword constrains the file name (e.g. a type or size filter alone): every file is tested
+            return byHash.values().stream()
+                    .filter(query)
+                    .limit(limit)
+                    .toList();
+        }
+        // Only the files indexed under a word containing a keyword are tested; a file may appear in several sets
+        Map<String, FileMetadata> results = new LinkedHashMap<>();
+        for (Set<String> hashes : postings) {
+            for (String hash : hashes) {
+                if (results.containsKey(hash)) continue;
+                FileMetadata meta = byHash.get(hash);
+                if (meta != null && query.test(meta)) {
+                    results.put(hash, meta);
+                    if (results.size() >= limit) return List.copyOf(results.values());
+                }
+            }
+        }
+        return List.copyOf(results.values());
+    }
+
+    /**
+     * Files that may match a query: every match belongs to one of the returned hash sets, or null when the query
+     * does not constrain the file name. A file name keyword matches a name that contains it ({@link
+     * SearchQuery.TermQuery}); made of letters and digits only, it can only lie inside one word of the name, so the
+     * files to test are those indexed under the words containing it.
+     */
+    private List<Set<String>> candidates(SearchQuery query) {
+        return switch (query) {
+            case SearchQuery.TermQuery t when t.id() == SearchQuery.ID_FILENAME -> {
+                List<Set<String>> best = null;
+                long bestSize = Long.MAX_VALUE;
+                for (String token : Keywords.split(t.term())) {
+                    // Every word of the keyword must be in the name: the rarest one is enough to select the files
+                    List<Set<String>> sets = new ArrayList<>();
+                    long size = 0;
+                    for (String word : dictionary.wordsContaining(token, invertedIndex.keySet())) {
+                        Set<String> hashes = invertedIndex.get(word);
+                        if (hashes != null) {
+                            sets.add(hashes);
+                            size += hashes.size();
+                        }
+                    }
+                    if (size < bestSize) {
+                        best = sets;
+                        bestSize = size;
+                    }
+                }
+                yield best != null ? best : List.of(); // a keyword without any letter/digit matches nothing
+            }
+            case SearchQuery.AndQuery a -> smallest(candidates(a.left()), candidates(a.right()));
+            case SearchQuery.NotQuery n -> candidates(n.left());
+            case SearchQuery.OrQuery o -> {
+                List<Set<String>> left = candidates(o.left());
+                List<Set<String>> right = candidates(o.right());
+                if (left == null || right == null) yield null;
+                List<Set<String>> both = new ArrayList<>(left);
+                both.addAll(right);
+                yield both;
+            }
+            default -> null;
+        };
+    }
+
+    private static List<Set<String>> smallest(List<Set<String>> a, List<Set<String>> b) {
+        if (a == null) return b;
+        if (b == null) return a;
+        return total(a) <= total(b) ? a : b;
+    }
+
+    private static long total(List<Set<String>> sets) {
+        long n = 0;
+        for (Set<String> s : sets) n += s.size();
+        return n;
     }
 
     /**
@@ -334,6 +417,11 @@ public class FileIndex {
         searchCache.put(cacheKey, res);
         
         return res;
+    }
+
+    /** Number of distinct words of the inverted index. */
+    public int wordCount() {
+        return invertedIndex.size();
     }
 
     /** True if a file with this hash is indexed. */
