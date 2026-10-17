@@ -1,7 +1,8 @@
 - [x] Inverted keyword index with boolean search trees and numeric size filters. Results are ranked by source count, the result cap is configurable, and a query word no indexed file contains no longer empties the search.
 - [x] Regularly update `ipfilter.dat`; apply the update only when fewer than 10% of normalized ranges differ. Otherwise, keep the existing filter and record the rejection in the adjacent `.trace` file.
 - [x] Java memory-optimized index: store database-loaded `FT_SOURCES` tags compactly and reconstruct them lazily; share one source map among files without online sources. The index measured 363 MB of heap for 999,913 files, below half of the roughly 800 MB Lugdunum reference. Rust-specific slabs, intrusive indexes, and jemalloc tuning do not apply to this Java server.
-- [ ] Partial: client-server TCP/UDP obfuscation is implemented, as are fake-file heuristics and persistent hash bans. Still needed: obfuscated server-to-server gossip and verification-based mldonkey/junk-server filtering.
+- [ ] Partial: client-server TCP/UDP obfuscation, fake-file heuristics and persistent hash bans are implemented; a Lugdunum-compatible server-to-server UDP obfuscation codec is now implemented.
+- [ ] Still needed: gossip peer discovery and exchange, plus verification-based mldonkey/junk-server filtering.
 - NAT traversal (NAT-T) hole-punch coordination for LowID↔LowID transfers.
 - IPv6 (opt-in): clients can connect over IPv6, and a client that is LowID on IPv4 but has a public IPv6 is published as an IPv6 source to peers that can parse it — see IPv6 below.
 - OFFERFILES v1 (opt-in): tells capable clients how many files per batch and how often they may publish, and holds them to it, so a large library is published in minutes instead of hours — see OFFERFILES v1 below.
