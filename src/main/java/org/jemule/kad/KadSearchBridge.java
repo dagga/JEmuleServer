@@ -406,6 +406,10 @@ public class KadSearchBridge implements AutoCloseable {
         return searchesForked.get();
     }
 
+    public long getSearchTimeoutMs() {
+        return searchTimeoutMs;
+    }
+
     public long getResultsReceived() {
         return resultsReceived.get();
     }

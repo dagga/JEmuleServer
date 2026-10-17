@@ -487,8 +487,12 @@ Implementation is divided into **5 operational sub-lots**:
   - Integrated `FileIndex` and `DatabaseManager` into [`KadSearchBridge`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadSearchBridge.java) with `autoIngestToH2` and `minSourcesForIngest` threshold enforcement.
   - Added `sourceCount()` resolution in [`FileMetadata`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/core/FileMetadata.java) to count active network sources or evaluate `FT_SOURCES` metadata tags from DHT responses.
   - Validated by unit tests in [`KadSearchBridgeTest`](file:///home/dagga/IdeaProjects/JEmuleServer/src/test/java/org/jemule/kad/KadSearchBridgeTest.java) (`testConditionalIngestionSourcesZeroDiscarded`, `testConditionalIngestionSourcesOneOrMoreIngestedAndPersisted`, `testConditionalIngestionDisabledConfig`).
-- [ ] **Point 4.2 — Unified Delivery & Result Merging**:
+- [x] **Point 4.2 — Unified Delivery & Result Merging**:
   - Merge and deduplicate items into standard 50-item batches via `OP_SEARCHRESULT`.
+  - Concurrent dispatch in [`SearchHandler`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/network/handler/SearchHandler.java) for local index lookup and asynchronous [`KadSearchBridge`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadSearchBridge.java) forking.
+  - Transparent deduplication by 128-bit hash and pagination state preservation in `ClientState.pendingSearchResults`.
+  - Full multi-batch support for `OP_QUERY_MORE_RESULT` with `moreAvailable` flag activation.
+  - Verified by tests in [`SearchCompatibilityTest`](file:///home/dagga/IdeaProjects/JEmuleServer/src/test/java/org/jemule/network/SearchCompatibilityTest.java) (`testForkedKadSearchMergesAndDeduplicatesResults`, `testForkedKadSearchMissingLocallyDeliversKadResults`, `testForkedKadSearchColdDiscoveryPagination`).
 - [ ] **Point 4.3 — Direct Retrieval on Subsequent Searches**:
   - Guaranteed instant retrieval from H2 on subsequent queries without "More results".
 

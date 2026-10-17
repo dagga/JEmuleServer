@@ -7,6 +7,7 @@ import org.jemule.core.ClientState;
 import org.jemule.core.FileIndex;
 import org.jemule.core.event.EventManager;
 import org.jemule.network.Server;
+import org.jemule.kad.KadSearchBridge;
 import org.jemule.security.FakeFileDetector;
 import org.jemule.security.FloodProtector;
 
@@ -24,6 +25,9 @@ public interface ClientContext {
     EventManager getEventManager();
     ClientFactory getClientFactory();
     default Server getServer() { return null; }
+    default KadSearchBridge getKadSearchBridge() {
+        return getServer() != null ? getServer().getKadSearchBridge() : null;
+    }
 
     ClientState getState();
     void setState(ClientState state);

@@ -27,6 +27,7 @@ import org.jemule.core.event.ClientEvent;
 import org.jemule.core.event.EventManager;
 import org.jemule.core.event.FileEvent;
 import org.jemule.core.event.EventStatistics;
+import org.jemule.kad.KadSearchBridge;
 import org.jemule.security.ChildAbuseFilter;
 import org.jemule.security.FakeFileDetector;
 import org.jemule.security.FloodProtector;
@@ -91,10 +92,19 @@ public class Server {
     private final ClientFactory clientFactory;
     private final AdminInterface admin;
     private final InetAddress publicIp;
+    private volatile KadSearchBridge kadSearchBridge;
     private volatile boolean running = true;
 
     public byte[] getServerHash() {
         return serverHash;
+    }
+
+    public KadSearchBridge getKadSearchBridge() {
+        return kadSearchBridge;
+    }
+
+    public void setKadSearchBridge(KadSearchBridge kadSearchBridge) {
+        this.kadSearchBridge = kadSearchBridge;
     }
 
     /**

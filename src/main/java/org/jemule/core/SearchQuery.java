@@ -116,7 +116,7 @@ public interface SearchQuery extends Predicate<FileMetadata> {
         public boolean test(FileMetadata meta) {
             Long actual = switch (id) {
                 case ID_FILESIZE -> meta.size();
-                case ID_SOURCES -> (long) meta.sources().size();
+                case ID_SOURCES -> (long) meta.sourceCount();
                 case ID_COMPLETE_SOURCES -> (long) meta.completeSourceCount();
                 case ID_MEDIA_LENGTH, ID_MEDIA_BITRATE, ID_FILERATING -> intTag(meta, id);
                 default -> null;
