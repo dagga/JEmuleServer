@@ -9,6 +9,6 @@
 - HighID verified by a client-to-client hello, not only a TCP connect: a port forwarded to a different client behind the same NAT no longer earns HighID.
 - IP filtering in eMule guarding.p2p format, with per-range hit statistics.
 - GeoIP country and provider for IPv4 and IPv6 (MaxMind DB, with the ip-to-country.csv fallback), bot/scanner detection, CSAM-publisher banning.
-- Work admission: bounded sockets, logins, probes, searches and UDP, sized for 100 000 clients and the reconnect storm after a restart.
+- Work admission: bounded sockets, logins, probes, searches and UDP, sized for 100 000 000 clients and the reconnect storm after a restart.
 - Built-in admin web panel (status, clients with server-side search, peers with their names, filters, bots, blocks, settings) bound to localhost update CLI in e such feature way.
 - Hot-reloadable filter lists and config without a restart.
