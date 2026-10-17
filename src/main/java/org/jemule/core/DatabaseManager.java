@@ -27,7 +27,10 @@ import org.slf4j.LoggerFactory;
 
 import java.sql.*;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.function.Consumer;
 import java.util.concurrent.locks.ReentrantLock;
 
 public class DatabaseManager implements AutoCloseable {
@@ -251,60 +254,81 @@ public class DatabaseManager implements AutoCloseable {
     }
 
     public List<FileMetadata> loadFiles() {
+        List<FileMetadata> files = new ArrayList<>();
+        return forEachFile(files::add) ? files : new ArrayList<>();
+    }
+
+    /**
+     * Reads every file of the database with its tags in one ordered pass, handing them to {@code consumer} one by
+     * one instead of loading them all in memory first. The consumer runs while the database is locked: it must not
+     * call this manager.
+     *
+     * @return false if the read failed (the consumer may have received part of the files)
+     */
+    public boolean forEachFile(Consumer<FileMetadata> consumer) {
         try {
-            return locked(this::loadFilesInternal);
+            return locked(() -> {
+                forEachFileInternal(consumer);
+                return true;
+            });
         } catch (Throwable e) {
             logger.error("Circuit breaker prevented or caught error during loadFiles: {}", e.getMessage());
-            return new ArrayList<>();
+            return false;
         }
     }
 
-    private List<FileMetadata> loadFilesInternal() throws SQLException {
-        List<FileMetadata> files = new ArrayList<>();
+    private void forEachFileInternal(Consumer<FileMetadata> consumer) throws SQLException {
+        // Type and tag names repeat on every row: one instance of each is kept
+        Map<String, String> shared = new HashMap<>();
         try (Statement stmt = connection.createStatement();
-             ResultSet rs = stmt.executeQuery("SELECT * FROM files")) {
+             ResultSet rs = stmt.executeQuery("""
+                     SELECT f.hash, f.name, f.size, f.type, t.tag_type, t.tag_name, t.tag_value_str, t.tag_value_blob
+                     FROM files f LEFT JOIN file_tags t ON t.file_hash = f.hash ORDER BY f._ROWID_""")) {
+            String hash = null, name = null, type = null;
+            long size = 0;
+            List<Tag> tags = new ArrayList<>();
             while (rs.next()) {
-                String hash = rs.getString("hash");
-                String name = rs.getString("name");
-                long size = rs.getLong("size");
-                String type = rs.getString("type");
-                
-                List<Tag> tags = loadTags(hash);
-                files.add(new FileMetadata(hash, name, size, type, tags));
-            }
-        }
-        return files;
-    }
-
-    private List<Tag> loadTags(String fileHash) throws SQLException {
-        List<Tag> tags = new ArrayList<>();
-        try (PreparedStatement ps = connection.prepareStatement("SELECT * FROM file_tags WHERE file_hash = ?")) {
-            ps.setString(1, fileHash);
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) {
-                    byte type = rs.getByte("tag_type");
-                    String name = rs.getString("tag_name");
-                    String valStr = rs.getString("tag_value_str");
-                    byte[] valBlob = rs.getBytes("tag_value_blob");
-                    
-                    Object value = null;
-                    switch (type) {
-                        case Tag.TYPE_STRING -> value = valStr;
-                        case Tag.TYPE_INTEGER -> value = Integer.parseInt(valStr);
-                        case Tag.TYPE_INT16 -> value = Short.parseShort(valStr);
-                        case Tag.TYPE_INT8 -> value = Byte.parseByte(valStr);
-                        case Tag.TYPE_FLOAT -> value = Float.parseFloat(valStr);
-                        case Tag.TYPE_UINT64 -> value = Long.parseLong(valStr);
-                        case Tag.TYPE_BOOL -> value = Boolean.parseBoolean(valStr);
-                        case Tag.TYPE_BLOB, Tag.TYPE_HASH, Tag.TYPE_BOOLARRAY, Tag.TYPE_BSOB -> value = valBlob;
-                    }
-                    if (value != null) {
-                        tags.add(new Tag(type, name, value));
-                    }
+                String rowHash = rs.getString(1);
+                if (!rowHash.equals(hash)) {
+                    if (hash != null) consumer.accept(new FileMetadata(hash, name, size, type, List.copyOf(tags)));
+                    hash = rowHash;
+                    name = rs.getString(2);
+                    size = rs.getLong(3);
+                    type = share(shared, rs.getString(4));
+                    tags.clear();
+                }
+                String tagName = rs.getString(6);
+                if (tagName != null) {
+                    Tag tag = readTag(rs.getByte(5), share(shared, tagName), rs.getString(7), rs.getBytes(8));
+                    if (tag != null) tags.add(tag);
                 }
             }
+            if (hash != null) consumer.accept(new FileMetadata(hash, name, size, type, List.copyOf(tags)));
         }
-        return tags;
+    }
+
+    /** The shared instance of a repeated string (bounded, so that unusual values cannot fill the map). */
+    private static String share(Map<String, String> shared, String value) {
+        if (value == null || value.length() > 64) return value;
+        String known = shared.get(value);
+        if (known != null) return known;
+        if (shared.size() < 4096) shared.put(value, value);
+        return value;
+    }
+
+    private static Tag readTag(byte type, String name, String valStr, byte[] valBlob) {
+        Object value = switch (type) {
+            case Tag.TYPE_STRING -> valStr;
+            case Tag.TYPE_INTEGER -> Integer.valueOf(valStr);
+            case Tag.TYPE_INT16 -> Short.valueOf(valStr);
+            case Tag.TYPE_INT8 -> Byte.valueOf(valStr);
+            case Tag.TYPE_FLOAT -> Float.valueOf(valStr);
+            case Tag.TYPE_UINT64 -> Long.valueOf(valStr);
+            case Tag.TYPE_BOOL -> Boolean.valueOf(valStr);
+            case Tag.TYPE_BLOB, Tag.TYPE_HASH, Tag.TYPE_BOOLARRAY, Tag.TYPE_BSOB -> valBlob;
+            default -> null;
+        };
+        return value != null ? new Tag(type, name, value) : null;
     }
 
     public void setStat(String key, long value) {

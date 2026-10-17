@@ -68,18 +68,22 @@ public class FileIndex {
         if (db != null) {
             try {
                 db.loadBannedHashes(ChildAbuseFilter.BAN_REASON).forEach(h -> abuseBannedHashes.add(h.toUpperCase(Locale.ROOT)));
-                List<FileMetadata> loaded = db.loadFiles();
-                int purged = 0;
-                for (FileMetadata meta : loaded) {
-                    if (isChildAbuse(meta.hash(), meta.name())) {
-                        db.deleteFile(meta.hash());
-                        purged++;
+                // The files are indexed while they are read; the child abuse files are banned and deleted afterwards,
+                // the database being locked during the read
+                List<FileMetadata> rejected = new ArrayList<>();
+                db.forEachFile(meta -> {
+                    if (abuseBannedHashes.contains(meta.hash().toUpperCase(Locale.ROOT)) || abuseFilter.matches(meta.name())) {
+                        rejected.add(meta);
                     } else {
                         indexInMemory(meta);
                     }
+                });
+                for (FileMetadata meta : rejected) {
+                    isChildAbuse(meta.hash(), meta.name());
+                    db.deleteFile(meta.hash());
                 }
-                if (purged > 0) {
-                    log.warn("Deleted {} child abuse file(s) from the database", purged);
+                if (!rejected.isEmpty()) {
+                    log.warn("Deleted {} child abuse file(s) from the database", rejected.size());
                 }
             } catch (Exception e) {
                 // If DB fails during load, we continue with empty memory index
