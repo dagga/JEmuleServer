@@ -59,4 +59,22 @@ public record FileMetadata(
         }
         return n;
     }
+
+    /**
+     * Total number of sources sharing this file.
+     * Evaluates active client states if connected, or tag {@link Tag#NAME_SOURCES} if loaded from DHT or database.
+     */
+    public int sourceCount() {
+        if (sources != null && !sources.isEmpty()) {
+            return sources.size();
+        }
+        if (tags != null) {
+            for (Tag t : tags) {
+                if (Tag.NAME_SOURCES.equals(t.name()) && t.isInt()) {
+                    return (int) t.unsignedValue();
+                }
+            }
+        }
+        return 0;
+    }
 }

@@ -291,7 +291,7 @@ public final class KadPacket {
             if (f.type() != null && !f.type().isEmpty()) {
                 tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_FILETYPE, f.type()));
             }
-            tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, Math.max(1, f.sources().size())));
+            tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, f.sourceCount()));
             Tag.writeList(buf, tags);
         }
 

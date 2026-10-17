@@ -18,6 +18,8 @@
 
 package org.jemule.kad;
 
+import org.jemule.core.DatabaseManager;
+import org.jemule.core.FileIndex;
 import org.jemule.core.FileMetadata;
 import org.jemule.core.Keywords;
 import org.jemule.core.SearchQuery;
@@ -55,8 +57,12 @@ public class KadSearchBridge implements AutoCloseable {
     private final KadUdpService udpService;
     private final ChildAbuseFilter abuseFilter;
     private final FakeFileDetector fakeDetector;
+    private final FileIndex fileIndex;
+    private final DatabaseManager databaseManager;
     private final int alphaNodes;
     private final long searchTimeoutMs;
+    private final boolean autoIngestToH2;
+    private final int minSourcesForIngest;
 
     private final ConcurrentHashMap<KadId, KadSearchSession> activeSessions = new ConcurrentHashMap<>();
     private final Set<String> bannedHashes = ConcurrentHashMap.newKeySet();
@@ -65,6 +71,7 @@ public class KadSearchBridge implements AutoCloseable {
     private final AtomicLong searchesForked = new AtomicLong(0);
     private final AtomicLong resultsReceived = new AtomicLong(0);
     private final AtomicLong illicitFilesBlocked = new AtomicLong(0);
+    private final AtomicLong filesIngested = new AtomicLong(0);
 
     private volatile boolean running = false;
 
@@ -117,22 +124,44 @@ public class KadSearchBridge implements AutoCloseable {
 
     public KadSearchBridge(KadRoutingTable routingTable, KadUdpService udpService,
                            ChildAbuseFilter abuseFilter, FakeFileDetector fakeDetector,
-                           int alphaNodes, long searchTimeoutMs) {
+                           FileIndex fileIndex, DatabaseManager databaseManager,
+                           int alphaNodes, long searchTimeoutMs,
+                           boolean autoIngestToH2, int minSourcesForIngest) {
         this.routingTable = Objects.requireNonNull(routingTable, "routingTable cannot be null");
         this.udpService = Objects.requireNonNull(udpService, "udpService cannot be null");
         this.abuseFilter = abuseFilter != null ? abuseFilter : ChildAbuseFilter.defaults();
         this.fakeDetector = fakeDetector != null ? fakeDetector : new FakeFileDetector();
+        this.fileIndex = fileIndex;
+        this.databaseManager = databaseManager;
         this.alphaNodes = Math.max(1, alphaNodes);
         this.searchTimeoutMs = searchTimeoutMs;
+        this.autoIngestToH2 = autoIngestToH2;
+        this.minSourcesForIngest = Math.max(0, minSourcesForIngest);
+    }
+
+    public KadSearchBridge(KadRoutingTable routingTable, KadUdpService udpService,
+                           ChildAbuseFilter abuseFilter, FakeFileDetector fakeDetector,
+                           FileIndex fileIndex, DatabaseManager databaseManager) {
+        this(routingTable, udpService, abuseFilter, fakeDetector, fileIndex, databaseManager,
+                DEFAULT_ALPHA_NODES, DEFAULT_SEARCH_TIMEOUT_MS, true, 1);
+    }
+
+    public KadSearchBridge(KadRoutingTable routingTable, KadUdpService udpService,
+                           ChildAbuseFilter abuseFilter, FakeFileDetector fakeDetector,
+                           int alphaNodes, long searchTimeoutMs) {
+        this(routingTable, udpService, abuseFilter, fakeDetector, null, null,
+                alphaNodes, searchTimeoutMs, true, 1);
     }
 
     public KadSearchBridge(KadRoutingTable routingTable, KadUdpService udpService,
                            ChildAbuseFilter abuseFilter, FakeFileDetector fakeDetector) {
-        this(routingTable, udpService, abuseFilter, fakeDetector, DEFAULT_ALPHA_NODES, DEFAULT_SEARCH_TIMEOUT_MS);
+        this(routingTable, udpService, abuseFilter, fakeDetector, null, null,
+                DEFAULT_ALPHA_NODES, DEFAULT_SEARCH_TIMEOUT_MS, true, 1);
     }
 
     public KadSearchBridge(KadRoutingTable routingTable, KadUdpService udpService, int alphaNodes, long searchTimeoutMs) {
-        this(routingTable, udpService, ChildAbuseFilter.defaults(), new FakeFileDetector(), alphaNodes, searchTimeoutMs);
+        this(routingTable, udpService, ChildAbuseFilter.defaults(), new FakeFileDetector(), null, null,
+                alphaNodes, searchTimeoutMs, true, 1);
     }
 
     public KadSearchBridge(KadRoutingTable routingTable, KadUdpService udpService) {
@@ -262,7 +291,26 @@ public class KadSearchBridge implements AutoCloseable {
 
         for (FileMetadata file : files) {
             if (acceptFile(file)) {
-                session.addResult(file);
+                int sources = file.sourceCount();
+                if (sources >= minSourcesForIngest) {
+                    if (autoIngestToH2) {
+                        if (fileIndex != null) {
+                            fileIndex.addFile(file);
+                            filesIngested.incrementAndGet();
+                            log.debug("Ingested Kad file into FileIndex & H2: {} ({}, sources={})",
+                                    file.name(), file.hash(), sources);
+                        } else if (databaseManager != null) {
+                            databaseManager.saveFile(file);
+                            filesIngested.incrementAndGet();
+                            log.debug("Saved Kad file into H2 database: {} ({}, sources={})",
+                                    file.name(), file.hash(), sources);
+                        }
+                    }
+                    session.addResult(file);
+                } else {
+                    log.debug("Kad file ignored (sources {} < minSources {}): {} ({})",
+                            sources, minSourcesForIngest, file.name(), file.hash());
+                }
             }
         }
     }
@@ -360,6 +408,26 @@ public class KadSearchBridge implements AutoCloseable {
 
     public long getResultsReceived() {
         return resultsReceived.get();
+    }
+
+    public long getFilesIngested() {
+        return filesIngested.get();
+    }
+
+    public boolean isAutoIngestToH2() {
+        return autoIngestToH2;
+    }
+
+    public int getMinSourcesForIngest() {
+        return minSourcesForIngest;
+    }
+
+    public FileIndex getFileIndex() {
+        return fileIndex;
+    }
+
+    public DatabaseManager getDatabaseManager() {
+        return databaseManager;
     }
 
     @Override

@@ -427,4 +427,215 @@ class KadSearchBridgeTest {
             fail(e);
         }
     }
+
+    // ===============================================================
+    // Point 4.1 — Conditional H2 Ingestion & In-Memory Indexing
+    // ===============================================================
+
+    @Test
+    void testFileMetadataSourceCountEvaluation() {
+        // 1. Empty sources and no tags
+        FileMetadata f1 = new FileMetadata("11111111111111111111111111111111", "test1.avi", 1000L, "Video");
+        assertEquals(0, f1.sourceCount());
+
+        // 2. Tag FT_SOURCES with 0
+        FileMetadata f2 = new FileMetadata("22222222222222222222222222222222", "test2.avi", 1000L, "Video",
+                List.of(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, 0)));
+        assertEquals(0, f2.sourceCount());
+
+        // 3. Tag FT_SOURCES with 7
+        FileMetadata f3 = new FileMetadata("33333333333333333333333333333333", "test3.avi", 1000L, "Video",
+                List.of(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, 7)));
+        assertEquals(7, f3.sourceCount());
+    }
+
+    @Test
+    void testConditionalIngestionSourcesZeroDiscarded() throws Exception {
+        KadId localId = KadId.random();
+        KadRoutingTable table = new KadRoutingTable(localId);
+
+        String dbPath = "mem:kad_test_db_zero_" + System.currentTimeMillis();
+        try (org.jemule.core.DatabaseManager db = new org.jemule.core.DatabaseManager(dbPath);
+             KadUdpService serverUdp = new KadUdpService(0);
+             KadUdpService peerUdp = new KadUdpService(0)) {
+
+            org.jemule.core.FileIndex fileIndex = new org.jemule.core.FileIndex(db);
+
+            try (KadSearchBridge bridge = new KadSearchBridge(
+                    table, serverUdp, ChildAbuseFilter.defaults(), new FakeFileDetector(),
+                    fileIndex, db, 3, 2000, true, 1)) {
+
+                serverUdp.start();
+                peerUdp.start();
+                bridge.start();
+
+                KadId peerId = table.generateRandomIdForBucket(1);
+                KadContact peerContact = new KadContact(peerId, InetAddress.getLoopbackAddress(), peerUdp.getPort());
+                table.addOrUpdate(peerContact);
+
+                String targetKeyword = "ghostfile";
+                KadId keywordHash = KadId.fromKeyword(targetKeyword);
+                String ghostHash = "00000000000000000000000000000001";
+
+                CountDownLatch reqLatch = new CountDownLatch(1);
+                peerUdp.registerListener(KadOpCode.SEARCH_KEY_REQ, (packet, addr, port) -> {
+                    reqLatch.countDown();
+                    // Send file with sources = 0
+                    FileMetadata ghostMeta = new FileMetadata(ghostHash, "ghostfile.iso", 1000L, "Archive",
+                            List.of(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, 0)));
+                    KadPacket resPkt = KadPacket.createSearchRes(keywordHash, List.of(ghostMeta));
+                    try {
+                        peerUdp.send(resPkt, addr, port);
+                    } catch (Exception e) {
+                        fail(e);
+                    }
+                });
+
+                CompletableFuture<List<FileMetadata>> future = bridge.forkSearch(targetKeyword);
+                assertTrue(reqLatch.await(3, TimeUnit.SECONDS), "Peer should receive search request");
+                List<FileMetadata> results = future.get(5, TimeUnit.SECONDS);
+
+                // File with 0 sources must be discarded from search results
+                assertTrue(results.isEmpty(), "Ghost file with 0 sources should not be in search results");
+
+                // File must NOT be indexed in FileIndex
+                assertFalse(fileIndex.contains(ghostHash), "Ghost file with 0 sources should not be in FileIndex");
+
+                // File must NOT be persisted in H2 DB
+                List<FileMetadata> dbFiles = db.loadFiles();
+                assertTrue(dbFiles.stream().noneMatch(f -> f.hash().equalsIgnoreCase(ghostHash)),
+                        "Ghost file with 0 sources should not be saved in DB");
+
+                assertEquals(0, bridge.getFilesIngested());
+            }
+        }
+    }
+
+    @Test
+    void testConditionalIngestionSourcesOneOrMoreIngestedAndPersisted() throws Exception {
+        KadId localId = KadId.random();
+        KadRoutingTable table = new KadRoutingTable(localId);
+
+        String dbPath = "mem:kad_test_db_persist_" + System.currentTimeMillis();
+        try (org.jemule.core.DatabaseManager db = new org.jemule.core.DatabaseManager(dbPath);
+             KadUdpService serverUdp = new KadUdpService(0);
+             KadUdpService peerUdp = new KadUdpService(0)) {
+
+            org.jemule.core.FileIndex fileIndex = new org.jemule.core.FileIndex(db);
+
+            try (KadSearchBridge bridge = new KadSearchBridge(
+                    table, serverUdp, ChildAbuseFilter.defaults(), new FakeFileDetector(),
+                    fileIndex, db, 3, 2000, true, 1)) {
+
+                serverUdp.start();
+                peerUdp.start();
+                bridge.start();
+
+                KadId peerId = table.generateRandomIdForBucket(1);
+                KadContact peerContact = new KadContact(peerId, InetAddress.getLoopbackAddress(), peerUdp.getPort());
+                table.addOrUpdate(peerContact);
+
+                String targetKeyword = "fedora";
+                KadId keywordHash = KadId.fromKeyword(targetKeyword);
+                String cleanHash = "fed01234567890abcdefed0123456789";
+
+                CountDownLatch reqLatch = new CountDownLatch(1);
+                peerUdp.registerListener(KadOpCode.SEARCH_KEY_REQ, (packet, addr, port) -> {
+                    reqLatch.countDown();
+                    // Send file with sources = 4
+                    FileMetadata fedoraMeta = new FileMetadata(cleanHash, "fedora-workstation.iso", 2_500_000_000L, "Archive",
+                            List.of(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, 4)));
+                    KadPacket resPkt = KadPacket.createSearchRes(keywordHash, List.of(fedoraMeta));
+                    try {
+                        peerUdp.send(resPkt, addr, port);
+                    } catch (Exception e) {
+                        fail(e);
+                    }
+                });
+
+                CompletableFuture<List<FileMetadata>> future = bridge.forkSearch(targetKeyword);
+                assertTrue(reqLatch.await(3, TimeUnit.SECONDS), "Peer should receive search request");
+                List<FileMetadata> results = future.get(5, TimeUnit.SECONDS);
+
+                // File with 4 sources must be present in search results
+                assertEquals(1, results.size());
+                assertEquals(cleanHash, results.get(0).hash());
+                assertEquals("fedora-workstation.iso", results.get(0).name());
+                assertEquals(4, results.get(0).sourceCount());
+
+                // File must be ingested into FileIndex memory index
+                assertTrue(fileIndex.contains(cleanHash), "File with sources >= 1 must be present in FileIndex");
+
+                // File must be searchable from FileIndex
+                List<FileMetadata> memorySearch = fileIndex.search("fedora", 10);
+                assertEquals(1, memorySearch.size());
+                assertEquals(cleanHash, memorySearch.get(0).hash());
+
+                // File must be persisted in H2 database
+                List<FileMetadata> dbFiles = db.loadFiles();
+                assertTrue(dbFiles.stream().anyMatch(f -> f.hash().equalsIgnoreCase(cleanHash)),
+                        "File with sources >= 1 must be persisted in H2 database");
+
+                assertEquals(1, bridge.getFilesIngested());
+            }
+        }
+    }
+
+    @Test
+    void testConditionalIngestionDisabledConfig() throws Exception {
+        KadId localId = KadId.random();
+        KadRoutingTable table = new KadRoutingTable(localId);
+
+        String dbPath = "mem:kad_test_db_noingest_" + System.currentTimeMillis();
+        try (org.jemule.core.DatabaseManager db = new org.jemule.core.DatabaseManager(dbPath);
+             KadUdpService serverUdp = new KadUdpService(0);
+             KadUdpService peerUdp = new KadUdpService(0)) {
+
+            org.jemule.core.FileIndex fileIndex = new org.jemule.core.FileIndex(db);
+
+            // autoIngestToH2 = false
+            try (KadSearchBridge bridge = new KadSearchBridge(
+                    table, serverUdp, ChildAbuseFilter.defaults(), new FakeFileDetector(),
+                    fileIndex, db, 3, 2000, false, 1)) {
+
+                serverUdp.start();
+                peerUdp.start();
+                bridge.start();
+
+                KadId peerId = table.generateRandomIdForBucket(1);
+                KadContact peerContact = new KadContact(peerId, InetAddress.getLoopbackAddress(), peerUdp.getPort());
+                table.addOrUpdate(peerContact);
+
+                String targetKeyword = "archlinux";
+                KadId keywordHash = KadId.fromKeyword(targetKeyword);
+                String cleanHash = "a1b2c3d4e5f60718293a4b5c6d7e8f90";
+
+                CountDownLatch reqLatch = new CountDownLatch(1);
+                peerUdp.registerListener(KadOpCode.SEARCH_KEY_REQ, (packet, addr, port) -> {
+                    reqLatch.countDown();
+                    FileMetadata archMeta = new FileMetadata(cleanHash, "archlinux.iso", 1_000_000_000L, "Archive",
+                            List.of(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, 2)));
+                    KadPacket resPkt = KadPacket.createSearchRes(keywordHash, List.of(archMeta));
+                    try {
+                        peerUdp.send(resPkt, addr, port);
+                    } catch (Exception e) {
+                        fail(e);
+                    }
+                });
+
+                CompletableFuture<List<FileMetadata>> future = bridge.forkSearch(targetKeyword);
+                assertTrue(reqLatch.await(3, TimeUnit.SECONDS), "Peer should receive search request");
+                List<FileMetadata> results = future.get(5, TimeUnit.SECONDS);
+
+                // Result is returned to client search session
+                assertEquals(1, results.size());
+                assertEquals(cleanHash, results.get(0).hash());
+
+                // But NOT ingested to FileIndex or DB because autoIngestToH2 is disabled
+                assertFalse(fileIndex.contains(cleanHash));
+                assertTrue(db.loadFiles().isEmpty());
+                assertEquals(0, bridge.getFilesIngested());
+            }
+        }
+    }
 }
