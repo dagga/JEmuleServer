@@ -1,14 +1,13 @@
 - [x] Inverted keyword index with boolean search trees and numeric size filters. Results are ranked by source count, the result cap is configurable, and a query word no indexed file contains no longer empties the search.
 - [x] Regularly update `ipfilter.dat`; apply the update only when fewer than 10% of normalized ranges differ. Otherwise, keep the existing filter and record the rejection in the adjacent `.trace` file.
-- Memory-optimized in-memory index (sharded slab, intrusive hash index, name interning, jemalloc tuning) — roughly half the RAM of the Lugdunum reference at the same scale.
-- Mandatory multi-layer CSAM content filter on every published file (age+context heuristics in code; operator-supplied jargon, hash, and extra-term lists loaded at runtime — see Content filter below).
-- Server-to-server gossip with obfuscation; mldonkey/junk-server filtering via verification.
+- [x] Java memory-optimized index: store database-loaded `FT_SOURCES` tags compactly and reconstruct them lazily; share one source map among files without online sources. The index measured 363 MB of heap for 999,913 files, below half of the roughly 800 MB Lugdunum reference. Rust-specific slabs, intrusive indexes, and jemalloc tuning do not apply to this Java server.
+- [] Server-to-server gossip with obfuscation; mldonkey/junk-server filtering via verification.
 - NAT traversal (NAT-T) hole-punch coordination for LowID↔LowID transfers.
 - IPv6 (opt-in): clients can connect over IPv6, and a client that is LowID on IPv4 but has a public IPv6 is published as an IPv6 source to peers that can parse it — see IPv6 below.
 - OFFERFILES v1 (opt-in): tells capable clients how many files per batch and how often they may publish, and holds them to it, so a large library is published in minutes instead of hours — see OFFERFILES v1 below.
 - HighID verified by a client-to-client hello, not only a TCP connect: a port forwarded to a different client behind the same NAT no longer earns HighID.
 - IP filtering in eMule guarding.p2p format, with per-range hit statistics.
 - GeoIP country and provider for IPv4 and IPv6 (MaxMind DB, with the ip-to-country.csv fallback), bot/scanner detection, CSAM-publisher banning.
-- Work admission: bounded sockets, logins, probes, searches and UDP, sized for 50 000 clients and the reconnect storm after a restart.
-- Built-in admin web panel (status, clients with server-side search, peers with their names, filters, bots, blocks, settings) bound to localhost.
+- Work admission: bounded sockets, logins, probes, searches and UDP, sized for 100 000 clients and the reconnect storm after a restart.
+- Built-in admin web panel (status, clients with server-side search, peers with their names, filters, bots, blocks, settings) bound to localhost update CLI in e such feature way.
 - Hot-reloadable filter lists and config without a restart.

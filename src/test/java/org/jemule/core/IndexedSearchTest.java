@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Random;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * {@link FileIndex#searchComplex} only tests the files indexed under the words containing a keyword: it must return
@@ -114,6 +115,22 @@ class IndexedSearchTest {
                         "00000000000000000000000000000003",
                         "00000000000000000000000000000001"),
                 rankedIndex.searchComplex(sizeFilter, 3).stream().map(FileMetadata::hash).toList());
+    }
+
+    @Test
+    void databaseLoadedSourceCountIsCompactedWithoutChangingMetadataTags() {
+        List<Tag> tags = List.of(
+                new Tag(Tag.TYPE_STRING, Tag.NAME_FILETYPE, "Video"),
+                new Tag(Tag.TYPE_STRING, "x", "Concert"),
+                new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, 12));
+        FileMetadata loaded = FileMetadata.withoutSources("00000000000000000000000000000004",
+                "concert.mp4", 1000, "Video", tags);
+
+        assertTrue(FileMetadata.class.isRecord());
+        assertEquals(12, loaded.sourceCount());
+        assertEquals(tags, loaded.tags());
+        assertEquals(loaded, new FileMetadata(loaded.hash(), loaded.name(), loaded.size(), loaded.type(),
+                tags));
     }
 
     private static FileMetadata withSources(String hash, String name, int sourceCount) {

@@ -78,11 +78,11 @@ java -jar build/libs/JEmuleServer-1.2.jar [config_file] [port]
 
 ### Memory sizing
 
-Every known file is kept in memory for the searches: plan about 500 MB of heap per 1,000,000 files (measured with
-`./gradlew benchmark -Pfiles=1000000`, see below). The JVM only takes a quarter of the RAM by default; on a small
-dedicated server, let it use more, e.g. `java -XX:MaxRAMPercentage=75 -jar ...` (the systemd unit of the packages
-already does). With 1,000,000 files, a 1 GB server with one vCPU starts in about 30 s and answers searches in a few
-milliseconds.
+Every known file is kept in memory for the searches: plan about 360 MB of index heap per 1,000,000 files (363 MB for
+999,913 files in the latest `./gradlew benchmark -Pfiles=1000000 -Pheap=768m -Pcpus=1` run, see below). The JVM only
+takes a quarter of the RAM by default; on a small dedicated server, let it use more, e.g.
+`java -XX:MaxRAMPercentage=75 -jar ...` (the systemd unit of the packages already does). With 1,000,000 files, a 1 GB
+server with one vCPU starts in about 30 s and answers searches in a few milliseconds.
 
 `./gradlew benchmark -Pfiles=1000000 -Pheap=768m -Pcpus=1` fills a database with the given number of files, then
 reports the startup time, the heap used by the index and the search latency under these limits.
