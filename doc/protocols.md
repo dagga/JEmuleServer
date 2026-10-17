@@ -93,6 +93,25 @@ JEmuleServer follows modern Java 21+ practices and several software design patte
 - **Port Validation**: Strict validation of server and client ports to prevent binding to privileged ranges or invalid values.
 - **LowID Management**: Supports the `CALLBACK` mechanism (0x1C) to allow connections to clients behind firewalls/NAT.
 
+## 8. Kademlia Search Bridge (version 1.2)
+
+The server embeds a Kademlia node (package `org.jemule.kad`) that consumes the Kad network on behalf of its clients:
+
+- **UDP socket**: port `kadPort` (default: TCP port + 11, i.e. `4672`), packets `<protocol 1><opcode 1><payload>`
+  without length header, received on a virtual thread and dispatched by opcode.
+- **Routing table**: 128 buckets of k = 20 contacts sorted by XOR distance to the 128-bit node ID, which is persisted
+  in H2.
+- **Bootstrap**: `BOOTSTRAP_REQ` sent to the Kad ports of the HighID clients that log in (`listenPort + 10`, `4672`);
+  the contacts of `BOOTSTRAP_RES` fill the routing table. Liveness pings (`HELLO_REQ`) and bucket refreshes (`REQ`)
+  keep it up to date.
+- **Forked search**: an `OP_SEARCHREQUEST` is also sent as `SEARCH_KEY_REQ` (MD4 of the first keyword) to the 3
+  closest contacts. The files of `SEARCH_RES` are filtered (banned hashes, child abuse filter, fake file detector),
+  then ingested in H2 when they have at least one source. The client waits for Kad only when the local index has no
+  result.
+
+The server does not answer the requests of other Kad nodes and does not publish on Kad. Packet formats, flows and
+configuration: [Kademlia Search Bridge](kademlia.md).
+
 ## Sources and References
 
 - **eMule Wiki**: [Protocol Obfuscation](https://www.emule-project.net/home/perl/help.cgi?l=1&topic_id=848)
@@ -106,4 +125,5 @@ JEmuleServer follows modern Java 21+ practices and several software design patte
 - **Wireshark Wiki**: [eDonkey Protocol](https://wiki.wireshark.org/eDonkey)
 - **NatT Protocol**: [eMule Wiki - NatT and Callbacks](https://wiki.emule-web.de/NatT_protocol) (Reference for Lugdunum callback methods).
 - **eMule source code**: [SourceForge - eMule project](http://sourceforge.net/project/showfiles.php?group_id=53489&package_id=145950)
+- **Kademlia**: [Maymounkov & Mazières - Kademlia: A Peer-to-peer Information System Based on the XOR Metric](https://pdos.csail.mit.edu/~petar/papers/maymounkov-kademlia-lncs.pdf)
 - **eMule Presentation**: [Hebrew University of Jerusalem - eMule internals](http://www.cs.huji.ac.il/labs/danss/p2p/eMule/eMule.ppt)

@@ -12,7 +12,20 @@ package "org.jemule" {
             +floodMaxRequestsPerSecond: int
             +ipFilterPath: String
             +fakeFileDetectionEnabled: boolean
+            +kad: KadConfig
             +{static} DEFAULT: ServerConfig
+        }
+
+        class KadConfig <<record>> {
+            +enabled: boolean
+            +port: int
+            +bootstrapFromClients: boolean
+            +maxRoutingContacts: int
+            +forkSearchEnabled: boolean
+            +searchTimeoutSeconds: int
+            +autoIngestToH2: boolean
+            +minSourcesForIngest: int
+            +effectivePort(int): int
         }
     }
 
@@ -40,6 +53,16 @@ package "org.jemule" {
             -negotiateObfuscation()
             -handleLogin()
             -processPacket()
+        }
+
+        class AdminInterface {
+            +handleCommand(String)
+            -handleKad(String[])
+        }
+
+        class SearchHandler {
+            +handleSearch(ClientContext, byte[], OutputStream)
+            +handleQueryMoreResult(ClientContext, OutputStream)
         }
 
         class Packet <<record>> {
@@ -109,6 +132,63 @@ package "org.jemule" {
         }
     }
 
+    package "org.jemule.kad" {
+        class KadNode {
+            +start()
+            +onClientConnected(ClientState)
+            +bootstrap(InetAddress, int): boolean
+            +status(): Status
+            +close()
+        }
+        class KadId {
+            +distance(KadId): KadId
+            +{static} fromKeyword(String): KadId
+            +{static} random(): KadId
+        }
+        class KadRoutingTable {
+            -buckets: KadBucket[128]
+            +addOrUpdate(KadContact): boolean
+            +findClosest(KadId, int): List<KadContact>
+        }
+        class KadBucket {
+            -contacts: k = 20
+            -replacementCache
+        }
+        class KadContact {
+            +id: KadId
+            +address: InetAddress
+            +udpPort: int
+            +failedPings: int
+        }
+        class KadUdpService {
+            +start()
+            +send(KadPacket, InetAddress, int)
+            +registerListener(KadOpCode, KadPacketListener)
+        }
+        class KadPacket {
+            +encode(): byte[]
+            +{static} decode(byte[]): KadPacket
+        }
+        class KadBootstrapManager {
+            +onClientConnected(ClientState)
+            +bootstrap(InetAddress, int): boolean
+            +getStatus(): Status
+        }
+        class KadMaintenanceService {
+            -pingContact(KadContact)
+            -refreshBucket(int)
+        }
+        class KadSearchBridge {
+            +forkSearch(SearchQuery): CompletableFuture<List<FileMetadata>>
+            #acceptFile(FileMetadata): boolean
+            #handleSearchRes(KadPacket, InetAddress, int)
+        }
+        class KadHashBanService {
+            +initialize()
+            +onIllicitFile(FileMetadata, String)
+        }
+    }
+
     package "org.jemule.core.event" {
         class EventManager {
             -subscribers: Map
@@ -155,6 +235,9 @@ package "org.jemule" {
         class FakeFileDetector {
             +isFake(FileMetadata): boolean
         }
+        class ChildAbuseFilter {
+            +matches(String): boolean
+        }
     }
 }
 
@@ -185,4 +268,32 @@ SearchQuery <|.. TermQuery
 SearchQuery <|.. AndQuery
 SearchQuery <|.. OrQuery
 SearchQuery <|.. NotQuery
+ServerConfig --> KadConfig
+Server --> KadNode
+Server --> AdminInterface
+AdminInterface --> KadNode
+SearchHandler --> FileIndex
+SearchHandler ..> KadSearchBridge : forks searches
+KadNode --> KadConfig
+KadNode --> KadRoutingTable
+KadNode --> KadUdpService
+KadNode --> KadBootstrapManager
+KadNode --> KadMaintenanceService
+KadNode --> KadSearchBridge
+KadNode --> KadHashBanService
+KadRoutingTable --> KadBucket
+KadBucket --> KadContact
+KadContact --> KadId
+KadBootstrapManager --> KadRoutingTable
+KadBootstrapManager --> KadUdpService
+KadMaintenanceService --> KadRoutingTable
+KadMaintenanceService --> KadUdpService
+KadSearchBridge --> KadRoutingTable
+KadSearchBridge --> KadUdpService
+KadSearchBridge --> ChildAbuseFilter
+KadSearchBridge --> FakeFileDetector
+KadSearchBridge --> FileIndex : ingests
+KadHashBanService --> DatabaseManager
+KadHashBanService --> FakeFileDetector
+KadUdpService ..> KadPacket : uses
 @enduml

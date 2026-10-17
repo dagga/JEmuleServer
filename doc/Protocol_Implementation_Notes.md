@@ -20,4 +20,8 @@ This annex documents implementation-specific details discovered in the codebase 
 5) UDP responses
 - UDP packets use the compact format [Protocol][Opcode][Data...] (no header size field). Server.handleUdp implements the standard responses (OP_GLOBSERVSTATRES, OP_GLOBFOUNDSOURCES, OP_GLOBSEARCHRES...). There is no IPv6 extension: ed2k addresses are IPv4 only (see `doc/ipv6.md`).
 
+6) Kademlia UDP packets (version 1.2)
+- The embedded Kad node uses its own UDP socket (`KadUdpService`, port `kadPort`) and its own framing: `[protocol 1][opcode 1][payload]` with protocol byte `0x3A` (`KadOpCode`), not `Packet.PROTOCOL_KAD` (0xE4). Contacts are encoded on 25 bytes `<id 16><ip 4><udp port 2><tcp port 2><version 1>`, `SEARCH_RES` reuses `Tag.writeList` for the file tags.
+- These choices differ from the Kad2 framing of eMule (see `doc/Implementation_vs_Spec.md`, section 5, and `doc/kademlia.md`).
+
 If desired, this annex can be merged into `doc/eMule_Protocol_RetroSpecification.md` as an "Implementation notes" section. It is also referenced by `doc/Implementation_vs_Spec.md`.
