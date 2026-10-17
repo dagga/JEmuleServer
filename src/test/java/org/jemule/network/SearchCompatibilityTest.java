@@ -193,7 +193,7 @@ class SearchCompatibilityTest {
     // ===============================================================
 
     @Test
-    void testForkedKadSearchMergesAndDeduplicatesResults() throws Exception {
+    void testForkedKadSearchWithLocalResultsAnswersAtOnce() throws Exception {
         // 1. Publish 1 local file
         String localHash = "11111111111111111111111111111111";
         publish(localHash, "matrix-reloaded.avi", 700_000_000L, 2);
@@ -215,37 +215,71 @@ class SearchCompatibilityTest {
             KadContact peerContact = new KadContact(peerId, InetAddress.getLoopbackAddress(), peerUdp.getPort());
             table.addOrUpdate(peerContact);
 
-            String kadOnlyHash = "22222222222222222222222222222222";
-            KadId keywordHash = KadId.fromKeyword("matrix");
-
             CountDownLatch reqLatch = new CountDownLatch(1);
-            peerUdp.registerListener(KadOpCode.SEARCH_KEY_REQ, (packet, addr, port) -> {
-                reqLatch.countDown();
-                // Peer returns 2 files: one duplicate of localHash, and one new kadOnlyHash
-                List<FileMetadata> files = List.of(
-                        new FileMetadata(localHash, "matrix-reloaded-kad.avi", 700_000_000L, "Video",
-                                List.of(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, 3))),
-                        new FileMetadata(kadOnlyHash, "matrix-revolutions.avi", 800_000_000L, "Video",
-                                List.of(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, 5)))
-                );
-                KadPacket resPkt = KadPacket.createSearchRes(keywordHash, files);
-                try {
-                    peerUdp.send(resPkt, addr, port);
-                } catch (Exception e) {
-                    fail(e);
-                }
-            });
+            peerUdp.registerListener(KadOpCode.SEARCH_KEY_REQ, (packet, addr, port) -> reqLatch.countDown());
 
             client.setKadSearchBridge(bridge);
 
+            // Warm search: the local result is sent without waiting for the 2 s Kad timeout
+            long start = System.nanoTime();
             SearchAnswer answer = search(new SearchTree().keyword("matrix").toBytes());
-            assertTrue(reqLatch.await(3, TimeUnit.SECONDS), "Peer should receive search request");
+            long elapsedMs = (System.nanoTime() - start) / 1_000_000;
 
-            // Results must contain exactly 2 unique files: localHash and kadOnlyHash (deduplicated)
-            assertEquals(2, answer.results().size());
-            List<String> resultHashes = answer.results().stream().map(SearchResult::hash).toList();
-            assertTrue(resultHashes.contains(localHash));
-            assertTrue(resultHashes.contains(kadOnlyHash));
+            assertEquals(List.of(localHash), answer.results().stream().map(SearchResult::hash).toList());
+            assertEquals(0, answer.more());
+            assertTrue(elapsedMs < 1000, "the local results must not wait for Kad: " + elapsedMs + " ms");
+            assertTrue(reqLatch.await(3, TimeUnit.SECONDS), "the search is still forked to Kad");
+        }
+    }
+
+    @Test
+    void testForkedKadSearchDeduplicatesKadResults() throws Exception {
+        KadId localId = KadId.random();
+        KadRoutingTable table = new KadRoutingTable(localId);
+
+        try (KadUdpService serverUdp = new KadUdpService(0);
+             KadUdpService peerA = new KadUdpService(0);
+             KadUdpService peerB = new KadUdpService(0);
+             KadSearchBridge bridge = new KadSearchBridge(table, serverUdp,
+                     ChildAbuseFilter.defaults(), new FakeFileDetector(), 3, 1000)) {
+
+            serverUdp.start();
+            peerA.start();
+            peerB.start();
+            bridge.start();
+
+            table.addOrUpdate(new KadContact(table.generateRandomIdForBucket(1), InetAddress.getLoopbackAddress(), peerA.getPort()));
+            table.addOrUpdate(new KadContact(table.generateRandomIdForBucket(2), InetAddress.getLoopbackAddress(), peerB.getPort()));
+
+            String sharedHash = "22222222222222222222222222222222";
+            KadId keywordHash = KadId.fromKeyword("matrix");
+            FileMetadata shared = new FileMetadata(sharedHash, "matrix-revolutions.avi", 800_000_000L, "Video",
+                    List.of(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, 5)));
+
+            // Both peers announce the same file, each one also knows another file
+            CountDownLatch reqLatch = new CountDownLatch(2);
+            for (KadUdpService peer : List.of(peerA, peerB)) {
+                String ownHash = peer == peerA ? "33333333333333333333333333333333" : "44444444444444444444444444444444";
+                peer.registerListener(KadOpCode.SEARCH_KEY_REQ, (packet, addr, port) -> {
+                    reqLatch.countDown();
+                    List<FileMetadata> files = List.of(shared, new FileMetadata(ownHash, "matrix-" + ownHash + ".avi",
+                            700_000_000L, "Video", List.of(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, 2))));
+                    try {
+                        peer.send(KadPacket.createSearchRes(keywordHash, files), addr, port);
+                    } catch (Exception e) {
+                        fail(e);
+                    }
+                });
+            }
+
+            client.setKadSearchBridge(bridge);
+
+            // Cold search: the Kad answers are merged, the file announced twice is sent once
+            SearchAnswer answer = search(new SearchTree().keyword("matrix").toBytes());
+            assertTrue(reqLatch.await(3, TimeUnit.SECONDS), "Both peers should receive the search request");
+
+            assertEquals(List.of(sharedHash, "33333333333333333333333333333333", "44444444444444444444444444444444"),
+                    answer.results().stream().map(SearchResult::hash).sorted().toList());
             assertEquals(0, answer.more());
         }
     }

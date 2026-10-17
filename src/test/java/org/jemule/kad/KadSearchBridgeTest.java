@@ -139,6 +139,42 @@ class KadSearchBridgeTest {
         }
     }
 
+    @Test
+    void testForkSearchWithoutContactsCompletesWithoutWaitingForTheTimeout() throws Exception {
+        KadRoutingTable table = new KadRoutingTable(KadId.random());
+
+        try (KadUdpService serverUdp = new KadUdpService(0);
+             KadSearchBridge bridge = new KadSearchBridge(table, serverUdp, 3, 10_000)) {
+            serverUdp.start();
+            bridge.start();
+
+            // Isolated DHT: no contact can be queried, so the search is over at once
+            CompletableFuture<List<FileMetadata>> future = bridge.forkSearch("isolated");
+            assertTrue(future.isDone(), "a search sent to nobody must not wait for the 10 s timeout");
+            assertTrue(future.get().isEmpty());
+            assertEquals(0, bridge.getActiveSessionCount());
+        }
+    }
+
+    @Test
+    void testForkSearchOnClosedSocketCompletesWithoutWaitingForTheTimeout() throws Exception {
+        KadRoutingTable table = new KadRoutingTable(KadId.random());
+        table.addOrUpdate(new KadContact(table.generateRandomIdForBucket(1), InetAddress.getLoopbackAddress(), 4672));
+
+        try (KadUdpService serverUdp = new KadUdpService(0);
+             KadSearchBridge bridge = new KadSearchBridge(table, serverUdp, 3, 10_000)) {
+            serverUdp.start();
+            bridge.start();
+            serverUdp.close();
+
+            // Every send fails: the search ends immediately instead of hanging the client
+            CompletableFuture<List<FileMetadata>> future = bridge.forkSearch("closed");
+            assertTrue(future.isDone(), "a search whose requests all failed must not wait for the 10 s timeout");
+            assertTrue(future.get().isEmpty());
+            assertEquals(0, bridge.getActiveSessionCount());
+        }
+    }
+
     // ===============================================================
     // Point 3.2 — Mandatory Protective Filtering
     // ===============================================================

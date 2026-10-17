@@ -57,7 +57,10 @@ public class SearchHandler {
             try {
                 CompletableFuture<List<FileMetadata>> kadFuture = kadBridge.forkSearch(query);
                 if (kadFuture != null) {
-                    if (dedupMap.size() < BATCH_SIZE) {
+                    // Warm search (1 to 49 local results): answered at once, the Kad answers are still filtered and
+                    // ingested into H2 by the bridge, so that the next searches find them locally
+                    if (dedupMap.isEmpty()) {
+                        // Cold search: nothing is known locally, the Kad answers are awaited (bounded by the Kad timeout)
                         try {
                             List<FileMetadata> kadResults = kadFuture.get(kadBridge.getSearchTimeoutMs() + 1000, TimeUnit.MILLISECONDS);
                             if (kadResults != null) {
@@ -75,7 +78,8 @@ public class SearchHandler {
                         } catch (Exception e) {
                             log.debug("Kad search fork error for query {}: {}", query, e.getMessage());
                         }
-                    } else {
+                    } else if (dedupMap.size() >= BATCH_SIZE) {
+                        // Full first batch: the Kad answers join the results left for OP_QUERY_MORE_RESULT
                         final SearchQuery activeQuery = query;
                         kadFuture.thenAccept(kadResults -> {
                             if (kadResults != null && !kadResults.isEmpty() && context.getState() != null) {

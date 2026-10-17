@@ -237,7 +237,11 @@ public class KadSearchBridge implements AutoCloseable {
         // Check if an existing active search session is already running for this keyword hash
         KadSearchSession session = activeSessions.computeIfAbsent(keywordHash, k -> {
             KadSearchSession s = new KadSearchSession(k, keyword);
-            dispatchSearchRequest(s);
+            if (dispatchSearchRequest(s) == 0) {
+                // DHT isolated or socket closed: nothing can answer, the local results must not wait for the timeout
+                s.complete();
+                return s;
+            }
             // Schedule completion after searchTimeoutMs
             Thread.ofVirtual().name("KadSearchTimeout-" + k.toHexString()).start(() -> {
                 try {
@@ -251,27 +255,39 @@ public class KadSearchBridge implements AutoCloseable {
             return s;
         });
 
+        if (session.future().isDone()) {
+            activeSessions.remove(keywordHash, session);
+        }
+
         searchesForked.incrementAndGet();
         return session.future();
     }
 
-    private void dispatchSearchRequest(KadSearchSession session) {
+    /**
+     * Sends KADEMLIA2_SEARCH_KEY_REQ to the closest contacts.
+     *
+     * @return The number of requests actually sent.
+     */
+    private int dispatchSearchRequest(KadSearchSession session) {
         List<KadContact> targetNodes = routingTable.findClosest(session.targetId(), alphaNodes);
         if (targetNodes.isEmpty()) {
             log.debug("No close Kad contacts available in routing table to query for '{}'", session.keyword());
-            return;
+            return 0;
         }
 
         KadPacket req = KadPacket.createSearchKeyReq(session.targetId(), 0);
+        int sent = 0;
         for (KadContact contact : targetNodes) {
             try {
                 udpService.send(req, contact.address(), contact.udpPort());
+                sent++;
                 log.debug("Sent KADEMLIA2_SEARCH_KEY_REQ for '{}' ({}) to {}:{}",
                         session.keyword(), session.targetId(), contact.address().getHostAddress(), contact.udpPort());
             } catch (IOException e) {
                 log.debug("Failed to send search request to {}:{} - {}", contact.address().getHostAddress(), contact.udpPort(), e.getMessage());
             }
         }
+        return sent;
     }
 
     protected void handleSearchRes(KadPacket packet, InetAddress remoteAddress, int remotePort) {
