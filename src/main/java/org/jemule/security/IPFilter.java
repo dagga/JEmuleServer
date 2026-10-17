@@ -25,11 +25,15 @@ import org.slf4j.LoggerFactory;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * IPv4 filter loaded from an eMule ipfilter.dat file: <code>start - end , level , description</code>.
@@ -40,6 +44,7 @@ import java.util.List;
  */
 public class IPFilter {
     private static final Logger log = LoggerFactory.getLogger(IPFilter.class);
+    private static final double MAX_UPDATE_DIFFERENCE = 0.10;
 
     /** eMule's default IP filter level: ranges of a lower level are blocked. */
     public static final int FILTER_LEVEL = 100;
@@ -109,6 +114,89 @@ public class IPFilter {
             }
         }
         return List.copyOf(merged);
+    }
+
+    synchronized boolean applyUpdate(Path destination, List<String> lines, String source) throws IOException {
+        List<IPRange> updated = parse(lines);
+        if (updated.isEmpty()) {
+            throw new IllegalArgumentException("Downloaded filter contains no blocking ranges");
+        }
+
+        List<IPRange> previous = blockedRanges;
+        Set<IPRange> changes = new HashSet<>(previous);
+        changes.addAll(updated);
+        Set<IPRange> common = new HashSet<>(previous);
+        common.retainAll(updated);
+        int changed = changes.size() - common.size();
+        double difference = previous.isEmpty() ? 0 : (double) changed / Math.max(previous.size(), updated.size());
+        if (difference >= MAX_UPDATE_DIFFERENCE) {
+            appendTrace(destination, "Rejected update from " + source + ": difference " + percent(difference)
+                    + " is not below 10% (" + previous.size() + " current ranges, " + updated.size()
+                    + " downloaded ranges, " + changed + " changed ranges)");
+            return false;
+        }
+
+        Path absolute = destination.toAbsolutePath();
+        Path parent = absolute.getParent();
+        if (parent == null) throw new IOException("IP filter destination has no parent directory: " + destination);
+        Files.createDirectories(parent);
+        Path temporary = Files.createTempFile(parent, "ipfilter-", ".tmp");
+        try {
+            Files.write(temporary, lines, StandardCharsets.ISO_8859_1);
+            try {
+                Files.move(temporary, absolute, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            } catch (AtomicMoveNotSupportedException e) {
+                Files.move(temporary, absolute, StandardCopyOption.REPLACE_EXISTING);
+            }
+        } finally {
+            Files.deleteIfExists(temporary);
+        }
+        blockedRanges = updated;
+        log.info("Applied IP filter update from {}: {} blocking ranges ({}% difference)",
+                source, blockedRanges.size(), percent(difference));
+        return true;
+    }
+
+    void traceRejectedUpdate(Path destination, String detail) {
+        appendTrace(destination, detail);
+    }
+
+    private static String percent(double difference) {
+        return String.format(java.util.Locale.ROOT, "%.2f", difference * 100);
+    }
+
+    private static void appendTrace(Path destination, String detail) {
+        Path trace = destination.resolveSibling(destination.getFileName() + ".trace");
+        try {
+            Path parent = trace.toAbsolutePath().getParent();
+            if (parent != null) Files.createDirectories(parent);
+            Files.writeString(trace, java.time.Instant.now() + " " + detail + System.lineSeparator(),
+                    StandardCharsets.UTF_8, java.nio.file.StandardOpenOption.CREATE,
+                    java.nio.file.StandardOpenOption.APPEND);
+        } catch (IOException e) {
+            log.error("Could not write IP filter update trace {}: {}", trace, e.getMessage());
+        }
+    }
+
+    private static List<IPRange> parse(List<String> lines) {
+        List<IPRange> ranges = new ArrayList<>();
+        for (String input : lines) {
+            String line = input.trim();
+            if (line.isEmpty() || line.startsWith("#") || line.startsWith("//")) continue;
+
+            String[] parts = line.split(",", 3);
+            String[] ips = parts[0].split("-");
+            long start = ips.length == 2 ? ipToLong(ips[0].trim()) : -1;
+            long end = ips.length == 2 ? ipToLong(ips[1].trim()) : -1;
+            if (start == -1 || end == -1 || start > end) {
+                throw new IllegalArgumentException("Invalid IP filter line: " + line);
+            }
+            if (parts.length > 1 && parseLevel(parts[1]) >= FILTER_LEVEL) {
+                continue;
+            }
+            ranges.add(new IPRange(start, end));
+        }
+        return merge(ranges);
     }
 
     /**

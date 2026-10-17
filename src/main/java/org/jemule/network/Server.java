@@ -33,6 +33,7 @@ import org.jemule.security.ChildAbuseFilter;
 import org.jemule.security.FakeFileDetector;
 import org.jemule.security.FloodProtector;
 import org.jemule.security.IPFilter;
+import org.jemule.security.IPFilterUpdater;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -43,6 +44,7 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.file.Path;
 import java.sql.SQLException;
 import java.util.Collections;
 import java.util.List;
@@ -61,6 +63,7 @@ public class Server {
     private final FileIndex fileIndex;
     private final FloodProtector floodProtector;
     private final IPFilter ipFilter;
+    private final IPFilterUpdater ipFilterUpdater;
     private final FakeFileDetector fakeFileDetector;
     private final ExecutorService executor;
     private final DatabaseManager db;
@@ -138,6 +141,7 @@ public class Server {
         if (config.ipFilterPath() != null) {
             this.ipFilter.loadFromFile(config.ipFilterPath());
         }
+        this.ipFilterUpdater = createIpFilterUpdater(config.ipFilterPath());
         this.fakeFileDetector = new FakeFileDetector();
         this.fakeFileDetector.setEnabled(config.fakeFileDetectionEnabled());
         this.executor = Executors.newVirtualThreadPerTaskExecutor();
@@ -158,6 +162,7 @@ public class Server {
         } catch (SQLException e) {
             log.error("Failed to initialize database: {}", e.getMessage());
         }
+
         this.db = dbMgr;
         ChildAbuseFilter abuseFilter = ChildAbuseFilter.load(config.childAbuseKeywordsPath());
         this.fileIndex = new FileIndex(db, eventManager, abuseFilter);
@@ -177,6 +182,19 @@ public class Server {
             md5 = new byte[16];
         }
         System.arraycopy(md5, 0, serverHash, 0, 16);
+    }
+
+    private IPFilterUpdater createIpFilterUpdater(String filterPath) {
+        if (filterPath == null || filterPath.isBlank()) return null;
+        try {
+            IPFilterUpdater updater = new IPFilterUpdater(ipFilter, Path.of(filterPath),
+                    IPFilterUpdater.bundledSources());
+            updater.start();
+            return updater;
+        } catch (IOException | IllegalArgumentException e) {
+            log.error("Could not start IP filter updates for {}: {}", filterPath, e.getMessage());
+            return null;
+        }
     }
 
     /**
@@ -652,6 +670,7 @@ public class Server {
     public void stop() {
         running = false;
         executor.shutdownNow();
+        if (ipFilterUpdater != null) ipFilterUpdater.close();
         kadSearchBridge = null;
         if (kadNode != null) {
             kadNode.close();
