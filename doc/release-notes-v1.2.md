@@ -25,6 +25,19 @@
   Spanish and Russian terms...), and ages up to 18 are now treated as minors (`maxMinorAge = 18`).
 - Name shown by clients: `JEmuleServer v1.2 (no pedo)`, description `eMule Server - version 1.2`.
 
+### Performance
+
+Measured with 1,000,000 files in the database (`./gradlew benchmark`), one vCPU and a 768 MB heap:
+
+- **Searches use the inverted index**: a search used to test every file, 315 ms of CPU for a rare word; it now
+  takes 0.3 to 7 ms, with the same results.
+- **Memory**: the index takes about 470 MB instead of 800 MB (compact word lists, one shared source map for the files
+  without source, shared strings), so a 1 GB server can hold 1,000,000 files.
+- **Startup**: the files are read in one query instead of one per file, and indexed as they are read.
+- **Kad answers** are only accepted from the contacts the search was sent to: unsolicited answers could fill the
+  database.
+- The systemd unit lets the JVM use 75 % of the RAM (`-XX:MaxRAMPercentage=75`) instead of 25 %.
+
 ### Compatibility
 
 The changes of 1.2 remain compatible with the historical eMule clients (eMule 0.4x / 0.50a, aMule, eDonkey-based
