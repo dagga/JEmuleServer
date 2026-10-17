@@ -24,21 +24,26 @@ import org.jemule.core.SearchQuery;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.jemule.security.ChildAbuseFilter;
+import org.jemule.security.FakeFileDetector;
+
 import java.io.IOException;
 import java.net.InetAddress;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Asynchronous search bridge that forks incoming ed2k search queries to the Kademlia DHT.
- * Translates queries into Kad keyword lookups and dispatches SEARCH_KEY_REQ packets.
+ * Translates queries into Kad keyword lookups and dispatches SEARCH_KEY_REQ packets,
+ * while enforcing strict "Secure by Construction" protective filtering on all results.
  */
 public class KadSearchBridge implements AutoCloseable {
     private static final Logger log = LoggerFactory.getLogger(KadSearchBridge.class);
@@ -48,14 +53,25 @@ public class KadSearchBridge implements AutoCloseable {
 
     private final KadRoutingTable routingTable;
     private final KadUdpService udpService;
+    private final ChildAbuseFilter abuseFilter;
+    private final FakeFileDetector fakeDetector;
     private final int alphaNodes;
     private final long searchTimeoutMs;
 
     private final ConcurrentHashMap<KadId, KadSearchSession> activeSessions = new ConcurrentHashMap<>();
+    private final Set<String> bannedHashes = ConcurrentHashMap.newKeySet();
+    private final List<IllicitFileListener> illicitListeners = new CopyOnWriteArrayList<>();
+
     private final AtomicLong searchesForked = new AtomicLong(0);
     private final AtomicLong resultsReceived = new AtomicLong(0);
+    private final AtomicLong illicitFilesBlocked = new AtomicLong(0);
 
     private volatile boolean running = false;
+
+    @FunctionalInterface
+    public interface IllicitFileListener {
+        void onIllicitFile(FileMetadata file, String reason);
+    }
 
     public static class KadSearchSession {
         private final KadId targetId;
@@ -99,11 +115,24 @@ public class KadSearchBridge implements AutoCloseable {
         }
     }
 
-    public KadSearchBridge(KadRoutingTable routingTable, KadUdpService udpService, int alphaNodes, long searchTimeoutMs) {
+    public KadSearchBridge(KadRoutingTable routingTable, KadUdpService udpService,
+                           ChildAbuseFilter abuseFilter, FakeFileDetector fakeDetector,
+                           int alphaNodes, long searchTimeoutMs) {
         this.routingTable = Objects.requireNonNull(routingTable, "routingTable cannot be null");
         this.udpService = Objects.requireNonNull(udpService, "udpService cannot be null");
+        this.abuseFilter = abuseFilter != null ? abuseFilter : ChildAbuseFilter.defaults();
+        this.fakeDetector = fakeDetector != null ? fakeDetector : new FakeFileDetector();
         this.alphaNodes = Math.max(1, alphaNodes);
         this.searchTimeoutMs = searchTimeoutMs;
+    }
+
+    public KadSearchBridge(KadRoutingTable routingTable, KadUdpService udpService,
+                           ChildAbuseFilter abuseFilter, FakeFileDetector fakeDetector) {
+        this(routingTable, udpService, abuseFilter, fakeDetector, DEFAULT_ALPHA_NODES, DEFAULT_SEARCH_TIMEOUT_MS);
+    }
+
+    public KadSearchBridge(KadRoutingTable routingTable, KadUdpService udpService, int alphaNodes, long searchTimeoutMs) {
+        this(routingTable, udpService, ChildAbuseFilter.defaults(), new FakeFileDetector(), alphaNodes, searchTimeoutMs);
     }
 
     public KadSearchBridge(KadRoutingTable routingTable, KadUdpService udpService) {
@@ -240,10 +269,81 @@ public class KadSearchBridge implements AutoCloseable {
 
     /**
      * Hook to validate incoming files before ingestion into session results.
-     * Overridden in Point 3.2 for protective filtering.
+     * Evaluates against banned hashes, ChildAbuseFilter, and FakeFileDetector.
      */
     protected boolean acceptFile(FileMetadata file) {
-        return file != null;
+        if (file == null || file.hash() == null) {
+            return false;
+        }
+
+        String upperHash = file.hash().toUpperCase(Locale.ROOT);
+
+        // 1. Check banned hashes
+        if (bannedHashes.contains(upperHash)) {
+            log.debug("Kad file rejected (blacklisted hash): {} ({})", file.name(), file.hash());
+            illicitFilesBlocked.incrementAndGet();
+            return false;
+        }
+
+        // 2. ChildAbuseFilter screening
+        if (abuseFilter != null && abuseFilter.matches(file.name())) {
+            log.warn("Kad file rejected by ChildAbuseFilter: {} ({})", file.name(), file.hash());
+            illicitFilesBlocked.incrementAndGet();
+            bannedHashes.add(upperHash);
+            notifyIllicitFile(file, ChildAbuseFilter.BAN_REASON);
+            return false;
+        }
+
+        // 3. FakeFileDetector screening
+        if (fakeDetector != null && fakeDetector.isFake(file.hash(), file.name(), file.size())) {
+            log.info("Kad file rejected by FakeFileDetector: {} ({})", file.name(), file.hash());
+            illicitFilesBlocked.incrementAndGet();
+            return false;
+        }
+
+        return true;
+    }
+
+    private void notifyIllicitFile(FileMetadata file, String reason) {
+        for (IllicitFileListener listener : illicitListeners) {
+            try {
+                listener.onIllicitFile(file, reason);
+            } catch (Exception e) {
+                log.error("Error notifying illicit file listener for {}: {}", file.hash(), e.getMessage());
+            }
+        }
+    }
+
+    public void banHash(String hash) {
+        if (hash != null) {
+            bannedHashes.add(hash.toUpperCase(Locale.ROOT));
+        }
+    }
+
+    public boolean isHashBanned(String hash) {
+        return hash != null && bannedHashes.contains(hash.toUpperCase(Locale.ROOT));
+    }
+
+    public void addIllicitFileListener(IllicitFileListener listener) {
+        if (listener != null) {
+            illicitListeners.add(listener);
+        }
+    }
+
+    public void removeIllicitFileListener(IllicitFileListener listener) {
+        illicitListeners.remove(listener);
+    }
+
+    public long getIllicitFilesBlocked() {
+        return illicitFilesBlocked.get();
+    }
+
+    public ChildAbuseFilter getAbuseFilter() {
+        return abuseFilter;
+    }
+
+    public FakeFileDetector getFakeDetector() {
+        return fakeDetector;
     }
 
     public KadSearchSession getSession(KadId targetId) {
