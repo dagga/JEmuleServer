@@ -218,7 +218,7 @@ sequenceDiagram
 
 - **Node Identity (Node ID)**:
   - Generates a 128-bit pseudo-random identifier upon initial startup.
-  - Persisted in H2 table `stats` under `kad_node_id` to maintain node reputation across restarts.
+  - Persisted in H2 table `stats` (keys `kad_node_id_hi` / `kad_node_id_lo`, the two 64-bit halves of the ID) to maintain node reputation across restarts.
 - **Dedicated UDP Socket**:
   - Bound to `kadPort` (default: `TCP port + 11`, e.g. `4672`).
   - Handled on virtual threads with non-blocking multiplexed packet dispatching.
@@ -354,10 +354,10 @@ CREATE TABLE IF NOT EXISTS banned_hashes (
 # Enable embedded Kademlia client (default: true)
 kadEnabled=true
 
-# UDP port for Kad2 protocol (default: 4672)
-kadPort=4672
+# UDP port for Kad2 protocol (default: 0 = TCP port + 11, i.e. 4672 with the default port 4661)
+# kadPort=4672
 
-# Enable automated bootstrapping via connected clients (default: true)
+# Enable automated bootstrapping via connected HighID clients (default: true)
 kadBootstrapFromClients=true
 
 # Maximum contacts in routing table (default: 500)
@@ -372,7 +372,7 @@ kadSearchTimeoutSeconds=4
 # Ingest discovered Kad files into H2 database (default: true)
 kadAutoIngestToH2=true
 
-# Minimum sources required to persist Kad file (default: 1)
+# Minimum sources required to deliver and persist a Kad file (default: 1)
 kadMinSourcesForIngest=1
 ```
 
@@ -435,8 +435,8 @@ Implementation is divided into **5 operational sub-lots**:
 | **Sub-Lot 1** | **Kademlia Core, XOR Metric & UDP Codecs** | ✅ **Completed** | [`60a3545`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadId.java), [`5adf06f`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadRoutingTable.java), [`5777d09`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadPacket.java) |
 | **Sub-Lot 2** | **UDP Network Service & Automated Bootstrapping** | ✅ **Completed** | [`f61ee2e`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadUdpService.java), [`4e6b180`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadBootstrapManager.java), [`f6f59b5`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadMaintenanceService.java) |
 | **Sub-Lot 3** | **Search Forking Bridge & Protective Filtering** | ✅ **Completed** | [`cedd534`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadSearchBridge.java), [`9525071`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadSearchBridge.java), [`6366da3`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadHashBanService.java) |
-| **Sub-Lot 4** | **Conditional H2 Ingestion & Unified Results Delivery** | ✅ **Completed** | [`0bd3d1e`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadSearchBridge.java), [`21a17b7`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/network/handler/SearchHandler.java) |
-| **Sub-Lot 5** | **Configuration, Admin CLI & End-to-End Acceptance** | 📋 **Planned** | `server.properties`, admin console (`kad status`), final verification |
+| **Sub-Lot 4** | **Conditional H2 Ingestion & Unified Results Delivery** | ✅ **Completed** | [`0bd3d1e`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadSearchBridge.java), [`21a17b7`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/network/handler/SearchHandler.java), [`f3e021d`](file:///home/dagga/IdeaProjects/JEmuleServer/src/test/java/org/jemule/network/SearchCompatibilityTest.java) |
+| **Sub-Lot 5** | **Configuration, Admin CLI & End-to-End Acceptance** | 🚧 **In Progress** | Point 5.1 (configuration & runtime wiring) |
 
 ---
 
@@ -493,15 +493,21 @@ Implementation is divided into **5 operational sub-lots**:
   - Transparent deduplication by 128-bit hash and pagination state preservation in `ClientState.pendingSearchResults`.
   - Full multi-batch support for `OP_QUERY_MORE_RESULT` with `moreAvailable` flag activation.
   - Verified by tests in [`SearchCompatibilityTest`](file:///home/dagga/IdeaProjects/JEmuleServer/src/test/java/org/jemule/network/SearchCompatibilityTest.java) (`testForkedKadSearchMergesAndDeduplicatesResults`, `testForkedKadSearchMissingLocallyDeliversKadResults`, `testForkedKadSearchColdDiscoveryPagination`).
-- [x] **Point 4.3 — Direct Retrieval on Subsequent Searches**:
+- [x] **Point 4.3 — Direct Retrieval on Subsequent Searches** *(Commit `f3e021d`)*:
   - Guaranteed instant retrieval from H2 on subsequent queries without "More results".
   - Ingested Kad files are persistently loaded by [`FileIndex`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/core/FileIndex.java) at server boot and queried directly with $< 5\text{ ms}$ response latency.
   - Subsequent searches return full unified results in the initial 50-item batch (`OP_SEARCHRESULT`) with `moreAvailable = 0x00`.
   - Validated by integration tests in [`SearchCompatibilityTest`](file:///home/dagga/IdeaProjects/JEmuleServer/src/test/java/org/jemule/network/SearchCompatibilityTest.java) (`testWarmSearchDirectRetrievalFromMemoryWithoutMoreResults`, `testWarmSearchPersistentAcrossServerRestart`).
 
-#### Sub-Lot 5: Configuration, Administration CLI & End-to-End Acceptance (Status: 📋 Planned)
-- [ ] **Point 5.1 — Configuration Keys**:
-  - Properties in [`server.properties`](file:///home/dagga/IdeaProjects/JEmuleServer/server.properties) and binding in [`ServerConfig`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/config/ServerConfig.java).
+#### Sub-Lot 5: Configuration, Administration CLI & End-to-End Acceptance (Status: 🚧 In Progress)
+- [x] **Point 5.1 — Configuration Keys & Runtime Wiring**:
+  - The eight `kad*` keys of section 6.1 documented in [`server.properties`](file:///home/dagga/IdeaProjects/JEmuleServer/server.properties) and bound by the new [`KadConfig`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/config/KadConfig.java) record (defaults, validation, `effectivePort()`), carried by [`ServerConfig.kad()`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/config/ServerConfig.java) (`fromProperties`, `withPort`, `withPathsRelativeTo` and `withKad` keep it; legacy constructors use `KadConfig.DEFAULT`).
+  - `kadPort=0` (default) binds the TCP port + 11 (`4672` with port `4661`), the ports already bound by the UDP responder (port, port + 4, port + 12) being avoided.
+  - New [`KadNode`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadNode.java) orchestrator assembling routing table, UDP service, bootstrap and maintenance engines, search bridge and hash ban service; the 128-bit node ID is persisted in the H2 `stats` table as two 64-bit halves (`kad_node_id_hi`, `kad_node_id_lo`) and survives restarts.
+  - `kadMaxRoutingContacts` enforced by [`KadRoutingTable`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadRoutingTable.java) (new contacts refused once full, known contacts still refreshed).
+  - [`Server`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/network/Server.java) creates the node when `kadEnabled=true`, starts it with the UDP responder (an unavailable Kad port only disables Kad, the local server keeps running), exposes the search bridge to [`SearchHandler`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/network/handler/SearchHandler.java) only when `kadForkSearchEnabled=true`, and closes it before the database.
+  - [`LoginHandler`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/network/handler/LoginHandler.java) hands every logged-in client to the node, which bootstraps from HighID clients only when `kadBootstrapFromClients=true`.
+  - Validated by [`KadConfigTest`](file:///home/dagga/IdeaProjects/JEmuleServer/src/test/java/org/jemule/config/KadConfigTest.java), [`KadNodeTest`](file:///home/dagga/IdeaProjects/JEmuleServer/src/test/java/org/jemule/kad/KadNodeTest.java) and `KadRoutingTableTest.testMaxContactsLimitRefusesNewContactsButRefreshesKnownOnes`.
 - [ ] **Point 5.2 — Administration CLI Commands**:
   - Commands `kad status`, `kad contacts`, `kad stats` in [`AdminInterface`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/network/AdminInterface.java).
 - [ ] **Point 5.3 — Full Test Suite Validation**:

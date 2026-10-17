@@ -33,13 +33,29 @@ public final class KadRoutingTable {
 
     private final KadId localId;
     private final KadBucket[] buckets;
+    private final int maxContacts;
 
     public KadRoutingTable(KadId localId) {
+        this(localId, Integer.MAX_VALUE);
+    }
+
+    /**
+     * @param maxContacts Maximum number of active contacts across all buckets (kadMaxRoutingContacts).
+     */
+    public KadRoutingTable(KadId localId, int maxContacts) {
         this.localId = Objects.requireNonNull(localId, "localId cannot be null");
+        if (maxContacts < 1) {
+            throw new IllegalArgumentException("maxContacts must be at least 1");
+        }
+        this.maxContacts = maxContacts;
         this.buckets = new KadBucket[NUM_BUCKETS];
         for (int i = 0; i < NUM_BUCKETS; i++) {
             this.buckets[i] = new KadBucket(i);
         }
+    }
+
+    public int maxContacts() {
+        return maxContacts;
     }
 
     public KadId localId() {
@@ -71,7 +87,11 @@ public final class KadRoutingTable {
         if (bucketIdx < 0) {
             return false; // Cannot add self to routing table
         }
-        return buckets[bucketIdx].addOrUpdate(contact);
+        KadBucket bucket = buckets[bucketIdx];
+        if (bucket.get(contact.id()) == null && size() >= maxContacts) {
+            return false; // Table full: known contacts are still refreshed, new ones are refused
+        }
+        return bucket.addOrUpdate(contact);
     }
 
     /**

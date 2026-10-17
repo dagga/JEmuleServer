@@ -40,6 +40,7 @@ import java.util.Properties;
  * @param cbWaitDurationInSeconds    Circuit Breaker: how long to stay open.
  * @param childAbuseKeywordsPath     Keyword file of the child abuse filter (null: the embedded list).
  * @param adminPort                  Local TCP port of the admin console (0: disabled).
+ * @param kad                        Configuration of the embedded Kademlia node (SFD 1.2).
  */
 public record ServerConfig(
         int port,
@@ -76,7 +77,10 @@ public record ServerConfig(
         String childAbuseKeywordsPath,
 
         // Admin console on a TCP port bound to the loopback address (0 disables it)
-        int adminPort
+        int adminPort,
+
+        // Embedded Kademlia node, forked searches and Kad file ingestion (null means KadConfig.DEFAULT)
+        KadConfig kad
 ) {
     /** Default time allowed for the HighID test, in seconds. */
     public static final int DEFAULT_LOWID_CHECK_TIMEOUT_SECONDS = 5;
@@ -105,7 +109,22 @@ public record ServerConfig(
                 publicIp, lowIdCheckTimeoutSeconds, null, 0);
     }
 
+    /** Constructor without the Kademlia settings (uses {@link KadConfig#DEFAULT}). */
+    public ServerConfig(int port, int maxPacketSize, int maxSearchResults, int floodMaxRequestsPerSecond, int maxUsers,
+                        int maxFiles, int maxFilesPerUser, int maxSourcesPerFile, String databasePath, String ipFilterPath,
+                        boolean fakeFileDetectionEnabled, float cbFailureRateThreshold, int cbMinimumNumberOfCalls,
+                        int cbWaitDurationInSeconds, int tcpKeepAliveTimeoutInSeconds, int heartbeatIntervalSeconds,
+                        String publicIp, int lowIdCheckTimeoutSeconds, String childAbuseKeywordsPath, int adminPort) {
+        this(port, maxPacketSize, maxSearchResults, floodMaxRequestsPerSecond, maxUsers, maxFiles, maxFilesPerUser,
+                maxSourcesPerFile, databasePath, ipFilterPath, fakeFileDetectionEnabled, cbFailureRateThreshold,
+                cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds, heartbeatIntervalSeconds,
+                publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, KadConfig.DEFAULT);
+    }
+
     public ServerConfig {
+        if (kad == null) {
+            kad = KadConfig.DEFAULT;
+        }
         if (port < 1 || port > 65535) {
             throw new IllegalArgumentException("Port must be between 1 and 65535");
         }
@@ -146,7 +165,15 @@ public record ServerConfig(
         return new ServerConfig(newPort, maxPacketSize, maxSearchResults, floodMaxRequestsPerSecond, maxUsers, maxFiles,
                 maxFilesPerUser, maxSourcesPerFile, databasePath, ipFilterPath, fakeFileDetectionEnabled,
                 cbFailureRateThreshold, cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds,
-                heartbeatIntervalSeconds, publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort);
+                heartbeatIntervalSeconds, publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad);
+    }
+
+    /** Same configuration with other Kademlia settings. */
+    public ServerConfig withKad(KadConfig newKad) {
+        return new ServerConfig(port, maxPacketSize, maxSearchResults, floodMaxRequestsPerSecond, maxUsers, maxFiles,
+                maxFilesPerUser, maxSourcesPerFile, databasePath, ipFilterPath, fakeFileDetectionEnabled,
+                cbFailureRateThreshold, cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds,
+                heartbeatIntervalSeconds, publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, newKad);
     }
 
     /** Same configuration with relative database / IP filter / keyword file paths resolved against the given directory. */
@@ -155,7 +182,7 @@ public record ServerConfig(
                 maxFilesPerUser, maxSourcesPerFile, resolve(baseDir, databasePath), resolve(baseDir, ipFilterPath),
                 fakeFileDetectionEnabled, cbFailureRateThreshold, cbMinimumNumberOfCalls, cbWaitDurationInSeconds,
                 tcpKeepAliveTimeoutInSeconds, heartbeatIntervalSeconds, publicIp, lowIdCheckTimeoutSeconds,
-                resolve(baseDir, childAbuseKeywordsPath), adminPort);
+                resolve(baseDir, childAbuseKeywordsPath), adminPort, kad);
     }
 
     /** Rooted paths are kept as they are, including "\dir" or "/dir" on Windows, which are not absolute there. */
@@ -188,7 +215,8 @@ public record ServerConfig(
                 props.getProperty("publicIp", DEFAULT.publicIp()),
                 Integer.parseInt(props.getProperty("lowIdCheckTimeoutSeconds", String.valueOf(DEFAULT.lowIdCheckTimeoutSeconds()))),
                 props.getProperty("childAbuseKeywordsPath", DEFAULT.childAbuseKeywordsPath()),
-                Integer.parseInt(props.getProperty("adminPort", String.valueOf(DEFAULT.adminPort())))
+                Integer.parseInt(props.getProperty("adminPort", String.valueOf(DEFAULT.adminPort()))),
+                KadConfig.fromProperties(props)
         );
     }
 }

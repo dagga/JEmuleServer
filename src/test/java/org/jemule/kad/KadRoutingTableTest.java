@@ -117,4 +117,25 @@ class KadRoutingTableTest {
         KadId generated = table.generateRandomIdForBucket(5);
         assertEquals(5, table.getBucketIndex(generated));
     }
+
+    @Test
+    void testMaxContactsLimitRefusesNewContactsButRefreshesKnownOnes() {
+        KadRoutingTable table = new KadRoutingTable(KadId.random(), 2);
+        assertEquals(2, table.maxContacts());
+
+        KadContact first = new KadContact(table.generateRandomIdForBucket(1), testIp("10.0.0.1"), 4672);
+        KadContact second = new KadContact(table.generateRandomIdForBucket(2), testIp("10.0.0.2"), 4672);
+        KadContact third = new KadContact(table.generateRandomIdForBucket(3), testIp("10.0.0.3"), 4672);
+
+        assertTrue(table.addOrUpdate(first));
+        assertTrue(table.addOrUpdate(second));
+        assertFalse(table.addOrUpdate(third), "the table is full");
+        assertEquals(2, table.size());
+        assertNull(table.get(third.id()));
+
+        assertTrue(table.addOrUpdate(first), "a known contact is still refreshed when the table is full");
+        assertEquals(2, table.size());
+
+        assertThrows(IllegalArgumentException.class, () -> new KadRoutingTable(KadId.random(), 0));
+    }
 }

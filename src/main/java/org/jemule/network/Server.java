@@ -27,6 +27,7 @@ import org.jemule.core.event.ClientEvent;
 import org.jemule.core.event.EventManager;
 import org.jemule.core.event.FileEvent;
 import org.jemule.core.event.EventStatistics;
+import org.jemule.kad.KadNode;
 import org.jemule.kad.KadSearchBridge;
 import org.jemule.security.ChildAbuseFilter;
 import org.jemule.security.FakeFileDetector;
@@ -92,6 +93,7 @@ public class Server {
     private final ClientFactory clientFactory;
     private final AdminInterface admin;
     private final InetAddress publicIp;
+    private final KadNode kadNode;
     private volatile KadSearchBridge kadSearchBridge;
     private volatile boolean running = true;
 
@@ -105,6 +107,19 @@ public class Server {
 
     public void setKadSearchBridge(KadSearchBridge kadSearchBridge) {
         this.kadSearchBridge = kadSearchBridge;
+    }
+
+    /** The embedded Kademlia node, or null when {@code kadEnabled=false}. */
+    public KadNode getKadNode() {
+        return kadNode;
+    }
+
+    /** Called once a client has logged in: HighID clients bootstrap the Kad routing table. */
+    public void onClientLoggedIn(ClientState client) {
+        KadNode node = kadNode;
+        if (node != null) {
+            node.onClientConnected(client);
+        }
     }
 
     /**
@@ -144,7 +159,11 @@ public class Server {
             log.error("Failed to initialize database: {}", e.getMessage());
         }
         this.db = dbMgr;
-        this.fileIndex = new FileIndex(db, eventManager, ChildAbuseFilter.load(config.childAbuseKeywordsPath()));
+        ChildAbuseFilter abuseFilter = ChildAbuseFilter.load(config.childAbuseKeywordsPath());
+        this.fileIndex = new FileIndex(db, eventManager, abuseFilter);
+        this.kadNode = config.kad().enabled()
+                ? new KadNode(config.kad(), config.port(), db, fileIndex, abuseFilter, fakeFileDetector)
+                : null;
         this.admin = new AdminInterface(this, registry, fileIndex, ipFilter, fakeFileDetector);
         this.publicIp = resolvePublicIp(config.publicIp());
 
@@ -255,6 +274,7 @@ public class Server {
             log.info("Virtual Threads ready for 50k+ concurrent clients");
 
             startUdpResponder();
+            startKadNode();
             startAdminInterface();
 
             while (running && !ss.isClosed()) {
@@ -335,6 +355,25 @@ public class Server {
                     }
                 }
             });
+        }
+    }
+
+    /**
+     * Starts the embedded Kademlia node. The server keeps working on its local index if the Kad UDP port
+     * cannot be bound.
+     */
+    private void startKadNode() {
+        if (kadNode == null) {
+            log.info("Kademlia node disabled (kadEnabled=false)");
+            return;
+        }
+        try {
+            kadNode.start();
+            if (kadNode.getConfig().forkSearchEnabled() && kadSearchBridge == null) {
+                kadSearchBridge = kadNode.getSearchBridge();
+            }
+        } catch (IOException e) {
+            log.error("Kad UDP port {} unavailable, Kademlia disabled: {}", kadNode.getUdpPort(), e.getMessage());
         }
     }
 
@@ -613,6 +652,10 @@ public class Server {
     public void stop() {
         running = false;
         executor.shutdownNow();
+        kadSearchBridge = null;
+        if (kadNode != null) {
+            kadNode.close();
+        }
         if (db != null) {
             try {
                 db.close();
