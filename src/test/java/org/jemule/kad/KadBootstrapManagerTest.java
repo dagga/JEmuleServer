@@ -79,7 +79,8 @@ class KadBootstrapManagerTest {
 
             // Wait for response to be processed by serverUdp
             long start = System.currentTimeMillis();
-            while (table.size() < 6 && (System.currentTimeMillis() - start) < 3000) {
+            while ((table.size() < 6 || bootstrapMgr.getStatus() != KadBootstrapManager.Status.CONNECTED)
+                    && (System.currentTimeMillis() - start) < 3000) {
                 Thread.sleep(50);
             }
 

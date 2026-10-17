@@ -181,7 +181,8 @@ class KadAcceptanceTest {
         peer.send(KadPacket.createBootstrapRes(contacts), InetAddress.getLoopbackAddress(), node.getUdpPort());
 
         await(() -> node.getRoutingTable().size() == 6, "returned contacts are inserted into the routing table");
-        assertEquals(KadBootstrapManager.Status.CONNECTED, node.status(), "CONNECTED from 5 active contacts");
+        // The status is updated once the whole answer is processed
+        await(() -> node.status() == KadBootstrapManager.Status.CONNECTED, "CONNECTED from 5 active contacts");
     }
 
     @Test
