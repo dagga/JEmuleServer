@@ -486,8 +486,8 @@ Pour garantir une livraison maîtrisée, incrémentale et vérifiée par des tes
 | Sous-Lot | Intitulé & Périmètre | Statut | Livrables / Commits |
 | :--- | :--- | :---: | :--- |
 | **Sous-Lot 1** | **Socle Kademlia, Distance XOR & Codecs UDP** | ✅ **Terminé** | [`60a3545`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadId.java), [`5adf06f`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadRoutingTable.java), [`5777d09`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadPacket.java) |
-| **Sous-Lot 2** | **Service Réseau UDP & Auto-Bootstrap via Clients** | ⏳ **En cours** | `KadUdpService`, `BootstrapManager`, hooks `LoginHandler` |
-| **Sous-Lot 3** | **Passerelle de Recherche Forkée & Filtrage Protecteur** | 📋 **Planifié** | `KadSearchBridge`, branchement `ChildAbuseFilter`, `banned_hashes` |
+| **Sous-Lot 2** | **Service Réseau UDP & Auto-Bootstrap via Clients** | ✅ **Terminé** | [`f61ee2e`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadUdpService.java), [`4e6b180`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadBootstrapManager.java), [`f6f59b5`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadMaintenanceService.java) |
+| **Sous-Lot 3** | **Passerelle de Recherche Forkée & Filtrage Protecteur** | ⏳ **En cours** | `KadSearchBridge`, branchement `ChildAbuseFilter`, `banned_hashes` |
 | **Sous-Lot 4** | **Ingestion H2 Conditionnelle & Restitution Unifiée** | 📋 **Planifié** | Sauvegarde H2 (`sources >= 1`), déduplication `OP_SEARCHRESULT` |
 | **Sous-Lot 5** | **Configuration, Administration CLI & Recette Complète** | 📋 **Planifié** | `server.properties`, CLI admin (`kad status`), validation globale |
 
@@ -510,15 +510,17 @@ Pour garantir une livraison maîtrisée, incrémentale et vérifiée par des tes
   - [`KadPacket`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadPacket.java) : encodeurs/décodeurs `BOOTSTRAP`, `HELLO`, `REQ/RES`, `SEARCH_KEY_REQ/RES`.
   - [`KadPacketTest`](file:///home/dagga/IdeaProjects/JEmuleServer/src/test/java/org/jemule/kad/KadPacketTest.java) : tests de sérialisation et d'intégrité des messages binaires.
 
-#### Sous-Lot 2 : Service Réseau UDP & Auto-Bootstrap (Statut : ⏳ En cours)
-- [ ] **Point 2.1 — Moteur Réseau UDP Asynchrone** :
-  - Socket UDP dédié sur Virtual Threads pour la réception et l'émission multiplexée de paquets Kad2.
-  - Boucle d'écoute et dispatcheur de paquets entrants (`BOOTSTRAP_RES`, `HELLO_RES`, `RES`, `SEARCH_RES`).
-- [ ] **Point 2.2 — Auto-Bootstrap via les Clients Connectés** :
-  - Capture des clients éligibles (HighID, port UDP) lors du handshake dans [`LoginHandler`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/network/handler/LoginHandler.java).
-  - Émission de `BOOTSTRAP_REQ` et ingestion automatique des contacts renvoyés dans [`KadRoutingTable`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadRoutingTable.java).
-- [ ] **Point 2.3 — Maintien et Rafraîchissement Périodique** :
-  - Tâche d'arrière-plan pour rafraîchir les K-Buckets inactifs et vérifier la liveness des pairs.
+#### Sous-Lot 2 : Service Réseau UDP & Auto-Bootstrap (Statut : ✅ Terminé)
+- [x] **Point 2.1 — Moteur Réseau UDP Asynchrone** *(Commit `f61ee2e`)* :
+  - [`KadPacketListener`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadPacketListener.java) : callback listener pour paquets entrants.
+  - [`KadUdpService`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadUdpService.java) : socket UDP sur Virtual Threads, émission et dispatcher d'opcodes.
+  - [`KadUdpServiceTest`](file:///home/dagga/IdeaProjects/JEmuleServer/src/test/java/org/jemule/kad/KadUdpServiceTest.java) : tests d'émission/réception en boucle locale et dispatching.
+- [x] **Point 2.2 — Auto-Bootstrap via les Clients Connectés** *(Commit `4e6b180`)* :
+  - [`KadBootstrapManager`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadBootstrapManager.java) : détection des clients éligibles, envoi de `BOOTSTRAP_REQ` et peuplement de la table de routage.
+  - [`KadBootstrapManagerTest`](file:///home/dagga/IdeaProjects/JEmuleServer/src/test/java/org/jemule/kad/KadBootstrapManagerTest.java) : tests d'auto-bootstrap et transition vers l'état `CONNECTED`.
+- [x] **Point 2.3 — Maintien et Rafraîchissement Périodique** *(Commit `f6f59b5`)* :
+  - [`KadMaintenanceService`](file:///home/dagga/IdeaProjects/JEmuleServer/src/main/java/org/jemule/kad/KadMaintenanceService.java) : vérification de liveness par ping HELLO, rafraîchissement des K-Buckets inactifs et éviction automatique des nœuds défaillants.
+  - [`KadMaintenanceServiceTest`](file:///home/dagga/IdeaProjects/JEmuleServer/src/test/java/org/jemule/kad/KadMaintenanceServiceTest.java) : tests de liveness et d'éviction.
 
 #### Sous-Lot 3 : Passerelle de Recherche Forkée & Sécurité (Statut : 📋 Planifié)
 - [ ] **Point 3.1 — Dédoublement Asynchrone des Recherches** :
