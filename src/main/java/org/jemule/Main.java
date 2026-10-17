@@ -82,14 +82,25 @@ public class Main {
         }
     }
 
-    /** %LOCALAPPDATA%\\JEmuleServer on Windows, $XDG_DATA_HOME/jemuleserver or ~/.local/share/jemuleserver elsewhere. */
+    /**
+     * %LOCALAPPDATA%\\JEmuleServer on Windows, ~/Library/Application Support/JEmuleServer on macOS,
+     * $XDG_DATA_HOME/jemuleserver or ~/.local/share/jemuleserver elsewhere.
+     */
     static Path dataDirectory() {
-        String localAppData = System.getenv("LOCALAPPDATA");
-        if (System.getProperty("os.name", "").toLowerCase().startsWith("windows") && localAppData != null) {
+        return dataDirectory(System.getProperty("os.name", ""), System.getenv(), System.getProperty("user.home"));
+    }
+
+    static Path dataDirectory(String osName, java.util.Map<String, String> env, String userHome) {
+        String os = osName.toLowerCase(java.util.Locale.ROOT);
+        String localAppData = env.get("LOCALAPPDATA");
+        if (os.startsWith("windows") && localAppData != null) {
             return Paths.get(localAppData, "JEmuleServer");
         }
-        String xdg = System.getenv("XDG_DATA_HOME");
-        Path base = xdg != null && !xdg.isBlank() ? Paths.get(xdg) : Paths.get(System.getProperty("user.home"), ".local", "share");
+        if (os.startsWith("mac")) {
+            return Paths.get(userHome, "Library", "Application Support", "JEmuleServer");
+        }
+        String xdg = env.get("XDG_DATA_HOME");
+        Path base = xdg != null && !xdg.isBlank() ? Paths.get(xdg) : Paths.get(userHome, ".local", "share");
         return base.resolve("jemuleserver");
     }
 

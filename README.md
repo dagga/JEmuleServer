@@ -32,12 +32,19 @@ The JAR file will be generated in `build/libs/JEmuleServer-1.2.jar`.
 ## Installation from the release packages
 
 Each release on GitHub provides installers bundling their own Java runtime:
-`jemuleserver_<version>_amd64.deb` (Debian/Ubuntu), `jemuleserver-<version>-1.x86_64.rpm` (Fedora/RHEL) and
-`JEmuleServer-<version>.exe` (Windows), plus the plain JAR and a systemd unit (`packaging/jemuleserver.service`).
+`jemuleserver_<version>_amd64.deb` (Debian/Ubuntu), `jemuleserver-<version>-1.x86_64.rpm` (Fedora/RHEL),
+`JEmuleServer-<version>.exe` (Windows) and `JEmuleServer-<version>-macos-arm64.dmg` (macOS on Apple Silicon), plus the
+plain JAR and a systemd unit (`packaging/jemuleserver.service`).
 
-- The application is installed in `/opt/jemuleserver` (Linux) or `Program Files\JEmuleServer` (Windows).
+- The application is installed in `/opt/jemuleserver` (Linux), `Program Files\JEmuleServer` (Windows) or
+  `/Applications/JEmuleServer.app` (macOS, by dragging it from the disk image).
 - Started without arguments, the installed program keeps its configuration (`server.properties`, created on first
-  start) and its H2 database in `~/.local/share/jemuleserver` (Linux) or `%LOCALAPPDATA%\JEmuleServer` (Windows).
+  start) and its H2 database in `~/.local/share/jemuleserver` (Linux), `%LOCALAPPDATA%\JEmuleServer` (Windows) or
+  `~/Library/Application Support/JEmuleServer` (macOS).
+- On macOS, the server is a console program: start it from a terminal with
+  `/Applications/JEmuleServer.app/Contents/MacOS/JEmuleServer`. The package is not signed: after copying the
+  application, run `xattr -dr com.apple.quarantine /Applications/JEmuleServer.app` once, or macOS refuses to open it.
+  Intel Macs can run the JAR with Java 21 or later.
 - Started with a configuration file argument (as the systemd unit does), relative paths are relative to the
   working directory.
 

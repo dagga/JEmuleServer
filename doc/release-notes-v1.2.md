@@ -23,6 +23,8 @@
   and on the admin port.
 - **Child abuse filter**: the keyword list is extended with the markers seen in production (studio and site names,
   Spanish and Russian terms...), and ages up to 18 are now treated as minors (`maxMinorAge = 18`).
+- **macOS installer**: a `.dmg` for Apple Silicon Macs, with its own Java runtime. Started without arguments, the
+  server keeps its data in `~/Library/Application Support/JEmuleServer`.
 - Name shown by clients: `JEmuleServer v1.2 (no pedo)`, description `eMule Server - version 1.2`.
 
 ### Performance
@@ -60,6 +62,7 @@ need Kad support: the server talks to the Kad network on their behalf.
 | `jemuleserver_1.2_amd64.deb` | Debian / Ubuntu (Java included) |
 | `jemuleserver-1.2-1.x86_64.rpm` | Fedora / RHEL / openSUSE (Java included) |
 | `JEmuleServer-1.2.exe` | Windows installer (Java included) |
+| `JEmuleServer-1.2-macos-arm64.dmg` | macOS on Apple Silicon (Java included), new in 1.2: drag `JEmuleServer.app` to Applications, run `xattr -dr com.apple.quarantine /Applications/JEmuleServer.app` (unsigned package), then start `/Applications/JEmuleServer.app/Contents/MacOS/JEmuleServer` from a terminal |
 | `JEmuleServer-1.2.jar` | Any platform with Java 21 or later: `java -jar JEmuleServer-1.2.jar [server.properties] [port]` |
 | `jemuleserver.service` | systemd unit for the Linux packages |
 | `SHA256SUMS` | Checksums |

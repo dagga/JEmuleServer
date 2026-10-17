@@ -1,6 +1,6 @@
 name: Release
 
-# Builds the JAR and the installers (.deb, .rpm, .exe with a bundled Java runtime).
+# Builds the JAR and the installers (.deb, .rpm, .exe, .dmg with a bundled Java runtime), for the systems of the CI.
 # On a "v*" tag the files are published as a GitHub release; on other runs they are kept as workflow artifacts.
 on:
   push:
@@ -150,9 +150,55 @@ jobs:
           name: windows
           path: dist/*.exe
 
+  macos:
+    needs: jar
+    # Apple Silicon runner: the .dmg bundles an arm64 Java runtime (Intel Macs can run the JAR)
+    runs-on: macos-latest
+    env:
+      VERSION: ${{ needs.jar.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 25 (bundled runtime)
+        uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: temurin
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: jar
+          path: input
+
+      - name: Build .dmg
+        run: |
+          jpackage --type dmg --dest dist --input input \
+            --name JEmuleServer --app-version "$VERSION" \
+            --main-jar "JEmuleServer-$VERSION.jar" --main-class org.jemule.Main \
+            --description "$APP_DESCRIPTION" --vendor "Nicolas Hernandez" \
+            --about-url https://github.com/dagga/JEmuleServer \
+            --license-file LICENSE.LGPL \
+            --mac-package-identifier org.jemule.server --mac-package-name JEmuleServer \
+            --add-modules "$JLINK_MODULES" --jlink-options "$JLINK_OPTIONS"
+          mv "dist/JEmuleServer-$VERSION.dmg" "dist/JEmuleServer-$VERSION-macos-arm64.dmg"
+          ls -l dist
+
+      - name: Smoke test of the .dmg
+        run: |
+          # The disk image shows the license before mounting: accept it, as a user does
+          yes | PAGER=cat hdiutil attach "dist/JEmuleServer-$VERSION-macos-arm64.dmg" -mountpoint /tmp/jemule -nobrowse
+          test -x /tmp/jemule/JEmuleServer.app/Contents/MacOS/JEmuleServer
+          test -f /tmp/jemule/JEmuleServer.app/Contents/runtime/Contents/Home/lib/server/libjvm.dylib
+          hdiutil detach /tmp/jemule
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/*.dmg
+
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [ jar, linux, windows ]
+    needs: [ jar, linux, windows, macos ]
     runs-on: ubuntu-latest
     permissions:
       contents: write
