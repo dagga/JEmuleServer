@@ -48,8 +48,9 @@ The server advertises support for extended tags via the `NEWTAGS` (0x10) bit in 
 The "Lugdunum" (eServer) series was the most popular ed2k server implementation in the 2000s. It introduced several proprietary extensions that became de-facto standards:
 
 - **OpCode 0x40 (ID_CHANGE)**: Used to assign or confirm a HighID to the client. This is now the standard way to finalize a connection.
-- **OpCode 0x41 (SERVER_INFO)**: Sent during the initial handshake to provide the server's identity.
-- **OpCode 0x42 (SERVER_LIST)**: Used by the server to send a list of other trusted servers to the client, allowing the client to update its `server.met` file.
+- **OpCode 0x41 (SERVER_IDENT)**: Sent during the initial handshake to provide the server's identity.
+- **OpCode 0x42 (FOUND_SOURCES)**: Returns source client IDs and ports for a requested file hash.
+- **Server list exchange**: The server sends `SERVER_LIST` (0x32) with endpoints for the client's `server.met` file. This is a protocol capability, not one of the Lugdunum-specific opcode attributions above.
 - **Tag 0xFB (CT_EMULE_VERSION)**: Introduced by Lugdunum to allow the server to advertise its eMule-compatible version directly in the `SERVER_IDENT` packet. This optimization prevents the client from sending an extra `EMULE_INFO` packet, speeding up the connection process.
 - **Tag Extensions**: Support for new tag types (Float, Bool, Blob) and optimized 1-byte tag names for common metadata (Version, Compression, etc.).
 - **Advanced Search**: Support for complex Boolean searches using a binary tree structure (Pre-order traversal). Nodes use operators AND (0x00), OR (0x01), and NOT (0x02). Leaves use Tag2 filters (Size, Type, Format).

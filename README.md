@@ -8,9 +8,9 @@ of each version are described in `doc/release-notes-v<version>.md` (latest: [1.2
 ## Why this project?
 
 JEmuleServer aims to provide a modern, open-source (LGPLv3) eMule server using current Java features such as Virtual
-Threads. The historical **Lugdunum/eServer** remains a point of comparison, but its current
-[GitHub repository](https://github.com/rusingineer/Lugdunum) provides too little implementation documentation to
-substantiate a detailed feature-by-feature comparison. See the [comparison notes](doc/feature-comparison.md).
+Threads. The historical **Lugdunum/eServer** remains a point of comparison. The protocol references included in this
+repository describe several of its historical extensions; the [comparison notes](doc/feature-comparison.md) separate
+those documented attributions from features that cannot be verified.
 
 Fighting the distribution of child sexual abuse material is also one of the goals of the project: a server must not
 help anyone find it. JEmuleServer refuses such files, bans their hashes for good and removes them from its database,
@@ -246,10 +246,9 @@ sudo firewall-cmd --list-ports
 
 ## Features Comparison
 
-The available public Lugdunum repository does not document enough implementation detail to support the old yes/no
-feature matrix. The [comparison notes](doc/feature-comparison.md) list what can be verified and mark unsupported claims
-as unknown rather than guessing. JEmuleServer's documented extensions include its embedded Kademlia search bridge,
-verified server gossip and search, and loopback administration panel.
+The [comparison notes](doc/feature-comparison.md) summarize Lugdunum features attributed by the protocol references in
+this repository, alongside the modern JEmuleServer features. They distinguish historically documented protocol
+extensions from release-specific capabilities that cannot be verified.
 
 ## License
 
