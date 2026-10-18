@@ -1,9 +1,9 @@
 # JEmuleServer
 
-JEmuleServer is an eMule server written in Java (version 1.2).
+JEmuleServer is an eMule server written in Java (version 1.2.1).
 
 Downloads (installers and JAR) are on the [releases page](https://github.com/dagga/JEmuleServer/releases); the changes
-of each version are described in `doc/release-notes-v<version>.md` (latest: [1.2](doc/release-notes-v1.2.md)).
+of each version are described in `doc/release-notes-v<version>.md` (latest: [1.2.1](doc/release-notes-v1.2.1.md)).
 
 ## Why this project?
 
@@ -27,7 +27,7 @@ Building requires a JDK 21 (Gradle toolchain). To compile the project and genera
 ./gradlew build
 ```
 
-The JAR file will be generated in `build/libs/JEmuleServer-1.2.jar`.
+The JAR file will be generated in `build/libs/JEmuleServer-1.2.1.jar`.
 
 ## Installation from the release packages
 
@@ -264,7 +264,7 @@ This project is distributed under the **GNU Lesser General Public License v3.0 (
 More information can be found in the `doc/` directory:
 - [Configuration guide](doc/configuration.md)
 - [JEmuleServer and Lugdunum feature comparison](doc/feature-comparison.md)
-- [Release notes 1.2](doc/release-notes-v1.2.md) / [1.1](doc/release-notes-v1.1.md) / [1.0.1](doc/release-notes-v1.0.1.md) / [1.0](doc/release-notes-v1.0.md)
+- [Release notes 1.2.1](doc/release-notes-v1.2.1.md) / [1.2](doc/release-notes-v1.2.md) / [1.1](doc/release-notes-v1.1.md) / [1.0.1](doc/release-notes-v1.0.1.md) / [1.0](doc/release-notes-v1.0.md)
 - [Protocols Description](doc/protocols.md)
 - [Kademlia Search Bridge](doc/kademlia.md)
 - [Technical References](doc/references.md)
