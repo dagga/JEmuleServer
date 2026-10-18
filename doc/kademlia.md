@@ -11,7 +11,8 @@ filtering everything it receives. This document describes the module delivered f
 - **Protection**: every file coming from Kad goes through the same filters as published files (child abuse filter,
   fake file detector, banned hashes). An illicit file never reaches a client and its hash is banned for good.
 - **Cache warming**: clean Kad files with at least one source are stored in H2 and indexed, so that the next searches
-  on the same terms find them locally, in the first batch of results.
+  on the same terms find them locally, in the first batch of results, with Kad's retained source count available to
+  the client.
 
 The ed2k client-server protocol is unchanged: the Kad files reach the clients as ordinary `OP_SEARCHRESULT` answers,
 so the historical eMule clients (eMule 0.4x / 0.50a, aMule) need no change, nor Kad support of their own.
@@ -65,7 +66,9 @@ Client ──OP_SEARCHREQUEST──▶ SearchHandler ──▶ FileIndex (H2 + m
    A file rejected by the child abuse filter has its hash banned in memory and in `banned_hashes`.
 4. A clean file with at least `kadMinSourcesForIngest` sources (`FT_SOURCES`) is added to `FileIndex`, which stores it
    in the H2 tables `files` and `file_tags` (when `kadAutoIngestToH2=true`), then becomes a result of the session.
-   Files without sources are dropped.
+   Its `FT_SOURCES` count is retained and returned in the client's `OP_SEARCHRESULT`; when the same hash is already
+   indexed from connected clients or an earlier Kad result, the highest known count is preserved. Files without
+   sources are dropped.
 
 How long the client waits depends on the local results:
 

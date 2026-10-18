@@ -335,6 +335,57 @@ class SearchCompatibilityTest {
     }
 
     @Test
+    void kadFilteredSourceCountIsReturnedForAnAlreadyIndexedFile() throws Exception {
+        String hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        publish(hash, "matrix local.avi", 700_000_000L, 2);
+
+        KadId localId = KadId.random();
+        KadRoutingTable table = new KadRoutingTable(localId);
+        try (KadUdpService serverUdp = new KadUdpService(0);
+             KadUdpService peerUdp = new KadUdpService(0);
+             KadSearchBridge bridge = new KadSearchBridge(table, serverUdp,
+                     ChildAbuseFilter.defaults(), new FakeFileDetector(),
+                     index, null, 3, 2000, true, 1)) {
+
+            serverUdp.start();
+            peerUdp.start();
+            bridge.start();
+
+            KadId peerId = table.generateRandomIdForBucket(1);
+            table.addOrUpdate(new KadContact(peerId, InetAddress.getLoopbackAddress(), peerUdp.getPort()));
+
+            CountDownLatch requestReceived = new CountDownLatch(1);
+            peerUdp.registerListener(KadOpCode.SEARCH_KEY_REQ, (packet, addr, port) -> {
+                requestReceived.countDown();
+                FileMetadata kadResult = new FileMetadata(hash, "matrix local.avi", 700_000_000L, "Video",
+                        List.of(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, 12)));
+                try {
+                    peerUdp.send(KadPacket.createSearchRes(KadId.fromKeyword("matrix"), List.of(kadResult)), addr, port);
+                } catch (Exception e) {
+                    fail(e);
+                }
+            });
+            client.setKadSearchBridge(bridge);
+
+            // The first response is served locally while Kad runs; accepted Kad metadata updates the index.
+            SearchAnswer first = search(new SearchTree().keyword("matrix").toBytes());
+            assertEquals(1, first.results().size());
+            assertTrue(requestReceived.await(3, TimeUnit.SECONDS), "Kad peer should receive the search request");
+
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+            while (bridge.getFilesIngested() == 0 && System.nanoTime() < deadline) {
+                Thread.sleep(10);
+            }
+            assertEquals(1, bridge.getFilesIngested(), "Kad result must pass the filter and update the index");
+
+            SearchAnswer updated = search(new SearchTree().keyword("matrix").toBytes());
+            assertEquals(1, updated.results().size());
+            assertEquals(12, ((Number) updated.results().getFirst().tag(Tag.NAME_SOURCES)).intValue(),
+                    "OP_SEARCHRESULT must expose Kad's accepted source count to the client");
+        }
+    }
+
+    @Test
     void testForkedKadSearchColdDiscoveryPagination() throws Exception {
         // No local files published
         KadId localId = KadId.random();
