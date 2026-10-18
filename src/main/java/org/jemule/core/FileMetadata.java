@@ -94,16 +94,33 @@ public record FileMetadata(
 
     /**
      * Total number of sources sharing this file.
-     * Evaluates active client states if connected, or a stored tag if loaded from DHT or database.
+     * Returns the highest count known from active clients or the retained DHT/database source-count tag.
      */
     public int sourceCount() {
-        if (sources != null && !sources.isEmpty()) return sources.size();
-        if (tags instanceof CompactTags compactTags) return (int) compactTags.sourceCount();
-        if (tags == null) return 0;
+        int count = sources == null ? 0 : sources.size();
+        if (tags instanceof CompactTags compactTags) return Math.max(count, (int) compactTags.sourceCount());
+        if (tags == null) return count;
         for (Tag tag : tags) {
-            if (Tag.NAME_SOURCES.equals(tag.name()) && tag.isInt()) return (int) tag.unsignedValue();
+            if (Tag.NAME_SOURCES.equals(tag.name()) && tag.isInt()) {
+                return Math.max(count, (int) tag.unsignedValue());
+            }
         }
-        return 0;
+        return count;
+    }
+
+    /** Returns metadata with the known total source count updated, preserving active client sources. */
+    public FileMetadata withSourceCount(int count) {
+        if (count < 0) throw new IllegalArgumentException("Source count cannot be negative");
+        List<Tag> updatedTags = new java.util.ArrayList<>(tags == null ? List.of() : tags);
+        Tag sourceCountTag = new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, count);
+        for (int i = 0; i < updatedTags.size(); i++) {
+            if (Tag.NAME_SOURCES.equals(updatedTags.get(i).name())) {
+                updatedTags.set(i, sourceCountTag);
+                return new FileMetadata(hash, name, size, type, updatedTags, sources);
+            }
+        }
+        updatedTags.add(sourceCountTag);
+        return new FileMetadata(hash, name, size, type, updatedTags, sources);
     }
 
     private static final class CompactTags extends AbstractList<Tag> implements RandomAccess {

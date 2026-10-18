@@ -129,17 +129,29 @@ public class FileIndex {
      * @return the metadata instance now stored in the index for this hash
      */
     public FileMetadata addFile(FileMetadata meta) {
+        FileMetadata incoming = meta;
         boolean[] isNew = {false};
+        boolean[] sourceCountChanged = {false};
         FileMetadata[] replaced = {null};
         FileMetadata stored = byHash.compute(meta.hash(), (h, existing) -> {
             if (existing == null || existing.sources().isEmpty()) {
                 // unknown file, or a file without online source (e.g. loaded from the database): take the new metadata
-                if (existing != null) meta.sources().putAll(existing.sources());
+                FileMetadata selected = incoming;
+                if (existing != null) selected.sources().putAll(existing.sources());
+                int knownSources = existing == null ? 0 : existing.sourceCount();
+                if (selected.sourceCount() < knownSources) {
+                    selected = selected.withSourceCount(knownSources);
+                }
                 isNew[0] = true;
                 replaced[0] = existing;
-                return meta;
+                return selected;
             }
-            existing.sources().putAll(meta.sources());
+            existing.sources().putAll(incoming.sources());
+            int mergedSourceCount = Math.max(existing.sourceCount(), incoming.sourceCount());
+            if (mergedSourceCount > existing.sourceCount()) {
+                sourceCountChanged[0] = true;
+                return existing.withSourceCount(mergedSourceCount);
+            }
             return existing;
         });
         if (isNew[0]) {
@@ -154,6 +166,11 @@ public class FileIndex {
             }
             if (eventManager != null) {
                 eventManager.broadcast(new FileEvent(FileEvent.PUBLISHED, stored.name(), stored.hash(), "File published: " + stored.name()));
+            }
+        } else if (sourceCountChanged[0]) {
+            searchCache.clear();
+            if (db != null) {
+                db.saveFile(stored);
             }
         }
         return stored;
