@@ -67,7 +67,7 @@ This task starts the JVM with `-Djava.net.preferIPv4Stack=true` (IPv4 only); use
 Once the project is compiled, you can start the server with the following command:
 
 ```bash
-java -jar build/libs/JEmuleServer-1.2.jar [config_file] [port]
+java -jar build/libs/JEmuleServer-1.2.1.jar [config_file] [port]
 ```
 
 - Note: The server binds to the IPv6 wildcard when available, so IPv6 clients can connect. Avoid forcing the JVM to

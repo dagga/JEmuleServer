@@ -29,3 +29,7 @@ eMule's Kad2 framing (`0xE4`); interoperability with real eMule/aMule Kad nodes 
 ### Downloads
 
 Release installers bundle their Java runtime. The JAR requires Java 21 or later.
+
+### Documentation correction
+
+The README manual launch example now uses the `JEmuleServer-1.2.1.jar` filename.
