@@ -16,7 +16,7 @@ permissions:
 
 env:
   # Runtime modules needed by the server (jdeps + H2/logback runtime needs), without java.desktop (no X11 dependency)
-  JLINK_MODULES: java.base,java.compiler,java.instrument,java.logging,java.management,java.naming,java.net.http,java.scripting,java.sql,java.xml,jdk.localedata,jdk.management,jdk.net,jdk.unsupported,jdk.zipfs
+  JLINK_MODULES: java.base,java.compiler,java.instrument,java.logging,java.management,java.naming,java.net.http,java.scripting,java.sql,java.xml,jdk.httpserver,jdk.localedata,jdk.management,jdk.net,jdk.unsupported,jdk.zipfs
   JLINK_OPTIONS: --strip-debug --no-header-files --no-man-pages --strip-native-commands
   APP_DESCRIPTION: eMule (ed2k) server
 
