@@ -40,7 +40,7 @@ class ServerConfigTest {
         assertEquals("/tmp/testdb", cfg.databasePath());
         assertFalse(cfg.fakeFileDetectionEnabled());
         assertEquals("127.0.0.1:4661,192.0.2.10:4661", cfg.serverPeers());
-        
+
         // Defaults
         assertEquals(ServerConfig.DEFAULT.maxPacketSize(), cfg.maxPacketSize());
         assertEquals(ServerConfig.DEFAULT.cbFailureRateThreshold(), cfg.cbFailureRateThreshold());
@@ -50,7 +50,7 @@ class ServerConfigTest {
     void testFromEmptyProperties() {
         Properties props = new Properties();
         ServerConfig cfg = ServerConfig.fromProperties(props);
-        
+
         assertEquals(ServerConfig.DEFAULT.port(), cfg.port());
         assertEquals(ServerConfig.DEFAULT.maxFiles(), cfg.maxFiles());
         assertEquals(0, cfg.adminPort(), "the admin port is disabled by default");
@@ -96,6 +96,19 @@ class ServerConfigTest {
         properties.setProperty("serverPeers", "127.0.0.1:4661");
         ServerConfig cfg = ServerConfig.fromProperties(properties);
         assertEquals("127.0.0.1:4661", cfg.withPort(4662).serverPeers());
+    }
+
+    @Test
+    void webAdminPortDefaultsAndSurvivesConfigCopies() {
+        ServerConfig config = ServerConfig.fromProperties(new Properties());
+        assertEquals(8080, config.adminWebPort());
+        assertEquals(8080, config.withPort(4771).adminWebPort());
+        assertEquals(8080, config.withKad(config.kad()).adminWebPort());
+        assertEquals(0, config.withAdminWebPort(0).adminWebPort());
+
+        Properties disabled = new Properties();
+        disabled.setProperty("adminWebPort", "0");
+        assertEquals(0, ServerConfig.fromProperties(disabled).adminWebPort());
     }
 
     @org.junit.jupiter.api.Test

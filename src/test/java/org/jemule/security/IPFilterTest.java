@@ -108,6 +108,7 @@ class IPFilterTest {
         assertTrue(filter.isBlocked("11.0.1.255"));
         assertFalse(filter.isBlocked("11.0.2.0"));
         assertEquals(1, filter.getFilterCount());
+        assertEquals(List.of("10.0.0.0 - 11.0.1.255"), filter.getBlockedRanges());
     }
 
     @Test

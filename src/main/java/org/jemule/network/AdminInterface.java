@@ -43,6 +43,8 @@ import java.net.InetAddress;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Locale;
+import java.util.regex.Pattern;
 
 /**
  * Provides a command-line interface for server administration: on the standard input of the server, and on the
@@ -52,6 +54,8 @@ public class AdminInterface implements Runnable {
     private static final Logger log = LoggerFactory.getLogger(AdminInterface.class);
     /** Maximum number of contacts listed by 'kad contacts'. */
     static final int MAX_LISTED_KAD_CONTACTS = 20;
+    private static final Pattern POSSIBLE_BOT_NAME = Pattern.compile("\\b(bot|scanner|spider|crawler)\\b",
+            Pattern.CASE_INSENSITIVE);
     private final Server server;
     private final ClientRegistry registry;
     private final FileIndex fileIndex;
@@ -92,11 +96,17 @@ public class AdminInterface implements Runnable {
         String command = parts[0].toLowerCase();
         switch (command) {
             case "status" -> showStatus();
-            case "clients" -> showClients();
+            case "clients" -> showClients(parts.length > 2 ? parts[1] + " " + parts[2]
+                    : parts.length > 1 ? parts[1] : "");
             case "files" -> showFiles();
             case "ban" -> handleBan(parts);
             case "events" -> showEvents();
             case "kad" -> handleKad(parts);
+            case "peers" -> showPeers();
+            case "filters" -> showFilters();
+            case "bots" -> showBots();
+            case "blocks" -> showBlocks();
+            case "settings" -> handleSettings(parts);
             case "help" -> showHelp();
             case "stop", "exit", "quit" -> {
                 out().println("Stopping server...");
@@ -156,25 +166,24 @@ public class AdminInterface implements Runnable {
         out().println("---------------------");
     }
 
-    private void showClients() {
-        out().println("--- Connected Clients (" + registry.size() + ") ---");
-        out().printf("%-15s | %-10s | %-10s | %-8s | %s%n", "IP", "ID", "Type", "Files", "Uptime");
+    private void showClients(String search) {
+        String query = search.toLowerCase(Locale.ROOT);
+        out().println("--- Connected Clients (" + registry.size() + (query.isEmpty() ? "" : ", search: " + search) + ") ---");
+        out().printf("%-15s | %-24s | %-10s | %-8s | %s%n", "IP", "Nickname", "Type", "Files", "ID");
         out().println("---------------------------------------------------------------");
-        long now = System.currentTimeMillis();
         int count = 0;
         for (org.jemule.core.ClientState client : registry.getAllClients()) {
-            if (count++ > 50) {
+            String ip = client.address().getHostAddress();
+            String nickname = client.nickname();
+            String id = Long.toUnsignedString(client.clientId());
+            if (!query.isEmpty() && !ip.contains(query) && !nickname.toLowerCase(Locale.ROOT).contains(query)
+                    && !id.contains(query)) continue;
+            if (count++ >= 50) {
                 out().println("... and more");
                 break;
             }
-            String type = client.isHighId() ? "HighID" : "LowID";
-            long uptime = (now - client.connectedAt()) / 1000;
-            out().printf("%-15s | %-10s | %-10s | %-8d | %ds%n",
-                    client.address().getHostAddress(),
-                    Long.toUnsignedString(client.clientId()),
-                    type,
-                    client.publishedFilesCount().get(),
-                    uptime);
+            out().printf("%-15s | %-24s | %-10s | %-8d | %s%n",
+                    ip, nickname, client.isHighId() ? "HighID" : "LowID", client.publishedFilesCount().get(), id);
         }
         out().println("---------------------------------------------------------------");
     }
@@ -213,6 +222,74 @@ public class AdminInterface implements Runnable {
         out().println("--- Events (total since startup / last minute) ---");
         totals.forEach((type, total) -> out().printf("%-22s %10d %8d%n", type, total, lastMinute.getOrDefault(type, 0L)));
         out().println("---------------------------------------------------");
+    }
+
+    private void showPeers() {
+        List<ServerGossip.VerifiedPeer> peers = server != null ? server.getVerifiedServerPeers() : List.of();
+        out().println("--- Verified Server Peers (" + peers.size() + ") ---");
+        out().printf("%-28s | %-21s | %s%n", "Name", "Address", "Verified");
+        for (ServerGossip.VerifiedPeer peer : peers) {
+            out().printf("%-28s | %s:%d | %ds ago%n", peer.name(), peer.endpoint().address().getHostAddress(),
+                    peer.endpoint().tcpPort(), Math.max(0, (System.currentTimeMillis() - peer.verifiedAtMillis()) / 1000));
+        }
+    }
+
+    private void showFilters() {
+        out().println("--- Filters ---");
+        out().println("Blocked IP ranges: " + ipFilter.getFilterCount());
+        ipFilter.getBlockedRanges(50).forEach(out()::println);
+        out().println("Fake-file heuristics: " + (fakeFileDetector.isEnabled() ? "ENABLED" : "DISABLED"));
+        out().println("Bot detection: nickname heuristic only (use 'bots' to list matches)");
+    }
+
+    private void showBots() {
+        int matches = 0;
+        out().println("--- Potential Bots (nickname heuristic only) ---");
+        for (org.jemule.core.ClientState client : registry.getAllClients()) {
+            if (!isPotentialBot(client.nickname())) continue;
+            out().printf("%s | %s | %s%n", client.nickname(), client.address().getHostAddress(),
+                    Long.toUnsignedString(client.clientId()));
+            matches++;
+        }
+        out().println("Potential bot matches: " + matches + " (not verified or automatically blocked)");
+    }
+
+    static boolean isPotentialBot(String nickname) {
+        return nickname != null && POSSIBLE_BOT_NAME.matcher(nickname).find();
+    }
+
+    private void showBlocks() {
+        org.jemule.core.DatabaseManager database = server != null ? server.getDatabaseManager() : null;
+        if (database == null) {
+            out().println("Persistent hash blocks are unavailable.");
+            return;
+        }
+        List<String> hashes = database.loadBannedHashes();
+        out().println("--- Blocked Hashes (" + hashes.size() + ") ---");
+        hashes.forEach(out()::println);
+    }
+
+    private void handleSettings(String[] parts) {
+        if (parts.length == 1) {
+            out().println("--- Runtime Settings ---");
+            out().println("Fake-file detection: " + (fakeFileDetector.isEnabled() ? "ENABLED" : "DISABLED"));
+            if (server != null) {
+                out().println("Admin web port: " + server.getConfig().adminWebPort());
+                out().println("Admin console port: " + server.getConfig().adminPort());
+            }
+            out().println("Change fake-file detection with: settings fakeFileDetectionEnabled <on|off>");
+            return;
+        }
+        String[] args = parts.length > 2
+                ? (parts[1] + " " + parts[2]).trim().split("\\s+")
+                : parts[1].trim().split("\\s+");
+        if (args.length != 2 || !args[0].equalsIgnoreCase("fakeFileDetectionEnabled")
+                || !(args[1].equalsIgnoreCase("on") || args[1].equalsIgnoreCase("off"))) {
+            out().println("Usage: settings [fakeFileDetectionEnabled <on|off>]");
+            return;
+        }
+        fakeFileDetector.setEnabled(args[1].equalsIgnoreCase("on"));
+        out().println("Fake-file detection " + (fakeFileDetector.isEnabled() ? "enabled." : "disabled."));
     }
 
     /** 'kad [status|contacts|bootstrap &lt;ip&gt; &lt;port&gt;|stats]': supervision of the embedded Kademlia node. */
@@ -321,9 +398,15 @@ public class AdminInterface implements Runnable {
         out().println("Available commands:");
         out().println("  status          - Show server performance and stats");
         out().println("  clients         - Show connected clients count");
+        out().println("  clients <text>  - Search clients by nickname, IP, or client ID");
         out().println("  files           - Show file indexing stats");
         out().println("  ban <hash> [R]  - Ban a file hash (32 hex chars)");
         out().println("  events          - Show event counts (total and last minute)");
+        out().println("  peers           - List verified server peers and their names");
+        out().println("  filters         - Show active IP and fake-file filters");
+        out().println("  bots            - List potential bots by nickname heuristic");
+        out().println("  blocks          - List persistently blocked file hashes");
+        out().println("  settings        - Show runtime settings; optionally toggle fake-file detection");
         out().println("  kad status      - Show the Kademlia node status, UDP port and contact count");
         out().println("  kad contacts    - List the " + MAX_LISTED_KAD_CONTACTS + " most recent Kademlia contacts");
         out().println("  kad bootstrap <ip> <port> - Send a bootstrap request to a Kademlia node");

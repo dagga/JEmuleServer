@@ -248,4 +248,29 @@ public class IPFilter {
     public int getFilterCount() {
         return blockedRanges.size();
     }
+
+    /**
+     * Returns the normalized blocked IPv4 ranges in dotted-decimal form.
+     */
+    public List<String> getBlockedRanges() {
+        return getBlockedRanges(Integer.MAX_VALUE);
+    }
+
+    /**
+     * Returns at most {@code limit} normalized blocked ranges.
+     */
+    public List<String> getBlockedRanges(int limit) {
+        if (limit <= 0) return List.of();
+        List<String> result = new ArrayList<>(Math.min(limit, blockedRanges.size()));
+        for (IPRange range : blockedRanges) {
+            if (result.size() == limit) break;
+            result.add(formatIp(range.start()) + " - " + formatIp(range.end()));
+        }
+        return List.copyOf(result);
+    }
+
+    private static String formatIp(long value) {
+        return ((value >>> 24) & 0xFF) + "." + ((value >>> 16) & 0xFF) + "."
+                + ((value >>> 8) & 0xFF) + "." + (value & 0xFF);
+    }
 }
