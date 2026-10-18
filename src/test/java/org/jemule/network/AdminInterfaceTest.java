@@ -200,4 +200,28 @@ public class AdminInterfaceTest {
         admin.handleCommand("events");
         assertTrue(outContent.toString().matches("(?s).*FILE_SEARCHED\\s+1\\s+1.*"), outContent.toString());
     }
+
+    @Test
+    void clientsCommandSearchesNicknameIpAndId() throws Exception {
+        var alice = new org.jemule.core.ClientState(java.net.InetAddress.getByName("192.0.2.9"), 4662, 12345,
+                System.currentTimeMillis(), new java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis()));
+        alice.setNickname("Alice");
+        var bob = new org.jemule.core.ClientState(java.net.InetAddress.getByName("192.0.2.10"), 4662, 67890,
+                System.currentTimeMillis(), new java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis()));
+        bob.setNickname("Bob");
+        org.mockito.Mockito.when(registry.getAllClients()).thenReturn(java.util.List.of(alice, bob));
+
+        admin.handleCommand("clients alice");
+
+        assertTrue(outContent.toString().contains("Alice"), outContent.toString());
+        assertFalse(outContent.toString().contains("Bob"), outContent.toString());
+    }
+
+    @Test
+    void settingsCommandCanToggleFakeFileHeuristics() {
+        admin.handleCommand("settings fakeFileDetectionEnabled off");
+
+        verify(fakeFileDetector).setEnabled(false);
+        assertTrue(outContent.toString().contains("Fake-file detection disabled."));
+    }
 }

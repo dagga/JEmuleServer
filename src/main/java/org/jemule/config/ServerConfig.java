@@ -54,18 +54,18 @@ public record ServerConfig(
         String databasePath,
         String ipFilterPath,
         boolean fakeFileDetectionEnabled,
-        
+
         // Circuit Breaker settings
         float cbFailureRateThreshold,
         int cbMinimumNumberOfCalls,
         int cbWaitDurationInSeconds,
-        
+
         // Timeout settings
         int tcpKeepAliveTimeoutInSeconds,
-        
+
         // Heartbeat settings
         int heartbeatIntervalSeconds,
-        
+
         // Public IP (optional – null or empty means auto-detect)
         String publicIp,
 
@@ -83,7 +83,10 @@ public record ServerConfig(
         KadConfig kad,
 
         // Comma-separated IPv4 server seed endpoints in host:TCP-port form
-        String serverPeers
+        String serverPeers,
+
+        // HTTP admin panel on the loopback address (0 disables it)
+        int adminWebPort
 ) {
     /** Default time allowed for the HighID test, in seconds. */
     public static final int DEFAULT_LOWID_CHECK_TIMEOUT_SECONDS = 5;
@@ -137,6 +140,21 @@ public record ServerConfig(
                 publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad, "");
     }
 
+    /**
+     * Constructor retaining source compatibility for callers that also provide gossip peers.
+     */
+    public ServerConfig(int port, int maxPacketSize, int maxSearchResults, int floodMaxRequestsPerSecond, int maxUsers,
+                        int maxFiles, int maxFilesPerUser, int maxSourcesPerFile, String databasePath, String ipFilterPath,
+                        boolean fakeFileDetectionEnabled, float cbFailureRateThreshold, int cbMinimumNumberOfCalls,
+                        int cbWaitDurationInSeconds, int tcpKeepAliveTimeoutInSeconds, int heartbeatIntervalSeconds,
+                        String publicIp, int lowIdCheckTimeoutSeconds, String childAbuseKeywordsPath, int adminPort,
+                        KadConfig kad, String serverPeers) {
+        this(port, maxPacketSize, maxSearchResults, floodMaxRequestsPerSecond, maxUsers, maxFiles, maxFilesPerUser,
+                maxSourcesPerFile, databasePath, ipFilterPath, fakeFileDetectionEnabled, cbFailureRateThreshold,
+                cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds, heartbeatIntervalSeconds,
+                publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad, serverPeers, 0);
+    }
+
     public ServerConfig {
         if (kad == null) {
             kad = KadConfig.DEFAULT;
@@ -149,6 +167,9 @@ public record ServerConfig(
         }
         if (adminPort < 0 || adminPort > 65535) {
             throw new IllegalArgumentException("adminPort must be between 0 (disabled) and 65535");
+        }
+        if (adminWebPort < 0 || adminWebPort > 65535) {
+            throw new IllegalArgumentException("adminWebPort must be between 0 (disabled) and 65535");
         }
         if (port < 1024) {
             // Non-blocking warning for privileged ports
@@ -177,14 +198,15 @@ public record ServerConfig(
             1800,
             120,
             null
-    );
+    ).withAdminWebPort(8080);
 
     /** Same configuration listening on another port. */
     public ServerConfig withPort(int newPort) {
         return new ServerConfig(newPort, maxPacketSize, maxSearchResults, floodMaxRequestsPerSecond, maxUsers, maxFiles,
                 maxFilesPerUser, maxSourcesPerFile, databasePath, ipFilterPath, fakeFileDetectionEnabled,
                 cbFailureRateThreshold, cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds,
-                heartbeatIntervalSeconds, publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad, serverPeers);
+                heartbeatIntervalSeconds, publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad,
+                serverPeers, adminWebPort);
     }
 
     /** Same configuration with other Kademlia settings. */
@@ -192,7 +214,8 @@ public record ServerConfig(
         return new ServerConfig(port, maxPacketSize, maxSearchResults, floodMaxRequestsPerSecond, maxUsers, maxFiles,
                 maxFilesPerUser, maxSourcesPerFile, databasePath, ipFilterPath, fakeFileDetectionEnabled,
                 cbFailureRateThreshold, cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds,
-                heartbeatIntervalSeconds, publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, newKad, serverPeers);
+                heartbeatIntervalSeconds, publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, newKad,
+                serverPeers, adminWebPort);
     }
 
     /** Same configuration with relative database / IP filter / keyword file paths resolved against the given directory. */
@@ -201,7 +224,15 @@ public record ServerConfig(
                 maxFilesPerUser, maxSourcesPerFile, resolve(baseDir, databasePath), resolve(baseDir, ipFilterPath),
                 fakeFileDetectionEnabled, cbFailureRateThreshold, cbMinimumNumberOfCalls, cbWaitDurationInSeconds,
                 tcpKeepAliveTimeoutInSeconds, heartbeatIntervalSeconds, publicIp, lowIdCheckTimeoutSeconds,
-                resolve(baseDir, childAbuseKeywordsPath), adminPort, kad, serverPeers);
+                resolve(baseDir, childAbuseKeywordsPath), adminPort, kad, serverPeers, adminWebPort);
+    }
+
+    public ServerConfig withAdminWebPort(int newAdminWebPort) {
+        return new ServerConfig(port, maxPacketSize, maxSearchResults, floodMaxRequestsPerSecond, maxUsers, maxFiles,
+                maxFilesPerUser, maxSourcesPerFile, databasePath, ipFilterPath, fakeFileDetectionEnabled,
+                cbFailureRateThreshold, cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds,
+                heartbeatIntervalSeconds, publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad,
+                serverPeers, newAdminWebPort);
     }
 
     /** Rooted paths are kept as they are, including "\dir" or "/dir" on Windows, which are not absolute there. */
@@ -236,7 +267,8 @@ public record ServerConfig(
                 props.getProperty("childAbuseKeywordsPath", DEFAULT.childAbuseKeywordsPath()),
                 Integer.parseInt(props.getProperty("adminPort", String.valueOf(DEFAULT.adminPort()))),
                 KadConfig.fromProperties(props),
-                props.getProperty("serverPeers", DEFAULT.serverPeers())
+                props.getProperty("serverPeers", DEFAULT.serverPeers()),
+                Integer.parseInt(props.getProperty("adminWebPort", String.valueOf(DEFAULT.adminWebPort())))
         );
     }
 }

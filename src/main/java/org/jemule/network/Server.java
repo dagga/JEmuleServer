@@ -97,6 +97,7 @@ public class Server {
     private final EventStatistics eventStatistics = new EventStatistics();
     private final ClientFactory clientFactory;
     private final AdminInterface admin;
+    private final AdminWebPanel adminWebPanel;
     private final InetAddress publicIp;
     private final KadNode kadNode;
     private volatile KadSearchBridge kadSearchBridge;
@@ -162,7 +163,7 @@ public class Server {
         this.fakeFileDetector = new FakeFileDetector();
         this.fakeFileDetector.setEnabled(config.fakeFileDetectionEnabled());
         this.executor = Executors.newVirtualThreadPerTaskExecutor();
-        
+
         DatabaseManager dbMgr = null;
         try {
             dbMgr = new DatabaseManager(
@@ -189,6 +190,7 @@ public class Server {
                 ? new KadNode(config.kad(), config.port(), db, fileIndex, abuseFilter, fakeFileDetector)
                 : null;
         this.admin = new AdminInterface(this, registry, fileIndex, ipFilter, fakeFileDetector);
+        this.adminWebPanel = new AdminWebPanel(this);
         this.publicIp = resolvePublicIp(config.publicIp());
 
         // Generate a stable server hash based on public IP and port
@@ -269,6 +271,34 @@ public class Server {
 
     public EventStatistics getEventStatistics() {
         return eventStatistics;
+    }
+
+    ClientRegistry getClientRegistry() {
+        return registry;
+    }
+
+    IPFilter getIPFilter() {
+        return ipFilter;
+    }
+
+    FakeFileDetector getFakeFileDetector() {
+        return fakeFileDetector;
+    }
+
+    DatabaseManager getDatabaseManager() {
+        return db;
+    }
+
+    ServerConfig getConfig() {
+        return config;
+    }
+
+    List<ServerGossip.VerifiedPeer> getVerifiedServerPeers() {
+        return List.copyOf(serverGossip.verifiedPeers());
+    }
+
+    int getAdminWebPort() {
+        return adminWebPanel.port();
     }
 
     private void setupDefaultListeners() {
@@ -423,6 +453,13 @@ public class Server {
         adminThread.start();
         if (config.adminPort() > 0) {
             Thread.ofVirtual().name("AdminPort").start(this::serveAdminPort);
+        }
+        if (config.adminWebPort() > 0) {
+            try {
+                adminWebPanel.start(config.adminWebPort());
+            } catch (IOException e) {
+                log.error("Admin web panel port {} unavailable: {}", config.adminWebPort(), e.getMessage());
+            }
         }
     }
 
@@ -668,7 +705,7 @@ public class Server {
         tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_MAXUSERS, maxUsers));
         tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_SOFTFILES, 1000000));
         tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_HARDFILES, 2000000));
-        
+
         tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_STRING, org.jemule.protocol.Tag.NAME_SERVERNAME, sName));
         tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_STRING, org.jemule.protocol.Tag.NAME_DESCRIPTION, sDesc));
         tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_SERVER_VERSION, org.jemule.Main.ESERVER_VERSION_INT));
@@ -716,6 +753,7 @@ public class Server {
      */
     public void stop() {
         running = false;
+        adminWebPanel.close();
         executor.shutdownNow();
         serverSearchBridge.close();
         if (ipFilterUpdater != null) ipFilterUpdater.close();

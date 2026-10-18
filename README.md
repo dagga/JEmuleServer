@@ -7,10 +7,10 @@ of each version are described in `doc/release-notes-v<version>.md` (latest: [1.2
 
 ## Why this project?
 
-This project was initiated because the historical source code of the **Lugdunum** eMule server was not available.
-Lugdunum was the reference for eDonkey2000 (ed2k) servers for years, but its code remained closed and the binaries
-became obsolete or difficult to run on modern systems. JEmuleServer aims to provide a modern, open-source (LGPLv3), and
-high-performance alternative using the latest Java features (such as Virtual Threads).
+JEmuleServer aims to provide a modern, open-source (LGPLv3) eMule server using current Java features such as Virtual
+Threads. The historical **Lugdunum/eServer** remains a point of comparison, but its current
+[GitHub repository](https://github.com/rusingineer/Lugdunum) provides too little implementation documentation to
+substantiate a detailed feature-by-feature comparison. See the [comparison notes](doc/feature-comparison.md).
 
 Fighting the distribution of child sexual abuse material is also one of the goals of the project: a server must not
 help anyone find it. JEmuleServer refuses such files, bans their hashes for good and removes them from its database,
@@ -89,21 +89,9 @@ reports the startup time, the heap used by the index and the search latency unde
 
 ## Configuration
 
-JEmuleServer uses a `server.properties` file for its configuration. If the file is not found, the server uses its internal default values.
-
-Example `server.properties`:
-```properties
-port=4661
-maxUsers=1000000
-databasePath=./jemule_db
-fakeFileDetectionEnabled=true
-# ipFilterPath=ipfilter.dat
-# Timeout of the HighID test (0 = every client gets a LowID)
-lowIdCheckTimeoutSeconds=5
-```
-
-All parameters can be tuned in this file, including quotas, flood protection thresholds, and circuit breaker settings.
-The commented [`server.properties`](server.properties) at the root of the repository lists all of them.
+JEmuleServer uses `server.properties`; if it is not found, internal defaults are used. The root
+[`server.properties`](server.properties) file is the complete, commented reference for all options. See the
+[configuration guide](doc/configuration.md) for option groups and administration security notes.
 
 ### IP filter updates
 
@@ -183,10 +171,19 @@ and aMule Kad nodes has not been validated yet.
 
 ## Administration Interface
 
-JEmuleServer includes a command-line interface (CLI) for administration. When running the server, you can type commands directly into the terminal.
+JEmuleServer includes a built-in web panel and a command-line interface (CLI). The web panel is enabled by default at
+`http://127.0.0.1:8080/` and is bound to loopback only. It shows server status, searchable clients, verified named
+server peers, active filters, potential bot-name matches, persistent hash blocks, and runtime settings. The bot list is
+only a nickname heuristic; it does not verify or automatically block clients. The settings action only changes fake-file
+detection in memory; it does not update `server.properties`.
 
-A server running as a service (systemd, Windows service) has no terminal. Set `adminPort` in `server.properties` to
-open the same console on a TCP port bound to `127.0.0.1` only, then connect from the server machine:
+The web panel has no password: any local user who can reach loopback can administer the server. Do not expose it through
+a reverse proxy, tunnel, or port forward. Set `adminWebPort=0` in `server.properties` to disable it, or change the port
+with `adminWebPort=<port>`.
+
+When running interactively, CLI commands can be typed into the server terminal. For a service installation without a
+terminal, set `adminPort` in `server.properties` to expose the same CLI on a TCP port bound to `127.0.0.1`, then connect
+from the server machine:
 
 ```bash
 nc 127.0.0.1 4670
@@ -197,12 +194,17 @@ The admin port has no authentication: anyone with a shell on the machine can use
 
 Available commands:
 - `status`: Displays server performance, uptime, and core statistics.
-- `clients`: Lists connected clients with their IP, ID, type (HighID/LowID), and published files count.
+- `clients [text]`: Lists connected clients or searches by nickname, IP, or client ID.
 - `files`: Shows file indexing statistics and fake file detection status.
 - `events`: Shows the number of events of each type (connections, logins, publications, searches...) since startup
   and during the last minute.
 - `ban <hash> [reason]`: Bans a file hash (32-char hex) for good: it is stored in the database with its reason and the
   file is removed from the index.
+- `peers`: Lists verified server peers and their names.
+- `filters`: Shows active IP and fake-file filters.
+- `bots`: Lists potential bot matches based on nicknames only.
+- `blocks`: Lists persistently blocked file hashes.
+- `settings [fakeFileDetectionEnabled <on|off>]`: Shows runtime settings or toggles fake-file detection (not persisted).
 - `kad status`: Shows the status of the embedded Kademlia node (`DISCONNECTED`, `BOOTSTRAPPING`, `CONNECTED`), its
   node ID, UDP port and number of contacts (`kad` alone does the same).
 - `kad contacts`: Lists the 20 most recently seen Kademlia contacts (ID, address, version, liveness).
@@ -210,7 +212,8 @@ Available commands:
 - `kad stats`: Shows the Kademlia counters (searches forked, results received, files ingested, illicit files blocked,
   hashes banned, bootstrap and maintenance activity).
 - `help`: Shows the list of available commands.
-- `stop` / `exit` / `quit`: Safely shuts down the server.
+- `stop`: Shuts down the server. `exit` and `quit` close a remote admin session; in the server terminal they also stop
+  the server.
 
 ## Firewall Configuration (Fedora)
 
@@ -243,27 +246,10 @@ sudo firewall-cmd --list-ports
 
 ## Features Comparison
 
-Here is a comparison between JEmuleServer and the historical **eServer (Lugdunum)**:
-
-| Feature                             |       JEmuleServer        | eServer (Lugdunum)  |
-|:------------------------------------|:-------------------------:|:-------------------:|
-| **Language / Runtime**              | Java 21 (Virtual Threads) |  C / C++ (Native)   |
-| **Protocol Obfuscation (RC4)**      |        ✅ Supported        |     ✅ Supported     |
-| **ZLIB Compression**                |        ✅ Supported        |     ✅ Supported     |
-| **Advanced Search (AND/OR/NOT)**    |        ✅ Supported        |     ✅ Supported     |
-| **Large Files (>4GB) Support**      |        ✅ Supported        |     ✅ Supported     |
-| **Lugdunum Extensions (0x40-0x42)** |        ✅ Supported        |     ✅ Supported     |
-| **Embedded Database**               |     ✅ Supported (H2)      | ❌ No (Memory/Files) |
-| **User Quotas**                     |        ✅ Supported        |     ✅ Supported     |
-| **Event-Driven Monitoring**         |        ✅ Supported        |        ❌ No         |
-| **IP Filtering (ipfilter.dat)**     |        ✅ Supported        |     ✅ Supported     |
-| **LowID Management (Callback)**     |        ✅ Supported        |     ✅ Supported     |
-| **Fake File Detection**             |        ✅ Supported        |     ✅ Supported     |
-| **Child Abuse Filter**              |        ✅ Supported        |        ❌ No         |
-| **Kademlia Search Bridge**          |        ✅ Supported        |        ❌ No         |
-| **External Config File**            |        ✅ Supported        |     ✅ Supported     |
-| **Admin Interface**                 |        ✅ Supported        |     ✅ Supported     |
-| **IPv6 Connections**                | ⚠️ Partial ([limits](doc/ipv6.md)) |        ❌ No         |
+The available public Lugdunum repository does not document enough implementation detail to support the old yes/no
+feature matrix. The [comparison notes](doc/feature-comparison.md) list what can be verified and mark unsupported claims
+as unknown rather than guessing. JEmuleServer's documented extensions include its embedded Kademlia search bridge,
+verified server gossip and search, and loopback administration panel.
 
 ## License
 
@@ -277,6 +263,8 @@ This project is distributed under the **GNU Lesser General Public License v3.0 (
 ## Documentation
 
 More information can be found in the `doc/` directory:
+- [Configuration guide](doc/configuration.md)
+- [JEmuleServer and Lugdunum feature comparison](doc/feature-comparison.md)
 - [Release notes 1.2](doc/release-notes-v1.2.md) / [1.1](doc/release-notes-v1.1.md) / [1.0.1](doc/release-notes-v1.0.1.md) / [1.0](doc/release-notes-v1.0.md)
 - [Protocols Description](doc/protocols.md)
 - [Kademlia Search Bridge](doc/kademlia.md)
