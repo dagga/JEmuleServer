@@ -115,12 +115,16 @@ public class Server {
         this.kadSearchBridge = kadSearchBridge;
     }
 
-    /** Active bridge for keyword searches against verified server peers. */
+    /**
+     * Active bridge for keyword searches against verified server peers.
+     */
     public ServerSearchBridge getServerSearchBridge() {
         return serverSearchBridge;
     }
 
-    /** Adds server endpoints explicitly reported by a connected client for normal gossip verification. */
+    /**
+     * Adds server endpoints explicitly reported by a connected client for normal gossip verification.
+     */
     public int onClientReportedServerList(byte[] data) {
         return serverGossip.addClientReportedServerList(data);
     }
@@ -129,12 +133,16 @@ public class Server {
         return serverGossip.clientServerList(publicIp, config.port());
     }
 
-    /** The embedded Kademlia node, or null when {@code kadEnabled=false}. */
+    /**
+     * The embedded Kademlia node, or null when {@code kadEnabled=false}.
+     */
     public KadNode getKadNode() {
         return kadNode;
     }
 
-    /** Called once a client has logged in: HighID clients bootstrap the Kad routing table. */
+    /**
+     * Called once a client has logged in: HighID clients bootstrap the Kad routing table.
+     */
     public void onClientLoggedIn(ClientState client) {
         KadNode node = kadNode;
         if (node != null) {
@@ -256,7 +264,8 @@ public class Server {
                 log.info("Using InetAddress.getLocalHost(): {}", local.getHostAddress());
                 return local;
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
         log.warn("Could not resolve public IP, using 127.0.0.1 as fallback");
         try {
             return InetAddress.getByAddress(new byte[]{127, 0, 0, 1});
@@ -330,7 +339,10 @@ public class Server {
         } catch (IOException e) {
             // Fallback to IPv4 wildcard
             if (ss != null && !ss.isClosed()) {
-                try { ss.close(); } catch (IOException ignored) {}
+                try {
+                    ss.close();
+                } catch (IOException ignored) {
+                }
             }
             ss = new ServerSocket(config.port());
             ss.setSoTimeout(1000);
@@ -340,6 +352,7 @@ public class Server {
         try {
             log.info("Virtual Threads ready for 50k+ concurrent clients");
 
+            startServerMetLoading();
             startUdpResponder();
             startKadNode();
             startAdminInterface();
@@ -362,8 +375,26 @@ public class Server {
                 }
             }
         } finally {
-            if (ss != null && !ss.isClosed()) try { ss.close(); } catch (IOException ignored) {}
+            if (ss != null && !ss.isClosed()) try {
+                ss.close();
+            } catch (IOException ignored) {
+            }
         }
+    }
+
+    private void startServerMetLoading() {
+        if (config.serverMetUrl().isBlank()) return;
+        executor.submit(() -> {
+            try {
+                int added = ServerMetLoader.load(config.serverMetUrl(), serverGossip);
+                log.info("Loaded {} new server candidates from server.met; existing candidates were retained", added);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                log.warn("Interrupted while loading server.met from {}", config.serverMetUrl());
+            } catch (IOException | IllegalArgumentException e) {
+                log.warn("Could not load server.met from {}: {}", config.serverMetUrl(), e.getMessage());
+            }
+        });
     }
 
     private void startUdpResponder() {
@@ -385,7 +416,9 @@ public class Server {
                             ds.bind(new java.net.InetSocketAddress(java.net.InetAddress.getByName("::"), bindPort));
                             log.info("UDP Responder listening on port {} (IPv6 wildcard)", bindPort);
                         } catch (IOException e) {
-                            if (ds != null && !ds.isClosed()) { ds.close(); }
+                            if (ds != null && !ds.isClosed()) {
+                                ds.close();
+                            }
                             ds = new java.net.DatagramSocket(bindPort);
                             log.info("UDP Responder listening on port {} (IPv4 wildcard)", bindPort);
                         }
@@ -487,7 +520,9 @@ public class Server {
         }
     }
 
-    /** Destination of the answers to one UDP request; answers are obfuscated when {@code key != 0}. */
+    /**
+     * Destination of the answers to one UDP request; answers are obfuscated when {@code key != 0}.
+     */
     private record UdpReply(java.net.DatagramSocket socket, InetAddress address, int port, int key,
                             boolean serverObfuscated) {
         private UdpReply(java.net.DatagramSocket socket, InetAddress address, int port, int key) {
@@ -523,8 +558,8 @@ public class Server {
                     recv = serverPlain;
                     serverObfuscated = true;
                 } else if (recv.length >= 4 && recv.length < 4 + 16 && ds.getLocalPort() == config.port() + 12) {
-                // "Crypt ping" (CServerList::ServerStats): raw <challenge 4><random 0-15> sent to port+12;
-                // the OP_GLOBSERVSTATRES answer is obfuscated with the challenge as base key.
+                    // "Crypt ping" (CServerList::ServerStats): raw <challenge 4><random 0-15> sent to port+12;
+                    // the OP_GLOBSERVSTATRES answer is obfuscated with the challenge as base key.
                     int challenge = ByteBuffer.wrap(recv, 0, 4).order(ByteOrder.LITTLE_ENDIAN).getInt();
                     UdpReply reply = new UdpReply(ds, p.getAddress(), p.getPort(), challenge);
                     sendUdp(reply, buildGlobServStatRes(challenge, p.getAddress()), "STAT (crypt ping)");
@@ -611,12 +646,16 @@ public class Server {
         return resp.array();
     }
 
-    /** Port receiving obfuscated UDP packets (also bound for eMule's crypt pings, sent to TCP port + 12). */
+    /**
+     * Port receiving obfuscated UDP packets (also bound for eMule's crypt pings, sent to TCP port + 12).
+     */
     private int udpObfuscationPort() {
         return config.port() + 12;
     }
 
-    /** eMule keeps at most MAX_RESULTS (100) results of a global search per server. */
+    /**
+     * eMule keeps at most MAX_RESULTS (100) results of a global search per server.
+     */
     private static final int MAX_GLOBAL_SEARCH_RESULTS = 100;
 
     /**
@@ -662,7 +701,9 @@ public class Server {
         }
     }
 
-    /** Keeps answers below the usual path MTU (the client reads up to 5000 bytes per datagram). */
+    /**
+     * Keeps answers below the usual path MTU (the client reads up to 5000 bytes per datagram).
+     */
     private static final int MAX_UDP_PAYLOAD = 1300;
 
     private void sendUdp(UdpReply reply, byte[] plain, String what) throws IOException {

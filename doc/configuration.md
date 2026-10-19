@@ -13,7 +13,7 @@ Options not set in that file use the defaults built into the server. Keep runtim
 | Storage | `databasePath` | H2 database location. |
 | Filtering | `ipFilterPath`, `fakeFileDetectionEnabled`, `childAbuseKeywordsPath` | Optional IP list, fake-file heuristics and the child-abuse keyword list. The child-abuse filter cannot be disabled. |
 | Protection | `floodMaxRequestsPerSecond`, `cbFailureRateThreshold`, `cbMinimumNumberOfCalls`, `cbWaitDurationInSeconds` | Per-IP flood threshold and database circuit-breaker behavior. |
-| Server federation | `serverPeers` | Comma-separated IPv4 seed endpoints (`host:TCP-port`). Candidates are verified before they are used for gossip or searches. |
+| Server federation | `serverPeers`, `serverMetUrl` | Comma-separated IPv4 seeds and optional HTTPS `server.met` source loaded at startup. Downloaded endpoints are merged with existing candidates, not used to replace them; peers are verified before gossip or searches. |
 | Kademlia | `kadEnabled`, `kadPort`, `kadBootstrapFromClients`, `kadMaxRoutingContacts`, `kadForkSearchEnabled`, `kadSearchTimeoutSeconds`, `kadAutoIngestToH2`, `kadMinSourcesForIngest` | Embedded Kad node, search forwarding, bootstrapping and result ingestion. |
 
 Use `server.properties` for option defaults and additional details. Relative file paths are resolved from the process

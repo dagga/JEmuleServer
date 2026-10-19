@@ -1,6 +1,7 @@
 package org.jemule.network.handler;
 
 import org.jemule.core.FileMetadata;
+import org.jemule.core.ClientState;
 import org.jemule.core.SearchQuery;
 import org.jemule.kad.KadSearchBridge;
 import org.jemule.network.Packet;
@@ -31,6 +32,7 @@ public class SearchHandler {
             log.warn("Invalid search request: empty data");
             return;
         }
+        long searchGeneration = context.getState().beginPendingSearch();
 
         List<FileMetadata> localResults;
         SearchQuery query;
@@ -53,6 +55,7 @@ public class SearchHandler {
         }
 
         CompletableFuture<List<FileMetadata>> remoteResults = startRemoteSearches(context, query, data);
+        boolean deferRemoteResults = false;
         if (remoteResults != null) {
             if (dedupMap.isEmpty()) {
                 long timeoutMs = Math.max(
@@ -63,24 +66,33 @@ public class SearchHandler {
                             remoteResults.get(timeoutMs + 1000, TimeUnit.MILLISECONDS), query);
                 } catch (TimeoutException e) {
                     log.debug("Remote search timed out for query: {}", query);
+                    deferRemoteResults = true;
                 } catch (Exception e) {
                     log.debug("Remote search failed for query {}: {}", query, e.getMessage());
                 }
             } else if (dedupMap.size() >= BATCH_SIZE) {
-                SearchQuery activeQuery = query;
-                remoteResults.thenAccept(results -> addRemoteResultsToPending(context, activeQuery, results));
+                deferRemoteResults = true;
             }
         }
 
         List<FileMetadata> combined = new ArrayList<>(dedupMap.values());
         List<FileMetadata> batch = combined.subList(0, Math.min(combined.size(), BATCH_SIZE));
-        sendSearchResults(context, batch, combined.size() > BATCH_SIZE, out);
-
-        if (combined.size() > BATCH_SIZE) {
-            context.getState().setPendingSearchResults(new ArrayList<>(combined.subList(BATCH_SIZE, combined.size())));
-        } else {
-            context.getState().setPendingSearchResults(null);
+        List<FileMetadata> pending = combined.size() > BATCH_SIZE
+                ? new ArrayList<>(combined.subList(BATCH_SIZE, combined.size()))
+                : List.of();
+        context.getState().initializePendingSearch(searchGeneration, pending, deferRemoteResults);
+        if (deferRemoteResults) {
+            SearchQuery activeQuery = query;
+            remoteResults.whenComplete((results, error) -> {
+                if (error != null) {
+                    log.debug("Remote search failed: {}", error.getMessage());
+                    context.getState().completePendingSearch(searchGeneration, List.of());
+                } else {
+                    context.getState().completePendingSearch(searchGeneration, matchingResults(activeQuery, results));
+                }
+            });
         }
+        sendSearchResults(context, batch, combined.size() > BATCH_SIZE || deferRemoteResults, out);
     }
 
     private CompletableFuture<List<FileMetadata>> startRemoteSearches(ClientContext context, SearchQuery query,
@@ -123,40 +135,15 @@ public class SearchHandler {
         }
     }
 
-    private static void addRemoteResultsToPending(ClientContext context, SearchQuery query,
-                                                  List<FileMetadata> discovered) {
-        if (discovered == null || discovered.isEmpty() || context.getState() == null) return;
-        List<FileMetadata> pending = context.getState().getPendingSearchResults();
-        if (pending == null) return;
-        synchronized (pending) {
-            for (FileMetadata file : discovered) {
-                if (file == null || file.hash() == null || !query.test(file)) continue;
-                boolean exists = pending.stream().anyMatch(result ->
-                        result != null && result.hash() != null && result.hash().equalsIgnoreCase(file.hash()));
-                if (!exists) pending.add(file);
-            }
-        }
+    private static List<FileMetadata> matchingResults(SearchQuery query, List<FileMetadata> discovered) {
+        if (discovered == null || query == null) return List.of();
+        return discovered.stream().filter(file -> file != null && file.hash() != null && query.test(file)).toList();
     }
 
     public void handleQueryMoreResult(ClientContext context, OutputStream out) throws IOException {
-        List<FileMetadata> pending = context.getState().getPendingSearchResults();
-        if (pending == null || pending.isEmpty()) {
-            return;
-        }
-
-        List<FileMetadata> batch;
-        boolean hasMore;
-        synchronized (pending) {
-            batch = new ArrayList<>(pending.subList(0, Math.min(pending.size(), BATCH_SIZE)));
-            if (pending.size() > BATCH_SIZE) {
-                context.getState().setPendingSearchResults(new ArrayList<>(pending.subList(BATCH_SIZE, pending.size())));
-                hasMore = true;
-            } else {
-                context.getState().setPendingSearchResults(null);
-                hasMore = false;
-            }
-        }
-        sendSearchResults(context, batch, hasMore, out);
+        ClientState.PendingSearchBatch pending = context.getState().takePendingSearchBatch(BATCH_SIZE);
+        if (pending == null) return;
+        sendSearchResults(context, pending.results(), pending.moreAvailable(), out);
     }
 
     /**

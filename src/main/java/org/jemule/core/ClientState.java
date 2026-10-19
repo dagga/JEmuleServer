@@ -42,6 +42,8 @@ public final class ClientState {
     private final java.util.Set<String> partialHashes = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private boolean zlibSupported = false;
     private List<FileMetadata> pendingSearchResults;
+    private long pendingSearchGeneration;
+    private boolean pendingSearchLoading;
 
     // Information announced by the client in OP_LOGINREQUEST (ServerConnect::ConnectionEstablished)
     private volatile byte[] userHash = new byte[16];
@@ -116,8 +118,40 @@ public final class ClientState {
     public static final int SRVCAP_REQUESTCRYPT = 0x0400;
     public static final int SRVCAP_REQUIRECRYPT = 0x0800;
 
-    public List<FileMetadata> getPendingSearchResults() { return pendingSearchResults; }
-    public void setPendingSearchResults(List<FileMetadata> results) { this.pendingSearchResults = results; }
+    public record PendingSearchBatch(List<FileMetadata> results, boolean moreAvailable) {}
+
+    public synchronized long beginPendingSearch() {
+        pendingSearchGeneration++;
+        pendingSearchResults = new java.util.ArrayList<>();
+        pendingSearchLoading = false;
+        return pendingSearchGeneration;
+    }
+
+    public synchronized void initializePendingSearch(long generation, List<FileMetadata> results, boolean loading) {
+        if (generation != pendingSearchGeneration) return;
+        pendingSearchResults = new java.util.ArrayList<>(results);
+        pendingSearchLoading = loading;
+    }
+
+    public synchronized void completePendingSearch(long generation, List<FileMetadata> results) {
+        if (generation != pendingSearchGeneration) return;
+        if (pendingSearchResults == null) pendingSearchResults = new java.util.ArrayList<>();
+        for (FileMetadata file : results) {
+            if (file == null || file.hash() == null) continue;
+            boolean exists = pendingSearchResults.stream().anyMatch(result ->
+                    result != null && result.hash() != null && result.hash().equalsIgnoreCase(file.hash()));
+            if (!exists) pendingSearchResults.add(file);
+        }
+        pendingSearchLoading = false;
+    }
+
+    public synchronized PendingSearchBatch takePendingSearchBatch(int batchSize) {
+        if (pendingSearchResults == null || (pendingSearchResults.isEmpty() && !pendingSearchLoading)) return null;
+        int count = Math.min(pendingSearchResults.size(), batchSize);
+        List<FileMetadata> batch = new java.util.ArrayList<>(pendingSearchResults.subList(0, count));
+        pendingSearchResults.subList(0, count).clear();
+        return new PendingSearchBatch(batch, !pendingSearchResults.isEmpty() || pendingSearchLoading);
+    }
 
     public static long ipToLong(InetAddress addr) {
         byte[] b = addr.getAddress();

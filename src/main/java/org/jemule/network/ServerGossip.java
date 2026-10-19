@@ -20,7 +20,9 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
-/** Verified eD2K UDP server peers and their server-list gossip transactions. */
+/**
+ * Verified eD2K UDP server peers and their server-list gossip transactions.
+ */
 final class ServerGossip {
     private static final int PROTOCOL = Packet.PROTOCOL_ED2K & 0xFF;
     private static final int OP_GLOBSERVSTATREQ = 0x96;
@@ -47,12 +49,16 @@ final class ServerGossip {
         }
     }
 
-    record VerifiedPeer(Endpoint endpoint, String name, int udpKey, long verifiedAtMillis) {}
+    record VerifiedPeer(Endpoint endpoint, String name, int udpKey, long verifiedAtMillis) {
+    }
 
-    private enum Stage { STATUS, DESCRIPTION, LIST }
+    private enum Stage {STATUS, DESCRIPTION, LIST}
 
-    private record Pending(Stage stage, int challenge, long startedAtMillis) {}
-    record Status(int udpKey) {}
+    private record Pending(Stage stage, int challenge, long startedAtMillis) {
+    }
+
+    record Status(int udpKey) {
+    }
 
     private final Map<Endpoint, Pending> pending = new ConcurrentHashMap<>();
     private final Map<Endpoint, VerifiedPeer> verified = new ConcurrentHashMap<>();
@@ -72,6 +78,15 @@ final class ServerGossip {
 
     Collection<Endpoint> candidateEndpoints() {
         return List.copyOf(candidates.keySet());
+    }
+
+    int addServerMetCandidates(Collection<Endpoint> endpoints) {
+        int added = 0;
+        for (Endpoint endpoint : endpoints) {
+            if (addCandidate(endpoint)) added++;
+        }
+        if (added > 0) lastProbeAtMillis = 0;
+        return added;
     }
 
     void poll(DatagramSocket socket, long now) {
@@ -256,7 +271,8 @@ final class ServerGossip {
     }
 
     static Status validateStatus(byte[] packet, int challenge) {
-        if (packet.length != 42 || (packet[0] & 0xFF) != PROTOCOL || (packet[1] & 0xFF) != OP_GLOBSERVSTATRES) return null;
+        if (packet.length != 42 || (packet[0] & 0xFF) != PROTOCOL || (packet[1] & 0xFF) != OP_GLOBSERVSTATRES)
+            return null;
         ByteBuffer data = ByteBuffer.wrap(packet).order(ByteOrder.LITTLE_ENDIAN);
         data.position(2);
         if (data.getInt() != challenge) return null;
@@ -276,7 +292,8 @@ final class ServerGossip {
     }
 
     static String validateDescription(byte[] packet, int challenge) {
-        if (packet.length < 6 || (packet[0] & 0xFF) != PROTOCOL || (packet[1] & 0xFF) != OP_SERVER_DESC_RES) return null;
+        if (packet.length < 6 || (packet[0] & 0xFF) != PROTOCOL || (packet[1] & 0xFF) != OP_SERVER_DESC_RES)
+            return null;
         ByteBuffer data = ByteBuffer.wrap(packet).order(ByteOrder.LITTLE_ENDIAN);
         data.position(2);
         if (data.getInt() != challenge || (challenge & 0xFFFF) != 0xF0FF) return null;
@@ -300,7 +317,8 @@ final class ServerGossip {
     }
 
     static List<Endpoint> decodeServerList(byte[] packet) {
-        if (packet.length < 3 || (packet[0] & 0xFF) != PROTOCOL || (packet[1] & 0xFF) != OP_SERVER_LIST_RES) return null;
+        if (packet.length < 3 || (packet[0] & 0xFF) != PROTOCOL || (packet[1] & 0xFF) != OP_SERVER_LIST_RES)
+            return null;
         int count = packet[2] & 0xFF;
         if (packet.length != 3 + count * 6) return null;
         ByteBuffer data = ByteBuffer.wrap(packet, 3, packet.length - 3).order(ByteOrder.LITTLE_ENDIAN);
@@ -392,10 +410,9 @@ final class ServerGossip {
         return peer == null ? 0 : peer.udpKey();
     }
 
-    private void addCandidate(Endpoint endpoint) {
-        if (endpoint != null && !rejected.containsKey(endpoint) && candidates.size() < MAX_PEERS) {
-            candidates.putIfAbsent(endpoint, Boolean.TRUE);
-        }
+    private synchronized boolean addCandidate(Endpoint endpoint) {
+        if (endpoint == null || rejected.containsKey(endpoint) || candidates.size() >= MAX_PEERS) return false;
+        return candidates.putIfAbsent(endpoint, Boolean.TRUE) == null;
     }
 
     private void expirePending(long now) {

@@ -19,7 +19,9 @@
 package org.jemule.config;
 
 import org.junit.jupiter.api.Test;
+
 import java.util.Properties;
+
 import static org.junit.jupiter.api.Assertions.*;
 
 class ServerConfigTest {
@@ -32,6 +34,7 @@ class ServerConfigTest {
         props.setProperty("databasePath", "/tmp/testdb");
         props.setProperty("fakeFileDetectionEnabled", "false");
         props.setProperty("serverPeers", "127.0.0.1:4661,192.0.2.10:4661");
+        props.setProperty("serverMetUrl", "https://example.org/servers.met");
 
         ServerConfig cfg = ServerConfig.fromProperties(props);
 
@@ -40,6 +43,7 @@ class ServerConfigTest {
         assertEquals("/tmp/testdb", cfg.databasePath());
         assertFalse(cfg.fakeFileDetectionEnabled());
         assertEquals("127.0.0.1:4661,192.0.2.10:4661", cfg.serverPeers());
+        assertEquals("https://example.org/servers.met", cfg.serverMetUrl());
 
         // Defaults
         assertEquals(ServerConfig.DEFAULT.maxPacketSize(), cfg.maxPacketSize());
@@ -54,6 +58,7 @@ class ServerConfigTest {
         assertEquals(ServerConfig.DEFAULT.port(), cfg.port());
         assertEquals(ServerConfig.DEFAULT.maxFiles(), cfg.maxFiles());
         assertEquals(0, cfg.adminPort(), "the admin port is disabled by default");
+        assertEquals(ServerConfig.DEFAULT_SERVER_MET_URL, cfg.serverMetUrl());
     }
 
     @Test
@@ -72,11 +77,11 @@ class ServerConfigTest {
 
     @Test
     void testInvalidPort() {
-        assertThrows(IllegalArgumentException.class, () -> 
-            new ServerConfig(0, 1024, 10, 5, 100, 1000, 10, 50, "./db", null, true, 50f, 5, 30, 300, 60, null)
+        assertThrows(IllegalArgumentException.class, () ->
+                new ServerConfig(0, 1024, 10, 5, 100, 1000, 10, 50, "./db", null, true, 50f, 5, 30, 300, 60, null)
         );
-        assertThrows(IllegalArgumentException.class, () -> 
-            new ServerConfig(65536, 1024, 10, 5, 100, 1000, 10, 50, "./db", null, true, 50f, 5, 30, 300, 60, null)
+        assertThrows(IllegalArgumentException.class, () ->
+                new ServerConfig(65536, 1024, 10, 5, 100, 1000, 10, 50, "./db", null, true, 50f, 5, 30, 300, 60, null)
         );
     }
 
@@ -94,8 +99,10 @@ class ServerConfigTest {
     void withPortKeepsServerPeerSeeds() {
         Properties properties = new Properties();
         properties.setProperty("serverPeers", "127.0.0.1:4661");
+        properties.setProperty("serverMetUrl", "https://example.org/servers.met");
         ServerConfig cfg = ServerConfig.fromProperties(properties);
         assertEquals("127.0.0.1:4661", cfg.withPort(4662).serverPeers());
+        assertEquals("https://example.org/servers.met", cfg.withPort(4662).serverMetUrl());
     }
 
     @Test

@@ -97,6 +97,34 @@ class ServerGossipTest {
     }
 
     @Test
+    void parsesServerMetAndMergesCandidatesWithoutReplacingExistingSeeds() throws Exception {
+        ByteBuffer met = ByteBuffer.allocate(1024).order(ByteOrder.LITTLE_ENDIAN);
+        met.put((byte) 0xE0).putInt(3);
+        putServerMetRecord(met, new byte[]{(byte) 192, 0, 2, 1}, 4661);
+        putServerMetRecord(met, new byte[]{(byte) 192, 0, 2, 2}, 4662);
+        putServerMetRecord(met, new byte[]{127, 0, 0, 1}, 4663);
+
+        List<ServerGossip.Endpoint> parsed = ServerMetLoader.parse(
+                java.util.Arrays.copyOf(met.array(), met.position()));
+        ServerGossip gossip = new ServerGossip("192.0.2.1:4661,192.0.2.3:4663");
+        assertEquals(1, gossip.addServerMetCandidates(parsed));
+
+        var candidates = gossip.candidateEndpoints();
+        assertEquals(3, candidates.size());
+        assertTrue(candidates.stream().anyMatch(peer -> peer.address().getHostAddress().equals("192.0.2.1")
+                && peer.tcpPort() == 4661));
+        assertTrue(candidates.stream().anyMatch(peer -> peer.address().getHostAddress().equals("192.0.2.2")
+                && peer.tcpPort() == 4662));
+        assertTrue(candidates.stream().anyMatch(peer -> peer.address().getHostAddress().equals("192.0.2.3")
+                && peer.tcpPort() == 4663));
+    }
+
+    @Test
+    void rejectsMalformedServerMetWithoutReturningPartialCandidates() {
+        assertThrows(java.io.IOException.class, () -> ServerMetLoader.parse(new byte[]{(byte) 0xE0, 1, 0, 0, 0}));
+    }
+
+    @Test
     void verifiesPeerThenExchangesAnObfuscatedServerList() throws Exception {
         try (DatagramSocket local = bindServerUdpSocket(); DatagramSocket peer = bindServerUdpSocket()) {
             local.setSoTimeout(2000);
@@ -233,5 +261,10 @@ class ServerGossipTest {
                 new Tag(Tag.TYPE_STRING, Tag.NAME_SERVERNAME, name),
                 new Tag(Tag.TYPE_STRING, Tag.NAME_DESCRIPTION, description)));
         return java.util.Arrays.copyOf(buffer.array(), buffer.position());
+    }
+
+    private static void putServerMetRecord(ByteBuffer buffer, byte[] address, int port) {
+        buffer.put(address).putShort((short) port);
+        Tag.writeList(buffer, List.of(new Tag(Tag.TYPE_STRING, Tag.NAME_SERVERNAME, "test server")));
     }
 }
