@@ -32,20 +32,19 @@ public final class ChildAbuseFilter {
     private static final String WORD_CHAR = "[\\p{L}\\p{N}@]";
     private static final Pattern SEPARATORS = Pattern.compile("[^\\p{L}\\p{N}@]+");
 
-    private final Pattern banned;
-    private final Pattern minor;
-    private final Pattern sexual;
-    private final Pattern age;
-    private final int maxMinorAge;
+    /** The compiled keyword lists, replaced as a whole by {@link #reload(String)}. */
+    private record Rules(Pattern banned, Pattern minor, Pattern sexual, Pattern age, int maxMinorAge) {
+    }
+
+    private volatile Rules rules;
 
     private ChildAbuseFilter(Properties props) {
-        this.banned = terms(props.getProperty("banned"));
-        this.minor = terms(props.getProperty("minor"));
-        this.sexual = terms(props.getProperty("sexual"));
         String suffixes = alternation(props.getProperty("ageSuffixes"));
-        this.age = suffixes == null ? null
+        Pattern age = suffixes == null ? null
                 : Pattern.compile("(?<!" + WORD_CHAR + ")(\\d{1,3}) ?(?:" + suffixes + ")(?!" + WORD_CHAR + ")");
-        this.maxMinorAge = Integer.parseInt(props.getProperty("maxMinorAge", "17").trim());
+        this.rules = new Rules(terms(props.getProperty("banned")), terms(props.getProperty("minor")),
+                terms(props.getProperty("sexual")), age,
+                Integer.parseInt(props.getProperty("maxMinorAge", "17").trim()));
     }
 
     public static ChildAbuseFilter fromProperties(Properties props) {
@@ -81,19 +80,28 @@ public final class ChildAbuseFilter {
         }
     }
 
+    /**
+     * Replaces the keywords in use with those of {@code path} (the embedded ones if it is null or blank), with the
+     * same fallback as {@link #load(String)}. Files already indexed are not checked again.
+     */
+    public void reload(String path) {
+        this.rules = load(path).rules;
+    }
+
     /** True if the file name advertises child sexual abuse material. */
     public boolean matches(String fileName) {
         if (fileName == null || fileName.isBlank()) return false;
+        Rules current = rules;
         String text = normalize(fileName);
-        if (find(banned, text)) return true;
-        return (find(minor, text) || hasMinorAge(text)) && find(sexual, text);
+        if (find(current.banned(), text)) return true;
+        return (find(current.minor(), text) || hasMinorAge(current, text)) && find(current.sexual(), text);
     }
 
-    private boolean hasMinorAge(String text) {
-        if (age == null) return false;
-        var m = age.matcher(text);
+    private static boolean hasMinorAge(Rules rules, String text) {
+        if (rules.age() == null) return false;
+        var m = rules.age().matcher(text);
         while (m.find()) {
-            if (Integer.parseInt(m.group(1)) <= maxMinorAge) return true;
+            if (Integer.parseInt(m.group(1)) <= rules.maxMinorAge()) return true;
         }
         return false;
     }

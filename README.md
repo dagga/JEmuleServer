@@ -1,9 +1,9 @@
 # JEmuleServer
 
-JEmuleServer is an eMule server written in Java (version 1.2.7).
+JEmuleServer is an eMule server written in Java (version 1.2.8).
 
 Downloads (installers and JAR) are on the [releases page](https://github.com/dagga/JEmuleServer/releases); the changes
-of each version are described in `doc/release-notes-v<version>.md` (latest: [1.2.7](doc/release-notes-v1.2.7.md)).
+of each version are described in `doc/release-notes-v<version>.md` (latest: [1.2.8](doc/release-notes-v1.2.8.md)).
 
 ## Why this project?
 
@@ -27,7 +27,7 @@ Building requires a JDK 21 (Gradle toolchain). To compile the project and genera
 ./gradlew build
 ```
 
-The JAR file will be generated in `build/libs/JEmuleServer-1.2.7.jar`.
+The JAR file will be generated in `build/libs/JEmuleServer-1.2.8.jar`.
 
 ## Installation from the release packages
 
@@ -136,8 +136,10 @@ The server therefore needs to open outgoing TCP connections to the clients.
 The Kad network holds far more files than a single server, but nothing moderates it. JEmuleServer embeds a Kad node
 that brings this content to its clients without exposing them to illicit files:
 
-- **Bootstrap from the clients**: when a HighID client logs in, the node asks its Kad ports (`listenPort + 10` and
-  `4672`) for contacts. No static node list is needed; `kad bootstrap <ip> <port>` adds a node by hand.
+- **Bootstrap from a nodes.dat list and the clients**: at startup the node downloads a contact list from the
+  `kadNodesUrls` sources (refreshed daily, cached next to the database) and sends bootstrap requests to its nodes.
+  When a HighID client logs in, the node also asks its Kad ports (`listenPort + 10` and `4672`) for contacts.
+  `kad bootstrap <ip> <port>` adds a node by hand.
 - **Forked search**: each `OP_SEARCHREQUEST` is answered from the local index and sent at the same time to the 3
   closest Kad contacts (`KADEMLIA2_SEARCH_KEY_REQ`, keyword hashed with MD4).
 - **Filtering**: every file returned by Kad goes through the banned hashes, the [child abuse filter](#child-abuse-filter)
@@ -161,6 +163,7 @@ kadForkSearchEnabled=true
 kadSearchTimeoutSeconds=4
 kadAutoIngestToH2=true
 kadMinSourcesForIngest=1
+kadNodesUrls=https://upd.emule-security.org/nodes.dat,http://www.alldivx.de/nodes/nodes.dat
 ```
 
 The bridge stays compatible with the historical eMule clients: the ed2k client-server protocol is unchanged and the
@@ -174,8 +177,13 @@ and aMule Kad nodes has not been validated yet.
 JEmuleServer includes a built-in web panel and a command-line interface (CLI). The web panel is enabled by default at
 `http://127.0.0.1:8080/` and is bound to loopback only. It shows server status, searchable clients, verified named
 server peers, active filters, potential bot-name matches, persistent hash blocks, and runtime settings. The bot list is
-only a nickname heuristic; it does not verify or automatically block clients. The settings action only changes fake-file
-detection in memory; it does not update `server.properties`.
+only a nickname heuristic; it does not verify or automatically block clients. From the panel you can disconnect a
+client, ban or unban a hash, reload the IP filter, and edit any `server.properties` parameter. Settings whose scope is
+`hot` (limits, timeouts, flood protection, fake-file detection) take effect immediately; `admin` settings rebuild the
+admin interfaces; `restart` settings are written to the file and shown as pending until the next restart, the running server keeps
+its current value. Saving updates the
+file in place (comments and key order are preserved) and **Reload from file** applies external edits without a restart.
+Nothing is applied when a value is invalid.
 
 The web panel has no password: any local user who can reach loopback can administer the server. Do not expose it through
 a reverse proxy, tunnel, or port forward. Set `adminWebPort=0` in `server.properties` to disable it, or change the port
@@ -200,11 +208,19 @@ Available commands:
   and during the last minute.
 - `ban <hash> [reason]`: Bans a file hash (32-char hex) for good: it is stored in the database with its reason and the
   file is removed from the index.
+- `unban <hash>`: Removes a hash from the persistent blacklist.
+- `kick <client ID | nickname | ip>`: Disconnects one client, or every client using that IP, without stopping the server.
 - `peers`: Lists verified server peers and their names.
 - `filters`: Shows active IP and fake-file filters.
+- `filters reload`: Reloads the IP filter from the configured `ipFilterPath` and the child abuse keywords.
 - `bots`: Lists potential bot matches based on nicknames only.
 - `blocks`: Lists persistently blocked file hashes.
-- `settings [fakeFileDetectionEnabled <on|off>]`: Shows runtime settings or toggles fake-file detection (not persisted).
+- `settings`: Shows runtime settings.
+- `settings <key> <value>`: Changes a configuration parameter while the server keeps running. Hot values take effect
+  immediately, admin values rebuild the admin interfaces, and restart values are written to the file and listed as
+  "after restart" until the server is restarted. For example: `settings maxUsers 200000`.
+- `settings reload`: Reloads `server.properties` from disk and applies its changes without restarting.
+- `settings fakeFileDetectionEnabled <on|off>`: Toggles fake-file detection (persisted to the configuration file).
 - `kad status`: Shows the status of the embedded Kademlia node (`DISCONNECTED`, `BOOTSTRAPPING`, `CONNECTED`), its
   node ID, UDP port and number of contacts (`kad` alone does the same).
 - `kad contacts`: Lists the 20 most recently seen Kademlia contacts (ID, address, version, liveness).

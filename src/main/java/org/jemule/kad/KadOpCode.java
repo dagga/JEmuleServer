@@ -19,24 +19,29 @@
 package org.jemule.kad;
 
 /**
- * Kademlia protocol opcodes (primarily Kad2 / protocol 0x3A).
+ * Kademlia opcodes used by the eMule/mule Kad2 protocol, carried under the {@link #KAD2_HEADER}
+ * ({@code OP_KADEMLIAHEADER}) protocol byte.
  */
 public enum KadOpCode {
-    BOOTSTRAP_REQ(0x3A, 0x01),
-    BOOTSTRAP_RES(0x3A, 0x02),
-    HELLO_REQ(0x3A, 0x11),
-    HELLO_RES(0x3A, 0x12),
-    REQ(0x3A, 0x21),               // Find Node request
-    RES(0x3A, 0x22),               // Find Node response
-    SEARCH_KEY_REQ(0x3A, 0x33),    // Keyword search request
-    SEARCH_SOURCE_REQ(0x3A, 0x34), // Source search request
-    SEARCH_NOTES_REQ(0x3A, 0x35),
-    SEARCH_RES(0x3A, 0x3B),        // Search response
-    PUBLISH_KEY_REQ(0x3A, 0x41),
-    PUBLISH_SOURCE_REQ(0x3A, 0x42),
-    PUBLISH_RES(0x3A, 0x4B),
-    PING(0x3A, 0x60),
-    PONG(0x3A, 0x61);
+    BOOTSTRAP_REQ(0xE4, 0x01),
+    BOOTSTRAP_RES(0xE4, 0x09),
+    HELLO_REQ(0xE4, 0x11),
+    HELLO_RES(0xE4, 0x19),
+    HELLO_RES_ACK(0xE4, 0x22),
+    REQ(0xE4, 0x21),               // Find Node request
+    RES(0xE4, 0x29),               // Find Node response
+    SEARCH_KEY_REQ(0xE4, 0x33),    // Keyword search request
+    SEARCH_SOURCE_REQ(0xE4, 0x34), // Source search request
+    SEARCH_NOTES_REQ(0xE4, 0x35),
+    SEARCH_RES(0xE4, 0x3B),        // Search response
+    PUBLISH_KEY_REQ(0xE4, 0x43),
+    PUBLISH_SOURCE_REQ(0xE4, 0x44),
+    PUBLISH_RES(0xE4, 0x4B),
+    PING(0xE4, 0x60),
+    PONG(0xE4, 0x61);
+
+    /** {@code OP_KADEMLIAHEADER}: protocol byte of the eMule/mule Kad2 packets. */
+    public static final byte KAD2_HEADER = (byte) 0xE4;
 
     public final byte protocol;
     public final byte value;

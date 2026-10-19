@@ -123,6 +123,22 @@ public class FakeFileDetector {
             bannedHashes.add(hash.toUpperCase());
         }
     }
+
+    /** Removes a ban, in memory and in the database. Returns true when the hash was banned. */
+    public boolean unban(String hash) {
+        if (hash == null || hash.length() != 32) return false;
+        boolean removed = bannedHashes.remove(hash.toUpperCase());
+        DatabaseManager database = db;
+        if (database != null) {
+            database.removeBannedHash(hash.toUpperCase());
+        }
+        return removed;
+    }
+
+    /** True when the hash is banned (independently of the heuristics switch). */
+    public boolean isBanned(String hash) {
+        return hash != null && hash.length() == 32 && bannedHashes.contains(hash.toUpperCase());
+    }
     
     public void clearBlacklist() {
         bannedHashes.clear();

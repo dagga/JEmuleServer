@@ -347,4 +347,38 @@ public class ServerIntegrationTest {
             testServer.stop();
         }
     }
+
+    @Test
+    public void adminKickClosesTheClientConnection() throws Exception {
+        Assertions.assertTimeoutPreemptively(Duration.ofSeconds(20), () -> {
+            try (Socket s = new Socket()) {
+                s.setSoTimeout(5000);
+                s.connect(new java.net.InetSocketAddress(loopbackHost, serverPort), 5000);
+                InputStream in = s.getInputStream();
+                new Packet(Packet.PROTOCOL_ED2K, OpCode.LOGIN_REQUEST.value,
+                        org.jemule.network.EmuleTestSupport.loginRequest(new byte[16], 4662, "kick-me", 0))
+                        .write(s.getOutputStream(), false);
+                Packet ident = null;
+                for (int i = 0; i < 3; i++) ident = readPacketOrEOF(in);
+                Assertions.assertNotNull(ident, "Connection closed before the end of the handshake");
+
+                boolean kicked = false;
+                for (int i = 0; i < 50 && !kicked; i++) {
+                    kicked = server.kickClient("kick-me");
+                    if (!kicked) Thread.sleep(100);
+                }
+                Assertions.assertTrue(kicked, "The logged-in client was not found");
+
+                try {
+                    while (readPacketOrEOF(in) != null) {
+                        // packets sent before the kick
+                    }
+                } catch (RuntimeException e) {
+                    Assertions.assertFalse(e.getCause() instanceof java.net.SocketTimeoutException,
+                            "The connection was not closed by the kick");
+                }
+                Assertions.assertFalse(server.kickClient("kick-me"), "The client is still connected after the kick");
+            }
+        });
+    }
 }

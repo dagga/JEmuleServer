@@ -19,6 +19,7 @@
 
 package org.jemule;
 
+import org.jemule.config.ConfigFile;
 import org.jemule.config.ServerConfig;
 import org.jemule.core.ClientFactory;
 import org.jemule.network.Server;
@@ -34,7 +35,7 @@ import java.util.Properties;
 
 public class Main {
     private static final Logger log = LoggerFactory.getLogger(Main.class);
-    public static final String VERSION = "1.2.6";
+    public static final String VERSION = "1.2.8";
     /** Server name shown in the clients' server list (ST_SERVERNAME). */
     public static final String SERVER_NAME = "JEmuleServer v" + VERSION + " (no pedo) (https://github.com/dagga/JEmuleServer/)";
     /** Server description shown in the clients' server list (ST_DESCRIPTION). */
@@ -53,14 +54,22 @@ public class Main {
         }
 
         ServerConfig cfg;
+        Path configFile = null;
+        Path configBaseDir = null;
         if (configPath == null && System.getProperty("jpackage.app-path") != null) {
             // Installed with the .deb/.rpm/.exe package and started without a configuration file: the install
             // directory is not writable, keep the configuration and the database in a per-user data directory.
             Path home = dataDirectory();
-            cfg = loadConfig(prepareDataDirectory(home).toString()).withPathsRelativeTo(home);
+            configFile = prepareDataDirectory(home);
+            configBaseDir = home;
+            cfg = loadConfig(configFile.toString()).withPathsRelativeTo(home);
             log.info("Data directory: {}", home);
         } else {
-            cfg = loadConfig(configPath != null ? configPath : "server.properties");
+            String path = configPath != null ? configPath : "server.properties";
+            cfg = loadConfig(path);
+            if (Files.exists(Paths.get(path))) {
+                configFile = Paths.get(path);
+            }
         }
 
         // Override port from CLI if provided as first or second argument
@@ -73,6 +82,9 @@ public class Main {
         
         ClientFactory factory = new ClientFactory();
         Server server = new Server(cfg, factory);
+        if (configFile != null) {
+            server.setConfigFile(new ConfigFile(configFile, configBaseDir));
+        }
         Runtime.getRuntime().addShutdownHook(new Thread(server::stop));
 
         try {

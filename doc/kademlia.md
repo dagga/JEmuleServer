@@ -88,19 +88,22 @@ Kad packets have no length header: `<protocol 1><opcode 1><payload>`, integers i
 
 | Message | Protocol / opcode | Payload | Use |
 | :--- | :---: | :--- | :--- |
-| `BOOTSTRAP_REQ` | `0x3A` / `0x01` | empty | sent |
-| `BOOTSTRAP_RES` | `0x3A` / `0x02` | `<count 2>(<id 16><ip 4><udp 2><tcp 2><version 1>)*` | received |
-| `HELLO_REQ` | `0x3A` / `0x11` | `<id 16><udp port 2><version 1><tag count 1>` | sent (liveness ping) |
-| `HELLO_RES` | `0x3A` / `0x12` | same as `HELLO_REQ` | received |
-| `REQ` | `0x3A` / `0x21` | `<type 1><target 16>` | sent (bucket refresh) |
-| `RES` | `0x3A` / `0x22` | `<target 16><count 1><contacts>` | decoded |
-| `SEARCH_KEY_REQ` | `0x3A` / `0x33` | `<keyword hash 16><start position 2>` | sent |
-| `SEARCH_RES` | `0x3A` / `0x3B` | `<target 16><count 2>(<file hash 16><tag list>)*` | received |
+| `BOOTSTRAP_REQ` | `0xE4` / `0x01` | empty | sent |
+| `BOOTSTRAP_RES` | `0xE4` / `0x09` | `<id 16><tcp port 2><version 1><count 2>(<id 16><ip 4><udp 2><tcp 2><version 1>)*` | received |
+| `HELLO_REQ` | `0xE4` / `0x11` | `<id 16><tcp port 2><version 1><tag count 1>` | sent (liveness ping) |
+| `HELLO_RES` | `0xE4` / `0x19` | same as `HELLO_REQ` | received |
+| `HELLO_RES_ACK` | `0xE4` / `0x22` | `<id 16>` | decoded |
+| `REQ` | `0xE4` / `0x21` | `<type 1><target 16><check id 16>` | sent (bucket refresh) |
+| `RES` | `0xE4` / `0x29` | `<target 16><count 1><contacts>` | decoded |
+| `SEARCH_KEY_REQ` | `0xE4` / `0x33` | `<keyword hash 16><start position 2>` | sent |
+| `SEARCH_RES` | `0xE4` / `0x3B` | `<target 16><count 2>(<file hash 16><tag list>)*` | received |
 
-> **Interoperability**: these values follow the design of SFD 1.2 and are consistent between the server and its
-> tests, but they differ from the Kad2 framing of eMule 0.50a (header `OP_KADEMLIAHEADER` `0xE4`, `BOOTSTRAP_RES`
-> `0x09`, `HELLO_RES` `0x19`, `RES` `0x29`, see [`eMule_Protocol_RetroSpecification.md`](eMule_Protocol_RetroSpecification.md)).
-> Exchanges with real eMule / aMule Kad nodes have not been validated yet.
+> **Interoperability**: the framing follows the Kad2 protocol of eMule / mule (`OP_KADEMLIAHEADER` `0xE4`,
+> `BOOTSTRAP_RES` `0x09`, `HELLO_RES` `0x19`, `RES` `0x29`, see
+> [`eMule_Protocol_RetroSpecification.md`](eMule_Protocol_RetroSpecification.md)). Contact IPv4 addresses are
+> serialized least-significant byte first, like in `nodes.dat`. The payloads stay minimal (no UDP verification
+> key, no obfuscation). Bootstrap and hello responses announce the responder's local TCP port; a bootstrap
+> answer inserts both the responder and the returned contacts into the routing table.
 
 ## 5. Configuration
 
@@ -116,6 +119,7 @@ The keys live in [`server.properties`](../server.properties):
 | `kadSearchTimeoutSeconds` | `4` | Maximum wait for the Kad answers of a cold search. |
 | `kadAutoIngestToH2` | `true` | Stores and indexes the clean Kad files. |
 | `kadMinSourcesForIngest` | `1` | Minimum number of sources for a Kad file to be delivered and stored. |
+| `kadNodesUrls` | eMule Security + alldivx | Comma-separated `nodes.dat` URLs; downloaded at startup, refreshed daily and cached next to the database (empty = disabled). |
 
 Open the Kad UDP port in the firewall (`4672/udp` by default) so that the answers of the Kad nodes reach the server.
 
@@ -123,7 +127,7 @@ Open the Kad UDP port in the firewall (`4672/udp` by default) so that the answer
 
 | Command | Output |
 | :--- | :--- |
-| `kad status` (or `kad`) | Status (`DISCONNECTED`, `BOOTSTRAPPING`, `CONNECTED`), node ID, UDP port, contacts / maximum, bootstrap, forked search and ingestion settings. |
+| `kad status` (or `kad`) | Status (`DISCONNECTED`, `BOOTSTRAPPING`, `CONNECTED`), node ID, UDP port, contacts / maximum, nodes.dat sources, bootstrap, forked search and ingestion settings. |
 | `kad contacts` | The 20 most recently seen contacts: ID, address, Kad version, last seen, liveness (`ALIVE`, `UNANSWERED (n)`, `DEAD`). |
 | `kad bootstrap <ip> <port>` | Sends `BOOTSTRAP_REQ` to the given node. |
 | `kad stats` | Searches forked, active searches, results received, files ingested, illicit files blocked, hashes banned, bootstrap and maintenance counters. |

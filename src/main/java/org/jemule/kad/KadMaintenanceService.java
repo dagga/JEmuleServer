@@ -40,6 +40,8 @@ public class KadMaintenanceService implements AutoCloseable {
 
     private final KadRoutingTable routingTable;
     private final KadUdpService udpService;
+    /** Local eD2K/Kad TCP port advertised in HELLO_REQ (eMule uses the client TCP port, not the UDP port). */
+    private final int localTcpPort;
     private final long checkIntervalMs;
     private final long bucketMaxIdleMs;
     private final long contactMaxIdleMs;
@@ -51,17 +53,23 @@ public class KadMaintenanceService implements AutoCloseable {
     private volatile boolean running = false;
     private Thread maintenanceThread;
 
-    public KadMaintenanceService(KadRoutingTable routingTable, KadUdpService udpService,
+    public KadMaintenanceService(KadRoutingTable routingTable, KadUdpService udpService, int localTcpPort,
                                  long checkIntervalMs, long bucketMaxIdleMs, long contactMaxIdleMs) {
         this.routingTable = Objects.requireNonNull(routingTable, "routingTable cannot be null");
         this.udpService = Objects.requireNonNull(udpService, "udpService cannot be null");
+        this.localTcpPort = localTcpPort;
         this.checkIntervalMs = checkIntervalMs;
         this.bucketMaxIdleMs = bucketMaxIdleMs;
         this.contactMaxIdleMs = contactMaxIdleMs;
     }
 
+    public KadMaintenanceService(KadRoutingTable routingTable, KadUdpService udpService,
+                                 long checkIntervalMs, long bucketMaxIdleMs, long contactMaxIdleMs) {
+        this(routingTable, udpService, 0, checkIntervalMs, bucketMaxIdleMs, contactMaxIdleMs);
+    }
+
     public KadMaintenanceService(KadRoutingTable routingTable, KadUdpService udpService) {
-        this(routingTable, udpService, DEFAULT_CHECK_INTERVAL_MS, DEFAULT_BUCKET_MAX_IDLE_MS, DEFAULT_CONTACT_MAX_IDLE_MS);
+        this(routingTable, udpService, 0, DEFAULT_CHECK_INTERVAL_MS, DEFAULT_BUCKET_MAX_IDLE_MS, DEFAULT_CONTACT_MAX_IDLE_MS);
     }
 
     /**
@@ -108,7 +116,7 @@ public class KadMaintenanceService implements AutoCloseable {
 
     private void pingContact(KadContact contact) {
         try {
-            KadPacket ping = KadPacket.createHelloReq(routingTable.localId(), udpService.getPort(), (byte) 2);
+            KadPacket ping = KadPacket.createHelloReq(routingTable.localId(), localTcpPort, (byte) 2);
             udpService.send(ping, contact.address(), contact.udpPort());
             contact.recordFailure(); // Will be cleared to 0 when HELLO_RES arrives
             pingsSent.incrementAndGet();
@@ -124,7 +132,7 @@ public class KadMaintenanceService implements AutoCloseable {
         List<KadContact> closest = routingTable.findClosest(randomTarget, 3);
         if (closest.isEmpty()) return;
 
-        KadPacket findNode = KadPacket.createFindNodeReq((byte) 0, randomTarget);
+        KadPacket findNode = KadPacket.createFindNodeReq(routingTable.localId(), (byte) 8, randomTarget);
         for (KadContact node : closest) {
             try {
                 udpService.send(findNode, node.address(), node.udpPort());

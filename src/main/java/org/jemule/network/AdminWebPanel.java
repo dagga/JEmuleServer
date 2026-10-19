@@ -21,9 +21,13 @@ package org.jemule.network;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import org.jemule.Main;
+import org.jemule.config.ConfigApplyResult;
+import org.jemule.config.ConfigParameter;
 import org.jemule.config.ServerConfig;
 import org.jemule.core.ClientState;
 import org.jemule.core.DatabaseManager;
+import org.jemule.kad.KadContact;
+import org.jemule.kad.KadNode;
 import org.jemule.security.FakeFileDetector;
 import org.jemule.security.IPFilter;
 import org.slf4j.Logger;
@@ -60,7 +64,7 @@ final class AdminWebPanel implements AutoCloseable {
             th,td{text-align:left;padding:.5rem;border-bottom:1px solid #38505d}input{padding:.5rem;margin:.3rem}
             pre{white-space:pre-wrap}#notice{color:#ffca70}
             </style><body><h1>JEmuleServer admin</h1>
-            <p>Local administration only. Potential bots are identified by nickname heuristic, not verified.</p>
+            <p>Administration only. Potential bots are identified by nickname heuristic, not verified.</p>
             <nav><button data-view="status">Status</button><button data-view="clients">Clients</button>
             <button data-view="peers">Peers</button><button data-view="filters">Filters</button>
             <button data-view="bots">Bots</button><button data-view="blocks">Blocks</button>
@@ -73,23 +77,42 @@ final class AdminWebPanel implements AutoCloseable {
               notice.textContent=''; controls.replaceChildren();
               if(view==='clients'){controls.innerHTML='<input id="query" placeholder="Search nickname, IP, or client ID"><button id="search">Search</button>';
                 controls.querySelector('#search').onclick=()=>load(view,controls.querySelector('#query').value);}
-              else if(view==='blocks'){controls.innerHTML='<input id="hash" placeholder="32-character MD4 hash"><input id="reason" placeholder="Reason"><button id="ban">Ban hash</button>';
-                controls.querySelector('#ban').onclick=async()=>{try{await post('/api/blocks',{hash:controls.querySelector('#hash').value,reason:controls.querySelector('#reason').value});notice.textContent='Hash banned.';load(view)}catch(e){notice.textContent=e.message}}}
-              else if(view==='settings'){controls.innerHTML='<button id="toggle">Toggle fake-file heuristics</button>';
-                controls.querySelector('#toggle').onclick=async()=>{try{const s=await fetch('/api/settings').then(r=>r.json());await post('/api/settings',{fakeFileDetectionEnabled:String(!s.fakeFileDetectionEnabled)});notice.textContent='Setting updated.';load(view)}catch(e){notice.textContent=e.message}}}
+              else if(view==='blocks'){controls.innerHTML='<input id="hash" placeholder="32-character MD4 hash"><input id="reason" placeholder="Reason"><button id="ban">Ban hash</button><button id="unban">Unban hash</button>';
+                controls.querySelector('#ban').onclick=async()=>{try{await post('/api/blocks',{hash:controls.querySelector('#hash').value,reason:controls.querySelector('#reason').value});notice.textContent='Hash banned.';load(view)}catch(e){notice.textContent=e.message}};
+                controls.querySelector('#unban').onclick=async()=>{try{await post('/api/unblock',{hash:controls.querySelector('#hash').value});notice.textContent='Hash unbanned.';load(view)}catch(e){notice.textContent=e.message}}}
+              else if(view==='settings'){controls.innerHTML='<button id="reload">Reload from file</button><button id="save">Save changes</button>';
+                controls.querySelector('#reload').onclick=async()=>{try{const r=await post('/api/settings/reload',{});notice.textContent=summarize(r);load(view)}catch(e){notice.textContent=e.message}};
+                controls.querySelector('#save').onclick=()=>saveSettings();}
+              else if(view==='filters'){controls.innerHTML='<button id="reloadIp">Reload IP filter</button>';
+                controls.querySelector('#reloadIp').onclick=async()=>{try{const r=await post('/api/filters/reload',{});notice.textContent=(r.reloaded?'IP filter reload requested.':'IP filter path is empty.')+' Child abuse keywords reloaded.';load(view)}catch(e){notice.textContent=e.message}}}
               load(view);
             }
-            async function post(path,data){const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams(data)});const x=await r.json();if(!r.ok)throw Error(x.error||r.statusText);return x}
+            function summarize(r){const parts=[];if(r.applied&&r.applied.length)parts.push('applied: '+r.applied.join(', '));if(r.deferred&&r.deferred.length)parts.push('restart required: '+r.deferred.join(', '));if(r.errors&&r.errors.length)parts.push('errors: '+r.errors.join('; '));return parts.join(' | ')||'No change.'}
+            async function post(path,data){const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams(data)});const x=await r.json();if(!r.ok)throw Error(x.error||(x.errors&&x.errors.join('; '))||r.statusText);return x}
             async function load(view,q=''){content.textContent='Loading…';try{
               const r=await fetch('/api/'+view+(view==='clients'&&q?'?q='+encodeURIComponent(q):''));const data=await r.json();if(!r.ok)throw Error(data.error);
-              if(view==='status'||view==='filters'||view==='settings'){content.innerHTML='<table><tbody>'+Object.entries(data).map(([k,v])=>'<tr><th>'+esc(k)+'</th><td>'+esc(v)+'</td></tr>').join('')+'</tbody></table>';return}
+              if(view==='status'||view==='filters'){content.innerHTML='<table><tbody>'+Object.entries(data).map(([k,v])=>'<tr><th>'+esc(k)+'</th><td>'+esc(v)+'</td></tr>').join('')+'</tbody></table>';return}
+              if(view==='settings'){renderSettings(data);return}
               const rows=Array.isArray(data)?data:(data.clients||[]);
               if(view==='clients')notice.textContent='Matching clients: '+data.total+' (showing '+rows.length+'; limit '+data.limit+')';
               if(view==='bots')notice.textContent='Potential bots matched by nickname only: '+rows.length;
               if(!rows.length){content.textContent='No entries.';return}
-              const objectRows=typeof rows[0]==='object'&&rows[0]!==null,keys=objectRows?Object.keys(rows[0]):['value'];
-              content.innerHTML='<table><thead><tr>'+keys.map(k=>'<th>'+esc(k)+'</th>').join('')+'</tr></thead><tbody>'+rows.map(row=>'<tr>'+keys.map(k=>'<td>'+esc(objectRows?row[k]:row)+'</td>').join('')+'</tr>').join('')+'</tbody></table>';
+              content.innerHTML='<table><thead><tr>'+Object.keys(rows[0]).map(k=>'<th>'+esc(k)+'</th>').join('')+'<th>Action</th></tr></thead><tbody>'+
+                rows.map((row,i)=>'<tr>'+Object.keys(rows[0]).map(k=>'<td>'+esc(row[k])+'</td>').join('')+
+                '<td>'+(row.clientId?'<button data-kick="'+esc(row.clientId)+'">Kick</button>':'')+'</td></tr>').join('')+'</tbody></table>';
+              content.querySelectorAll('[data-kick]').forEach(b=>b.onclick=async()=>{try{await post('/api/kick',{clientId:b.dataset.kick});notice.textContent='Client kicked.';load(view,q)}catch(e){notice.textContent=e.message}});
             }catch(e){content.textContent='Request failed: '+e.message}}
+            function renderSettings(list){
+              content.innerHTML='<table><thead><tr><th>Key</th><th>Value</th><th>Scope</th><th>Description</th></tr></thead><tbody>'+
+                list.map(p=>'<tr><th>'+esc(p.key)+'</th><td>'+field(p)+(p.pending!==''?'<br><small>After restart: '+esc(p.pending)+'</small>':'')+'</td><td>'+esc(p.scope)+'</td><td>'+esc(p.description)+'</td></tr>').join('')+'</tbody></table>';
+            }
+            function field(p){const id='set_'+p.key,orig=esc(String(p.value));
+              if(p.type==='BOOLEAN')return '<input type="checkbox" id="'+id+'" data-orig="'+orig+'" '+(p.value?'checked':'')+'>';
+              return '<input id="'+id+'" data-orig="'+orig+'" value="'+orig+'">';}
+            async function saveSettings(){const data={};
+              document.querySelectorAll('#content input[id^=set_]').forEach(el=>{const key=el.id.slice(4);const value=el.type==='checkbox'?String(el.checked):el.value;if(value!==el.dataset.orig)data[key]=value});
+              if(!Object.keys(data).length){notice.textContent='No change.';return}
+              try{const r=await post('/api/settings',data);notice.textContent=summarize(r);if(r.errors&&r.errors.length)return;load('settings')}catch(e){notice.textContent=e.message}}
             document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>show(b.dataset.view));show('status');
             </script></body></html>
             """;
@@ -116,7 +139,7 @@ final class AdminWebPanel implements AutoCloseable {
             bindAddr = InetAddress.getByName("127.0.0.1");
         }
         http = HttpServer.create(new InetSocketAddress(bindAddr, port), 32);
-        executor = Executors.newVirtualThreadPerTaskExecutor();
+        if (executor == null) executor = Executors.newVirtualThreadPerTaskExecutor();
         http.setExecutor(executor);
         http.createContext("/", this::handle);
         http.start();
@@ -198,13 +221,33 @@ final class AdminWebPanel implements AutoCloseable {
                 server.getFileIndex().removeFile(normalized);
                 json(exchange, 200, Map.of("banned", normalized));
             }
-            case "/api/settings" -> {
-                String enabled = form.get("fakeFileDetectionEnabled");
-                if (!"true".equalsIgnoreCase(enabled) && !"false".equalsIgnoreCase(enabled)) {
-                    throw new IllegalArgumentException("fakeFileDetectionEnabled must be true or false");
+            case "/api/unblock" -> {
+                String hash = form.getOrDefault("hash", "").trim();
+                if (!HASH.matcher(hash).matches())
+                    throw new IllegalArgumentException("Hash must contain 32 hexadecimal characters");
+                String normalized = hash.toUpperCase(Locale.ROOT);
+                boolean wasBanned = server.getFakeFileDetector().unban(normalized);
+                json(exchange, 200, Map.of("unbanned", normalized, "wasBanned", wasBanned));
+            }
+            case "/api/settings" -> json(exchange, 200, configResult(server.updateConfig(form)));
+            case "/api/settings/reload" -> json(exchange, 200, configResult(server.reloadConfig()));
+            case "/api/filters/reload" -> {
+                String filterPath = server.getConfig().ipFilterPath();
+                boolean reloaded = filterPath != null && !filterPath.isBlank();
+                if (reloaded) server.reloadIpFilter(filterPath);
+                server.reloadChildAbuseKeywords(server.getConfig().childAbuseKeywordsPath());
+                json(exchange, 200, Map.of("reloaded", reloaded, "path", filterPath == null ? "" : filterPath));
+            }
+            case "/api/kick" -> {
+                String ip = form.getOrDefault("ip", "").trim();
+                if (!ip.isEmpty()) {
+                    json(exchange, 200, Map.of("kicked", server.kickIp(ip), "ip", ip));
+                    return;
                 }
-                server.getFakeFileDetector().setEnabled(Boolean.parseBoolean(enabled));
-                json(exchange, 200, settings());
+                String identifier = form.getOrDefault("clientId",
+                        form.getOrDefault("identifier", "")).trim();
+                if (identifier.isEmpty()) throw new IllegalArgumentException("clientId is required");
+                json(exchange, 200, Map.of("kicked", server.kickClient(identifier) ? 1 : 0, "clientId", identifier));
             }
             default -> sendError(exchange, 404, "Not found");
         }
@@ -256,14 +299,33 @@ final class AdminWebPanel implements AutoCloseable {
     }
 
     private List<Map<String, Object>> peers() {
-        return server.getVerifiedServerPeers().stream()
-                .map(peer -> Map.<String, Object>of(
-                        "name", peer.name(),
-                        "address", peer.endpoint().address().getHostAddress(),
-                        "tcpPort", peer.endpoint().tcpPort(),
-                        "udpPort", peer.endpoint().udpPort(),
-                        "verifiedAt", peer.verifiedAtMillis()
-                )).toList();
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (ServerGossip.VerifiedPeer peer : server.getVerifiedServerPeers()) {
+            Map<String, Object> row = new java.util.LinkedHashMap<>();
+            row.put("name", peer.name());
+            row.put("type", "eD2K server");
+            row.put("address", peer.endpoint().address().getHostAddress());
+            row.put("tcpPort", peer.endpoint().tcpPort());
+            row.put("udpPort", peer.endpoint().udpPort());
+            row.put("kadVersion", null);
+            row.put("lastSeen", peer.verifiedAtMillis());
+            result.add(row);
+        }
+        KadNode kadNode = server.getKadNode();
+        if (kadNode != null) {
+            for (KadContact contact : kadNode.getRoutingTable().getAllContacts()) {
+                Map<String, Object> row = new java.util.LinkedHashMap<>();
+                row.put("name", "Kad node " + contact.id());
+                row.put("type", "Kad contact");
+                row.put("address", contact.address().getHostAddress());
+                row.put("tcpPort", contact.tcpPort());
+                row.put("udpPort", contact.udpPort());
+                row.put("kadVersion", contact.kadVersion());
+                row.put("lastSeen", contact.lastSeen());
+                result.add(row);
+            }
+        }
+        return result;
     }
 
     private Map<String, Object> filters() {
@@ -296,20 +358,37 @@ final class AdminWebPanel implements AutoCloseable {
         return database == null ? List.of() : database.loadBannedHashes();
     }
 
-    private Map<String, Object> settings() {
+    private List<Map<String, Object>> settings() {
         var config = server.getConfig();
+        List<Map<String, Object>> parameters = new ArrayList<>(ConfigParameter.ordered().size());
+        Map<String, String> pending = server.pendingRestart();
+        for (ConfigParameter parameter : ConfigParameter.ordered()) {
+            Object value;
+            if (parameter == ConfigParameter.FAKE_FILE_DETECTION_ENABLED) {
+                value = server.getFakeFileDetector().isEnabled();
+            } else {
+                value = parameter.jsonValue(String.valueOf(config.value(parameter)));
+            }
+            Map<String, Object> entry = new java.util.LinkedHashMap<>();
+            entry.put("key", parameter.key());
+            entry.put("value", value);
+            entry.put("type", parameter.type().name());
+            entry.put("scope", parameter.scope().id());
+            entry.put("scopeLabel", parameter.scope().label());
+            entry.put("description", parameter.description());
+            entry.put("pending", pending.getOrDefault(parameter.key(), ""));
+            parameters.add(entry);
+        }
+        return parameters;
+    }
+
+    /** Serializes an applied/reloaded configuration result for the admin API. */
+    private static Map<String, Object> configResult(ConfigApplyResult result) {
         Map<String, Object> map = new java.util.LinkedHashMap<>();
-        map.put("serverPort", config.port());
-        map.put("maxUsers", config.maxUsers());
-        map.put("maxFiles", config.maxFiles());
-        map.put("maxSearchResults", config.maxSearchResults());
-        map.put("floodMaxRequestsPerSecond", config.floodMaxRequestsPerSecond());
-        map.put("adminConsolePort", config.adminPort());
-        map.put("adminWebPort", config.adminWebPort());
-        map.put("adminBindAddress", config.adminBindAddress());
-        map.put("adminAllowedIps", config.adminAllowedIps());
-        map.put("adminAllowedMacs", config.adminAllowedMacs());
-        map.put("fakeFileDetectionEnabled", server.getFakeFileDetector().isEnabled());
+        map.put("success", result.success());
+        map.put("applied", result.applied());
+        map.put("deferred", result.deferred());
+        map.put("errors", result.errors());
         return map;
     }
 
@@ -452,12 +531,18 @@ final class AdminWebPanel implements AutoCloseable {
         return out.toString();
     }
 
-    @Override
-    public synchronized void close() {
+    /** Stops the listener but keeps the panel reusable for a restart on another port. */
+    synchronized void stop() {
         if (http != null) {
             http.stop(0);
             http = null;
         }
+        log.info("Admin web panel stopped");
+    }
+
+    @Override
+    public synchronized void close() {
+        stop();
         if (executor != null) {
             executor.close();
             executor = null;

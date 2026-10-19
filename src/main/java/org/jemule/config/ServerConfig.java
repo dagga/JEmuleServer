@@ -365,6 +365,57 @@ public record ServerConfig(
     }
 
     /**
+     * Serializes this configuration to the key/value pairs of {@code server.properties}. Keys not listed by
+     * {@link ConfigParameter} are not written.
+     */
+    public java.util.Map<String, String> toProperties() {
+        java.util.Map<String, String> props = new java.util.LinkedHashMap<>();
+        props.put("port", String.valueOf(port));
+        props.put("maxPacketSize", String.valueOf(maxPacketSize));
+        props.put("maxSearchResults", String.valueOf(maxSearchResults));
+        props.put("floodMaxRequestsPerSecond", String.valueOf(floodMaxRequestsPerSecond));
+        props.put("maxUsers", String.valueOf(maxUsers));
+        props.put("maxFiles", String.valueOf(maxFiles));
+        props.put("maxFilesPerUser", String.valueOf(maxFilesPerUser));
+        props.put("maxSourcesPerFile", String.valueOf(maxSourcesPerFile));
+        props.put("databasePath", databasePath);
+        props.put("ipFilterPath", ipFilterPath == null ? "" : ipFilterPath);
+        props.put("fakeFileDetectionEnabled", String.valueOf(fakeFileDetectionEnabled));
+        props.put("cbFailureRateThreshold", String.valueOf(cbFailureRateThreshold));
+        props.put("cbMinimumNumberOfCalls", String.valueOf(cbMinimumNumberOfCalls));
+        props.put("cbWaitDurationInSeconds", String.valueOf(cbWaitDurationInSeconds));
+        props.put("tcpKeepAliveTimeoutInSeconds", String.valueOf(tcpKeepAliveTimeoutInSeconds));
+        props.put("heartbeatIntervalSeconds", String.valueOf(heartbeatIntervalSeconds));
+        props.put("publicIp", publicIp == null ? "" : publicIp);
+        props.put("lowIdCheckTimeoutSeconds", String.valueOf(lowIdCheckTimeoutSeconds));
+        props.put("childAbuseKeywordsPath", childAbuseKeywordsPath == null ? "" : childAbuseKeywordsPath);
+        props.put("adminPort", String.valueOf(adminPort));
+        props.put("adminWebPort", String.valueOf(adminWebPort));
+        props.put("adminBindAddress", adminBindAddress == null ? "" : adminBindAddress);
+        props.put("adminAllowedIps", adminAllowedIps == null ? "" : adminAllowedIps);
+        props.put("adminAllowedMacs", adminAllowedMacs == null ? "" : adminAllowedMacs);
+        props.put("serverPeers", serverPeers == null ? "" : serverPeers);
+        props.put("serverMetUrl", serverMetUrl == null ? "" : serverMetUrl);
+        props.put("kadEnabled", String.valueOf(kad.enabled()));
+        props.put("kadPort", String.valueOf(kad.port()));
+        props.put("kadBootstrapFromClients", String.valueOf(kad.bootstrapFromClients()));
+        props.put("kadMaxRoutingContacts", String.valueOf(kad.maxRoutingContacts()));
+        props.put("kadForkSearchEnabled", String.valueOf(kad.forkSearchEnabled()));
+        props.put("kadSearchTimeoutSeconds", String.valueOf(kad.searchTimeoutSeconds()));
+        props.put("kadAutoIngestToH2", String.valueOf(kad.autoIngestToH2()));
+        props.put("kadMinSourcesForIngest", String.valueOf(kad.minSourcesForIngest()));
+        props.put("kadNodesUrls", kad.nodesUrls() == null ? "" : kad.nodesUrls());
+        return props;
+    }
+
+    /**
+     * The value of one configuration parameter, as it would be written to {@code server.properties}.
+     */
+    public Object value(ConfigParameter parameter) {
+        return toProperties().get(parameter.key());
+    }
+
+    /**
      * Creates a ServerConfig from a Properties object, using DEFAULT values for missing keys.
      */
     public static ServerConfig fromProperties(Properties props) {

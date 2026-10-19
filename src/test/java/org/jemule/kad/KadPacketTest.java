@@ -64,10 +64,16 @@ class KadPacketTest {
         KadContact c2 = new KadContact(KadId.random(), testIp("10.0.0.1"), 4673, 0, (byte) 2);
         List<KadContact> list = List.of(c1, c2);
 
-        KadPacket res = KadPacket.createBootstrapRes(list);
+        KadId responderId = KadId.random();
+        KadPacket res = KadPacket.createBootstrapRes(responderId, 4662, (byte) 2, list);
         assertEquals(KadOpCode.BOOTSTRAP_RES, res.getOpCode());
 
-        List<KadContact> parsed = KadPacket.parseBootstrapRes(res.data());
+        KadPacket.BootstrapRes parsedRes = KadPacket.parseBootstrapRes(res.data());
+        assertNotNull(parsedRes);
+        assertEquals(responderId, parsedRes.responderId());
+        assertEquals(4662, parsedRes.responderTcpPort());
+        assertEquals((byte) 2, parsedRes.responderVersion());
+        List<KadContact> parsed = parsedRes.contacts();
         assertEquals(2, parsed.size());
         assertEquals(c1.id(), parsed.get(0).id());
         assertEquals(c1.address(), parsed.get(0).address());
@@ -88,14 +94,14 @@ class KadPacketTest {
         KadPacket.HelloPayload payload = KadPacket.parseHello(hello.data());
         assertNotNull(payload);
         assertEquals(id, payload.senderId());
-        assertEquals(4672, payload.udpPort());
+        assertEquals(4672, payload.tcpPort());
         assertEquals((byte) 2, payload.kadVersion());
     }
 
     @Test
     void testFindNodeReqAndRes() {
         KadId target = KadId.random();
-        KadPacket req = KadPacket.createFindNodeReq((byte) 0, target);
+        KadPacket req = KadPacket.createFindNodeReq(KadId.random(), (byte) 8, target);
         assertEquals(KadOpCode.REQ, req.getOpCode());
 
         KadContact c = new KadContact(KadId.random(), testIp("8.8.8.8"), 4672, 4662, (byte) 2);

@@ -139,6 +139,20 @@ public class DatabaseManager implements AutoCloseable {
         }
     }
 
+    public void removeBannedHash(String hash) {
+        try {
+            locked(() -> {
+                try (PreparedStatement ps = connection.prepareStatement("DELETE FROM banned_hashes WHERE hash = ?")) {
+                    ps.setString(1, hash.toUpperCase());
+                    ps.executeUpdate();
+                }
+                return null;
+            });
+        } catch (Throwable e) {
+            logger.error("Circuit breaker prevented or caught error during removeBannedHash: {}", e.getMessage());
+        }
+    }
+
     public List<String> loadBannedHashes() {
         try {
             return locked(this::loadBannedHashesInternal);

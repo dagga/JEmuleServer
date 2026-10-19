@@ -24,11 +24,20 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 public class FloodProtector {
-    private final int maxPerSec;
+    private volatile int maxPerSec;
     private final ConcurrentHashMap<InetAddress, TokenBucket> buckets = new ConcurrentHashMap<>();
 
     public FloodProtector(int maxPerSec) {
         this.maxPerSec = maxPerSec;
+    }
+
+    /** Applies a new per-IP rate immediately; buckets already in use pick it up at their next refill. */
+    public void setMaxPerSec(int maxPerSec) {
+        this.maxPerSec = maxPerSec;
+    }
+
+    public int getMaxPerSec() {
+        return maxPerSec;
     }
 
     public boolean allow(InetAddress ip) {
@@ -36,17 +45,17 @@ public class FloodProtector {
         if (buckets.size() > 10000) {
             buckets.entrySet().removeIf(entry -> entry.getValue().isExpired());
         }
-        return buckets.computeIfAbsent(ip, k -> new TokenBucket(maxPerSec)).tryConsume();
+        return buckets.computeIfAbsent(ip, k -> new TokenBucket(this::getMaxPerSec)).tryConsume();
     }
 
     private static class TokenBucket {
-        private final long maxTokens;
+        private final java.util.function.IntSupplier maxTokens;
         private final AtomicLong tokens;
         private final AtomicLong lastRefill;
 
-        TokenBucket(long max) {
-            this.maxTokens = max;
-            this.tokens = new AtomicLong(max);
+        TokenBucket(java.util.function.IntSupplier maxTokens) {
+            this.maxTokens = maxTokens;
+            this.tokens = new AtomicLong(maxTokens.getAsInt());
             this.lastRefill = new AtomicLong(System.nanoTime());
         }
 
@@ -67,7 +76,7 @@ public class FloodProtector {
             long last = lastRefill.get();
             if (now - last >= 1_000_000_000L) {
                 if (lastRefill.compareAndSet(last, now)) {
-                    tokens.set(maxTokens);
+                    tokens.set(maxTokens.getAsInt());
                 }
             }
         }

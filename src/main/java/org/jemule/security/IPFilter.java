@@ -446,6 +446,11 @@ public class IPFilter {
         return blockedRanges.size();
     }
 
+    /** Removes every blocked range, disabling the filter until the next load. */
+    public void clear() {
+        blockedRanges = List.of();
+    }
+
     /**
      * Returns the normalized blocked IPv4 ranges in dotted-decimal form.
      */
