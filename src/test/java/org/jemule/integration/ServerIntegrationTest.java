@@ -377,7 +377,13 @@ public class ServerIntegrationTest {
                     Assertions.assertFalse(e.getCause() instanceof java.net.SocketTimeoutException,
                             "The connection was not closed by the kick");
                 }
-                Assertions.assertFalse(server.kickClient("kick-me"), "The client is still connected after the kick");
+                // The client sees the socket closed before the server thread has unregistered the connection
+                boolean stillConnected = true;
+                for (int i = 0; i < 50 && stillConnected; i++) {
+                    stillConnected = server.kickClient("kick-me");
+                    if (stillConnected) Thread.sleep(100);
+                }
+                Assertions.assertFalse(stillConnected, "The client is still connected after the kick");
             }
         });
     }
