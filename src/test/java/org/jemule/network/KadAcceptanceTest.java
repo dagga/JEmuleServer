@@ -178,9 +178,10 @@ class KadAcceptanceTest {
         for (int i = 0; i < 6; i++) {
             contacts.add(new KadContact(KadId.random(), InetAddress.getByName("198.51.100." + (i + 1)), 4672, 4662, (byte) 8));
         }
-        peer.send(KadPacket.createBootstrapRes(contacts), InetAddress.getLoopbackAddress(), node.getUdpPort());
+        peer.send(KadPacket.createBootstrapRes(KadId.random(), 4662, (byte) 8, contacts),
+                InetAddress.getLoopbackAddress(), node.getUdpPort());
 
-        await(() -> node.getRoutingTable().size() == 6, "returned contacts are inserted into the routing table");
+        await(() -> node.getRoutingTable().size() == 7, "returned contacts are inserted into the routing table");
         // The status is updated once the whole answer is processed
         await(() -> node.status() == KadBootstrapManager.Status.CONNECTED, "CONNECTED from 5 active contacts");
     }

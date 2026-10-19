@@ -26,6 +26,7 @@ Thumbs.db
 /jemule_db.mv.db
 /jemule_db.trace.db
 /ipfilter.dat
+/*.nodes.dat
 /ipfilter.dat.bin
 /ipfilter.dat.trace
 *.bin

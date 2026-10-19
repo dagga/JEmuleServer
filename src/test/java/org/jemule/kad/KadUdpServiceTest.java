@@ -74,7 +74,7 @@ class KadUdpServiceTest {
             KadPacket.HelloPayload payload = KadPacket.parseHello(received.get().data());
             assertNotNull(payload);
             assertEquals(id, payload.senderId());
-            assertEquals(s1.getPort(), payload.udpPort());
+            assertEquals(s1.getPort(), payload.tcpPort());
         }
     }
 

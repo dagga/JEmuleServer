@@ -243,4 +243,70 @@ public class AdminInterfaceTest {
         verify(fakeFileDetector).setEnabled(false);
         assertTrue(outContent.toString().contains("Fake-file detection disabled."));
     }
+
+    @Test
+    void settingsCommandChangesAConfigurationParameter() {
+        org.mockito.Mockito.when(server.updateConfig(java.util.Map.of("maxUsers", "250")))
+                .thenReturn(org.jemule.config.ConfigApplyResult.builder().applied("maxUsers").build());
+
+        admin.handleCommand("settings maxUsers 250");
+
+        verify(server).updateConfig(java.util.Map.of("maxUsers", "250"));
+        assertTrue(outContent.toString().contains("Applied: maxUsers"), outContent.toString());
+    }
+
+    @Test
+    void settingsCommandReportsAnInvalidValue() {
+        org.mockito.Mockito.when(server.updateConfig(java.util.Map.of("maxUsers", "-1")))
+                .thenReturn(org.jemule.config.ConfigApplyResult.builder()
+                        .error("maxUsers must be between 1 and 1000000000, got -1").build());
+
+        admin.handleCommand("settings maxUsers -1");
+
+        assertTrue(outContent.toString().contains("Error: maxUsers must be between"), outContent.toString());
+    }
+
+    @Test
+    void settingsReloadAppliesTheConfigurationFile() {
+        org.mockito.Mockito.when(server.reloadConfig())
+                .thenReturn(org.jemule.config.ConfigApplyResult.builder()
+                        .applied("maxUsers").deferred("port").build());
+
+        admin.handleCommand("settings reload");
+
+        verify(server).reloadConfig();
+        assertTrue(outContent.toString().contains("Applied: maxUsers"), outContent.toString());
+        assertTrue(outContent.toString().contains("Restart required: port"), outContent.toString());
+    }
+
+    @Test
+    void kickDisconnectsAClientByIdentifier() {
+        org.mockito.Mockito.when(server.kickClient("12345")).thenReturn(true);
+
+        admin.handleCommand("kick 12345");
+
+        verify(server).kickClient("12345");
+        assertTrue(outContent.toString().contains("Client 12345 disconnected."), outContent.toString());
+    }
+
+    @Test
+    void kickDisconnectsEveryClientOfAnIpAddress() {
+        org.mockito.Mockito.when(server.kickIp("192.0.2.10")).thenReturn(2);
+
+        admin.handleCommand("kick 192.0.2.10");
+
+        verify(server).kickIp("192.0.2.10");
+        assertTrue(outContent.toString().contains("2 client(s) disconnected."), outContent.toString());
+    }
+
+    @Test
+    void unbanRemovesAHashFromTheBlacklist() {
+        String hash = "1234567890ABCDEF1234567890ABCDEF";
+        org.mockito.Mockito.when(fakeFileDetector.unban(hash)).thenReturn(true);
+
+        admin.handleCommand("unban " + hash);
+
+        verify(fakeFileDetector).unban(hash);
+        assertTrue(outContent.toString().contains("removed from the blacklist"), outContent.toString());
+    }
 }

@@ -4,6 +4,10 @@ import org.jemule.core.ClientRegistry;
 import org.jemule.core.ClientState;
 import org.jemule.core.FileIndex;
 import org.jemule.config.ServerConfig;
+import org.jemule.kad.KadContact;
+import org.jemule.kad.KadId;
+import org.jemule.kad.KadNode;
+import org.jemule.kad.KadRoutingTable;
 import org.jemule.security.FakeFileDetector;
 import org.jemule.security.IPFilter;
 import org.junit.jupiter.api.Test;
@@ -63,6 +67,28 @@ class AdminWebPanelTest {
     }
 
     @Test
+    void peersExposeVerifiedServerPeersAndKadContacts() throws Exception {
+        Server server = mock(Server.class);
+        when(server.getVerifiedServerPeers()).thenReturn(List.of());
+        KadNode kadNode = mock(KadNode.class);
+        KadRoutingTable routingTable = mock(KadRoutingTable.class);
+        KadContact contact = new KadContact(KadId.random(), InetAddress.getLoopbackAddress(), 4672, 4662, (byte) 8);
+        when(kadNode.getRoutingTable()).thenReturn(routingTable);
+        when(routingTable.getAllContacts()).thenReturn(List.of(contact));
+        when(server.getKadNode()).thenReturn(kadNode);
+
+        try (AdminWebPanel panel = new AdminWebPanel(server)) {
+            panel.start(0);
+            URI uri = URI.create("http://127.0.0.1:" + panel.port() + "/api/peers");
+            HttpResponse<String> response = HttpClient.newHttpClient().send(
+                    HttpRequest.newBuilder(uri).GET().build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, response.statusCode());
+            assertTrue(response.body().contains("\"type\":\"Kad contact\""), response.body());
+            assertTrue(response.body().contains("\"udpPort\":4672"), response.body());
+        }
+    }
+
+    @Test
     void rejectsCrossOriginAdministrativeMutations() throws Exception {
         Server server = mock(Server.class);
         FakeFileDetector detector = mock(FakeFileDetector.class);
@@ -89,6 +115,9 @@ class AdminWebPanelTest {
         FakeFileDetector detector = mock(FakeFileDetector.class);
         when(server.getFakeFileDetector()).thenReturn(detector);
         when(detector.isEnabled()).thenReturn(true);
+        when(server.updateConfig(java.util.Map.of("fakeFileDetectionEnabled", "true")))
+                .thenReturn(org.jemule.config.ConfigApplyResult.builder()
+                        .applied("fakeFileDetectionEnabled").build());
 
         try (AdminWebPanel panel = new AdminWebPanel(server)) {
             panel.start(0);
@@ -101,8 +130,94 @@ class AdminWebPanelTest {
                     .build();
             HttpResponse<String> response = HttpClient.newHttpClient().send(request, HttpResponse.BodyHandlers.ofString());
             assertEquals(200, response.statusCode());
-            assertTrue(response.body().contains("\"fakeFileDetectionEnabled\":true"), response.body());
-            verify(detector).setEnabled(true);
+            assertTrue(response.body().contains("\"applied\":[\"fakeFileDetectionEnabled\"]"), response.body());
+            verify(server).updateConfig(java.util.Map.of("fakeFileDetectionEnabled", "true"));
+        }
+    }
+
+    @Test
+    void settingsListsEveryEditableParameter() throws Exception {
+        Server server = mock(Server.class);
+        FakeFileDetector detector = mock(FakeFileDetector.class);
+        when(server.getConfig()).thenReturn(ServerConfig.DEFAULT.withAdminWebPort(0));
+        when(server.getFakeFileDetector()).thenReturn(detector);
+        when(detector.isEnabled()).thenReturn(true);
+
+        try (AdminWebPanel panel = new AdminWebPanel(server)) {
+            panel.start(0);
+            HttpResponse<String> response = HttpClient.newHttpClient().send(
+                    HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + panel.port() + "/api/settings"))
+                            .GET().build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, response.statusCode());
+            for (org.jemule.config.ConfigParameter parameter : org.jemule.config.ConfigParameter.ordered()) {
+                assertTrue(response.body().contains("\"key\":\"" + parameter.key() + "\""), parameter.key());
+            }
+            assertTrue(response.body().contains("\"scope\":\"hot\""), response.body());
+        }
+    }
+
+    @Test
+    void reloadsTheConfigurationFromDisk() throws Exception {
+        Server server = mock(Server.class);
+        when(server.reloadConfig()).thenReturn(org.jemule.config.ConfigApplyResult.builder()
+                .applied("maxUsers").deferred("port").build());
+
+        try (AdminWebPanel panel = new AdminWebPanel(server)) {
+            panel.start(0);
+            URI uri = URI.create("http://127.0.0.1:" + panel.port() + "/api/settings/reload");
+            HttpRequest request = HttpRequest.newBuilder(uri)
+                    .header("Origin", "http://127.0.0.1:" + panel.port())
+                    .header("Content-Type", "application/x-www-form-urlencoded")
+                    .POST(HttpRequest.BodyPublishers.ofString(""))
+                    .build();
+            HttpResponse<String> response = HttpClient.newHttpClient().send(request, HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, response.statusCode());
+            assertTrue(response.body().contains("\"applied\":[\"maxUsers\"]"), response.body());
+            assertTrue(response.body().contains("\"deferred\":[\"port\"]"), response.body());
+            verify(server).reloadConfig();
+        }
+    }
+
+    @Test
+    void sameOriginCanKickAClient() throws Exception {
+        Server server = mock(Server.class);
+        when(server.kickClient("12345")).thenReturn(true);
+
+        try (AdminWebPanel panel = new AdminWebPanel(server)) {
+            panel.start(0);
+            URI uri = URI.create("http://127.0.0.1:" + panel.port() + "/api/kick");
+            HttpRequest request = HttpRequest.newBuilder(uri)
+                    .header("Origin", "http://127.0.0.1:" + panel.port())
+                    .header("Content-Type", "application/x-www-form-urlencoded")
+                    .POST(HttpRequest.BodyPublishers.ofString("clientId=12345"))
+                    .build();
+            HttpResponse<String> response = HttpClient.newHttpClient().send(request, HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, response.statusCode());
+            assertTrue(response.body().contains("\"kicked\":1"), response.body());
+            verify(server).kickClient("12345");
+        }
+    }
+
+    @Test
+    void sameOriginCanUnbanAHash() throws Exception {
+        Server server = mock(Server.class);
+        FakeFileDetector detector = mock(FakeFileDetector.class);
+        when(server.getFakeFileDetector()).thenReturn(detector);
+        String hash = "0123456789ABCDEF0123456789ABCDEF";
+        when(detector.unban(hash)).thenReturn(true);
+
+        try (AdminWebPanel panel = new AdminWebPanel(server)) {
+            panel.start(0);
+            URI uri = URI.create("http://127.0.0.1:" + panel.port() + "/api/unblock");
+            HttpRequest request = HttpRequest.newBuilder(uri)
+                    .header("Origin", "http://127.0.0.1:" + panel.port())
+                    .header("Content-Type", "application/x-www-form-urlencoded")
+                    .POST(HttpRequest.BodyPublishers.ofString("hash=" + hash))
+                    .build();
+            HttpResponse<String> response = HttpClient.newHttpClient().send(request, HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, response.statusCode());
+            assertTrue(response.body().contains("\"unbanned\":\"" + hash + "\""), response.body());
+            verify(detector).unban(hash);
         }
     }
 

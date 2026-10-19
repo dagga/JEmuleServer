@@ -20,6 +20,9 @@
 package org.jemule.network;
 
 import org.jemule.Main;
+import org.jemule.config.ConfigApplyResult;
+import org.jemule.config.ConfigFile;
+import org.jemule.config.ConfigParameter;
 import org.jemule.config.ServerConfig;
 import org.jemule.core.*;
 import org.jemule.protocol.Tag;
@@ -49,6 +52,8 @@ import java.nio.file.Path;
 import java.sql.SQLException;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
+import java.util.Properties;
 import java.util.Arrays;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -60,7 +65,8 @@ import java.util.concurrent.TimeUnit;
  */
 public class Server {
     private static final Logger log = LoggerFactory.getLogger(Server.class);
-    private final ServerConfig config;
+    private volatile ServerConfig config;
+    private volatile ConfigFile configFile;
     private final ServerGossip serverGossip;
     private final ServerSearchBridge serverSearchBridge;
     private final ClientRegistry registry = new ClientRegistry();
@@ -100,8 +106,14 @@ public class Server {
     private final EventStatistics eventStatistics = new EventStatistics();
     private final ClientFactory clientFactory;
     private final AdminInterface admin;
-    private final AdminWebPanel adminWebPanel;
-    private final AdminAccessFilter adminAccessFilter;
+    private volatile AdminWebPanel adminWebPanel;
+    private volatile AdminAccessFilter adminAccessFilter;
+    private volatile int boundAdminWebPort;
+    private volatile boolean stopAdminWeb;
+    private volatile ServerSocket adminSocket;
+    private final java.util.Set<ClientHandler> connections = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private final Map<String, String> pendingRestart = new java.util.concurrent.ConcurrentHashMap<>();
+    private final ChildAbuseFilter abuseFilter;
     private final InetAddress publicIp;
     private final KadNode kadNode;
     private volatile KadSearchBridge kadSearchBridge;
@@ -191,12 +203,13 @@ public class Server {
         }
 
         this.db = dbMgr;
-        ChildAbuseFilter abuseFilter = ChildAbuseFilter.load(config.childAbuseKeywordsPath());
+        this.abuseFilter = ChildAbuseFilter.load(config.childAbuseKeywordsPath());
         this.fileIndex = new FileIndex(db, eventManager, abuseFilter);
         this.serverSearchBridge = new ServerSearchBridge(serverGossip::verifiedPeers,
                 () -> boundUdpSockets.get(config.port() + 4), fileIndex, fakeFileDetector);
         this.kadNode = config.kad().enabled()
-                ? new KadNode(config.kad(), config.port(), db, fileIndex, abuseFilter, fakeFileDetector)
+                ? new KadNode(config.kad(), config.port(), db, fileIndex, abuseFilter, fakeFileDetector,
+                        kadNodesCachePath(config))
                 : null;
         this.adminAccessFilter = new AdminAccessFilter(config.adminAllowedIps(), config.adminAllowedMacs());
         this.admin = new AdminInterface(this, registry, fileIndex, ipFilter, fakeFileDetector);
@@ -213,6 +226,17 @@ public class Server {
             md5 = new byte[16];
         }
         System.arraycopy(md5, 0, serverHash, 0, 16);
+    }
+
+    /** Cache of the downloaded Kad nodes.dat list, kept next to the H2 database when its path is a real file. */
+    private static java.nio.file.Path kadNodesCachePath(ServerConfig config) {
+        String path = config.databasePath();
+        if (path == null || path.isBlank() || path.trim().startsWith("mem:")) return null;
+        try {
+            return java.nio.file.Path.of(path + ".nodes.dat");
+        } catch (RuntimeException e) {
+            return null;
+        }
     }
 
     private IPFilterUpdater createIpFilterUpdater(String filterPath) {
@@ -308,12 +332,360 @@ public class Server {
         return config;
     }
 
+    /** The configuration currently in effect, for the admin interfaces of other packages. */
+    public ServerConfig configSnapshot() {
+        return config;
+    }
+
+    /** The file the configuration was loaded from and is written back to, or null when the server has none. */
+    public ConfigFile getConfigFile() {
+        return configFile;
+    }
+
+    /** Sets the configuration file used by {@code reloadConfig()} and by the admin edits. */
+    public void setConfigFile(ConfigFile configFile) {
+        this.configFile = configFile;
+    }
+
+    AdminWebPanel getAdminWebPanel() {
+        return adminWebPanel;
+    }
+
     List<ServerGossip.VerifiedPeer> getVerifiedServerPeers() {
         return List.copyOf(serverGossip.verifiedPeers());
     }
 
     int getAdminWebPort() {
-        return adminWebPanel.port();
+        AdminWebPanel panel = adminWebPanel;
+        return panel == null ? 0 : panel.port();
+    }
+
+    /** The port the web admin panel is currently listening on (0 when it is disabled). */
+    public int adminWebPort() {
+        return getAdminWebPort();
+    }
+
+    /**
+     * Applies new configuration values while the server keeps running and writes them to the configuration file.
+     * Values whose scope is {@link ConfigParameter.Scope#RESTART} are written but the running server keeps its current
+     * value until the next start; they are listed by {@link #pendingRestart()}. An invalid value is reported as an
+     * error and leaves both the configuration and the file unchanged.
+     *
+     * @param values raw values indexed by their {@code server.properties} key
+     */
+    public synchronized ConfigApplyResult updateConfig(Map<String, String> values) {
+        ConfigApplyResult.Builder result = ConfigApplyResult.builder();
+        Map<String, String> normalized = new java.util.LinkedHashMap<>();
+        for (Map.Entry<String, String> entry : values.entrySet()) {
+            ConfigParameter parameter = ConfigParameter.byKey(entry.getKey());
+            if (parameter == null) {
+                result.error("Unknown configuration key: " + entry.getKey());
+                continue;
+            }
+            try {
+                parameter.validate(entry.getValue());
+                normalized.put(parameter.key(), parameter.normalize(entry.getValue()));
+            } catch (IllegalArgumentException e) {
+                result.error(e.getMessage());
+            }
+        }
+        if (!result.build().success()) {
+            return result.build();
+        }
+
+        Properties target = new Properties();
+        config.toProperties().forEach(target::setProperty);
+        normalized.forEach(target::setProperty);
+        ServerConfig requested;
+        try {
+            requested = resolvePaths(ServerConfig.fromProperties(target));
+        } catch (RuntimeException e) {
+            return result.error("Invalid configuration: " + e.getMessage()).build();
+        }
+
+        ConfigFile file = configFile;
+        if (file != null) {
+            try {
+                file.update(normalized);
+            } catch (IOException e) {
+                log.error("Could not write the configuration to {}: {}", file.path(), e.getMessage());
+                return result.error("Could not write " + file.path() + ": " + e.getMessage()).build();
+            }
+        }
+        apply(requested, normalized.keySet(), result);
+        log.info("Configuration updated: {}", result.build().summary());
+        return result.build();
+    }
+
+    /**
+     * Applies the configuration file as it is now on disk, with the same scopes as {@link #updateConfig(Map)}. A
+     * file holding an invalid value is rejected as a whole.
+     */
+    public synchronized ConfigApplyResult reloadConfig() {
+        ConfigFile file = configFile;
+        if (file == null) {
+            return ConfigApplyResult.builder().error("No configuration file is associated with this server").build();
+        }
+        if (!file.exists()) {
+            return ConfigApplyResult.builder().error("Configuration file not found: " + file.path()).build();
+        }
+        ConfigApplyResult.Builder result = ConfigApplyResult.builder();
+        Properties loaded;
+        try {
+            loaded = file.load();
+        } catch (IOException e) {
+            return result.error("Could not reload " + file.path() + ": " + e.getMessage()).build();
+        }
+        for (ConfigParameter parameter : ConfigParameter.ordered()) {
+            String value = loaded.getProperty(parameter.key());
+            if (value == null) continue;
+            try {
+                parameter.validate(value);
+            } catch (IllegalArgumentException e) {
+                result.error(e.getMessage());
+            }
+        }
+        if (!result.build().success()) {
+            return result.build();
+        }
+        ServerConfig requested;
+        try {
+            requested = resolvePaths(ServerConfig.fromProperties(loaded));
+        } catch (RuntimeException e) {
+            return result.error("Could not reload " + file.path() + ": " + e.getMessage()).build();
+        }
+        apply(requested, requested.toProperties().keySet(), result);
+        log.info("Configuration reloaded from {}: {}", file.path(),
+                result.build().summary().isEmpty() ? "no change" : result.build().summary());
+        return result.build();
+    }
+
+    /** Values written to the configuration file that the running server will only use after a restart. */
+    public Map<String, String> pendingRestart() {
+        return Map.copyOf(pendingRestart);
+    }
+
+    private ServerConfig resolvePaths(ServerConfig requested) {
+        ConfigFile file = configFile;
+        return file == null ? requested : file.resolve(requested);
+    }
+
+    /**
+     * Makes the hot and admin parameters of {@code requested} the running configuration and records its other
+     * changed values as pending until the next restart.
+     */
+    private void apply(ServerConfig requested, java.util.Set<String> keys, ConfigApplyResult.Builder result) {
+        ServerConfig previous = config;
+        Map<String, String> running = previous.toProperties();
+        Map<String, String> wanted = requested.toProperties();
+        Properties effective = new Properties();
+        running.forEach(effective::setProperty);
+        java.util.Set<String> changed = new java.util.LinkedHashSet<>();
+        for (String key : keys) {
+            ConfigParameter parameter = ConfigParameter.byKey(key);
+            if (parameter == null) continue;
+            String value = wanted.get(parameter.key());
+            boolean same = parameter.sameValue(running.get(parameter.key()), value);
+            if (parameter.scope() == ConfigParameter.Scope.RESTART) {
+                if (same) {
+                    pendingRestart.remove(parameter.key());
+                } else {
+                    pendingRestart.put(parameter.key(), value);
+                    result.deferred(parameter.key());
+                }
+            } else if (!same) {
+                effective.setProperty(parameter.key(), value);
+                changed.add(parameter.key());
+            }
+        }
+        if (changed.isEmpty()) return;
+        ServerConfig updated = ServerConfig.fromProperties(effective);
+        this.config = updated;
+
+        if (changed.contains("floodMaxRequestsPerSecond")) {
+            floodProtector.setMaxPerSec(updated.floodMaxRequestsPerSecond());
+        }
+        if (changed.contains("fakeFileDetectionEnabled")) {
+            fakeFileDetector.setEnabled(updated.fakeFileDetectionEnabled());
+        }
+        if (changed.contains("ipFilterPath")) {
+            reloadIpFilter(updated.ipFilterPath());
+        }
+        if (changed.contains("childAbuseKeywordsPath")) {
+            reloadChildAbuseKeywords(updated.childAbuseKeywordsPath());
+        }
+        if (changed.stream().anyMatch(key -> ConfigParameter.byKey(key).scope() == ConfigParameter.Scope.ADMIN)) {
+            rebuildAdminAccess(previous, updated);
+        }
+        changed.forEach(result::applied);
+    }
+
+    /**
+     * Rebuilds the admin access filter and restarts the web panel when its port or bind address changed. The panel is
+     * always stopped when {@code adminWebPort} becomes 0.
+     */
+    private void rebuildAdminAccess(ServerConfig previous, ServerConfig updated) {
+        this.adminAccessFilter = new AdminAccessFilter(updated.adminAllowedIps(), updated.adminAllowedMacs());
+        boolean bindChanged = !java.util.Objects.equals(previous.adminBindAddress(), updated.adminBindAddress());
+        if (previous.adminPort() != updated.adminPort() || bindChanged) {
+            restartAdminConsole(updated.adminPort());
+        }
+        AdminWebPanel panel = adminWebPanel;
+        boolean portChanged = previous.adminWebPort() != updated.adminWebPort();
+        if (updated.adminWebPort() == 0) {
+            if (panel != null) {
+                adminWebPanel = null;
+                boundAdminWebPort = 0;
+                afterAdminResponse(() -> {
+                    panel.close();
+                    log.info("Web admin panel disabled");
+                });
+            }
+            return;
+        }
+        if (panel == null) {
+            adminWebPanel = new AdminWebPanel(this);
+            boundAdminWebPort = 0;
+            startWebPanel(adminWebPanel, updated.adminWebPort());
+            return;
+        }
+        if (portChanged || bindChanged) {
+            afterAdminResponse(() -> {
+                panel.stop();
+                startWebPanel(panel, updated.adminWebPort());
+            });
+        }
+    }
+
+    /**
+     * Runs a web panel restart shortly after the current request: the change may come from the panel itself, whose
+     * answer must be sent before its listener is stopped.
+     */
+    private static void afterAdminResponse(Runnable action) {
+        Thread.ofVirtual().name("AdminWebRestart").start(() -> {
+            try {
+                Thread.sleep(500);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            action.run();
+        });
+    }
+
+    /** Closes the TCP admin console and starts a new one when its port is not 0. */
+    private void restartAdminConsole(int newPort) {
+        ServerSocket socket = adminSocket;
+        adminSocket = null;
+        if (socket != null) {
+            try {
+                socket.close();
+            } catch (IOException e) {
+                log.debug("Error closing the admin console: {}", e.getMessage());
+            }
+        }
+        if (newPort > 0) {
+            Thread.ofVirtual().name("AdminPort").start(this::serveAdminPort);
+        }
+    }
+
+    private void startWebPanel(AdminWebPanel panel, int port) {
+        stopAdminWeb = false;
+        Thread.ofVirtual().name("AdminWebSupervisor").start(() -> {
+            while (running && !stopAdminWeb) {
+                try {
+                    panel.start(port);
+                    boundAdminWebPort = panel.port();
+                    return;
+                } catch (IOException e) {
+                    log.error("Admin web panel port {} unavailable (retrying in 5s): {}", port, e.getMessage());
+                    try {
+                        Thread.sleep(5000);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                }
+            }
+        });
+    }
+
+    /** Reloads the IP filter from the given path; an empty path disables the filter and its updates. */
+    public void reloadIpFilter(String path) {
+        if (path == null || path.isBlank()) {
+            ipFilter.clear();
+            log.info("IP filter disabled (empty ipFilterPath)");
+            return;
+        }
+        executor.submit(() -> {
+            try {
+                ipFilter.loadFromFile(path);
+            } catch (RuntimeException e) {
+                log.error("Could not reload IP filter from {}: {}", path, e.getMessage());
+            } catch (Exception e) {
+                log.error("Could not reload IP filter from {}: {}", path, e.getMessage());
+            }
+        });
+    }
+
+    /** Disconnects one client by its numeric client ID, or by nickname when it does not match an ID. */
+    public boolean kickClient(String identifier) {
+        if (identifier == null || identifier.isBlank()) return false;
+        String wanted = identifier.trim();
+        long id = -1;
+        try {
+            id = Long.parseUnsignedLong(wanted);
+        } catch (NumberFormatException ignored) {
+        }
+        boolean kicked = false;
+        for (ClientState client : registry.getAllClients()) {
+            boolean match = id >= 0 ? client.clientId() == id : wanted.equalsIgnoreCase(client.nickname());
+            if (match && disconnectClient(client)) {
+                kicked = true;
+            }
+        }
+        return kicked;
+    }
+
+    /** Disconnects every client whose remote address matches the given IP address. */
+    public int kickIp(String ip) {
+        if (ip == null || ip.isBlank()) return 0;
+        int kicked = 0;
+        for (ClientState client : registry.getAllClients()) {
+            if (client.address().getHostAddress().equals(ip.trim()) && disconnectClient(client)) {
+                kicked++;
+            }
+        }
+        return kicked;
+    }
+
+    /** Closes the connection of the client; false when no open connection belongs to it. */
+    private boolean disconnectClient(ClientState client) {
+        boolean found = false;
+        for (ClientHandler handler : connections) {
+            if (handler.matches(client)) {
+                handler.disconnectNow();
+                found = true;
+            }
+        }
+        if (found) {
+            log.info("Admin kick: client {} ({}) disconnected", client.nickname(),
+                    Long.toUnsignedString(client.clientId()));
+        }
+        return found;
+    }
+
+    void registerConnection(ClientHandler handler) {
+        connections.add(handler);
+    }
+
+    void unregisterConnection(ClientHandler handler) {
+        connections.remove(handler);
+    }
+
+    /** Reloads the child-abuse keyword list (the embedded one for an empty path). Only new publications are checked. */
+    public void reloadChildAbuseKeywords(String path) {
+        abuseFilter.reload(path);
+        log.info("Child abuse keywords reloaded from {}", path == null || path.isBlank() ? "the embedded list" : path);
     }
 
     private void setupDefaultListeners() {
@@ -514,11 +886,7 @@ public class Server {
             Thread.ofVirtual().name("AdminPort").start(this::serveAdminPort);
         }
         if (config.adminWebPort() > 0) {
-            try {
-                adminWebPanel.start(config.adminWebPort());
-            } catch (IOException e) {
-                log.error("Admin web panel port {} unavailable: {}", config.adminWebPort(), e.getMessage());
-            }
+            startWebPanel(adminWebPanel, config.adminWebPort());
         }
     }
 
@@ -527,17 +895,28 @@ public class Server {
      * Filtered at application level by {@link AdminAccessFilter}.
      */
     private void serveAdminPort() {
+        ServerConfig current = config;
+        int port = current.adminPort();
+        if (port <= 0) return;
         InetAddress bindAddr;
         try {
-            bindAddr = InetAddress.getByName(config.adminBindAddress());
+            bindAddr = InetAddress.getByName(current.adminBindAddress());
         } catch (IOException e) {
-            log.error("Invalid adminBindAddress {}: {}", config.adminBindAddress(), e.getMessage());
+            log.error("Invalid adminBindAddress {}: {}", current.adminBindAddress(), e.getMessage());
             bindAddr = InetAddress.getLoopbackAddress();
         }
-        try (ServerSocket adminSocket = new ServerSocket(config.adminPort(), 5, bindAddr)) {
-            log.info("Admin console listening on {}:{}", adminSocket.getInetAddress().getHostAddress(), config.adminPort());
-            while (running) {
-                Socket s = adminSocket.accept();
+        ServerSocket socket;
+        try {
+            socket = new ServerSocket(port, 5, bindAddr);
+        } catch (IOException e) {
+            log.error("Admin port {} unavailable: {}", port, e.getMessage());
+            return;
+        }
+        adminSocket = socket;
+        try (socket) {
+            log.info("Admin console listening on {}:{}", socket.getInetAddress().getHostAddress(), port);
+            while (running && adminSocket == socket) {
+                Socket s = socket.accept();
                 if (!adminAccessFilter.isAllowed(s.getInetAddress())) {
                     log.warn("Admin connection refused from {}: unauthorized IP or MAC", s.getRemoteSocketAddress());
                     try {
@@ -557,7 +936,11 @@ public class Server {
                 });
             }
         } catch (IOException e) {
-            log.error("Admin port {} unavailable: {}", config.adminPort(), e.getMessage());
+            if (running && adminSocket == socket) {
+                log.error("Admin port {} failed: {}", port, e.getMessage());
+            }
+        } finally {
+            if (adminSocket == socket) adminSocket = null;
         }
     }
 
@@ -830,7 +1213,18 @@ public class Server {
      */
     public void stop() {
         running = false;
-        adminWebPanel.close();
+        stopAdminWeb = true;
+        ServerSocket consoleSocket = adminSocket;
+        adminSocket = null;
+        if (consoleSocket != null) {
+            try {
+                consoleSocket.close();
+            } catch (IOException e) {
+                log.debug("Error closing the admin console: {}", e.getMessage());
+            }
+        }
+        AdminWebPanel panel = adminWebPanel;
+        if (panel != null) panel.close();
         serverSearchBridge.close();
         if (ipFilterUpdater != null) ipFilterUpdater.close();
         kadSearchBridge = null;

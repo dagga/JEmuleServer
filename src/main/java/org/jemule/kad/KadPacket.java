@@ -32,12 +32,12 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * Represents a UDP packet in the Kademlia protocol (Kad1: 0x39, Kad2: 0x3A).
- * Handles encoding, decoding, and building standard Kad2 messages.
+ * Represents a UDP packet in the Kademlia protocol. The embedded node speaks the eMule/mule Kad2 framing:
+ * {@code OP_KADEMLIAHEADER} (0xE4) followed by the opcode and the little-endian payload.
  */
 public final class KadPacket {
     public static final byte PROTOCOL_KAD1 = (byte) 0x39;
-    public static final byte PROTOCOL_KAD2 = (byte) 0x3A;
+    public static final byte PROTOCOL_KAD2 = KadOpCode.KAD2_HEADER;
 
     private final byte protocol;
     private final byte opCode;
@@ -113,11 +113,17 @@ public final class KadPacket {
     }
 
     /**
-     * Creates a KADEMLIA2_BOOTSTRAP_RES packet containing a list of contacts.
+     * Creates a KADEMLIA2_BOOTSTRAP_RES packet: the responder identity (ID, TCP port, Kad version) followed by
+     * the list of contacts.
      */
-    public static KadPacket createBootstrapRes(List<KadContact> contacts) {
+    public static KadPacket createBootstrapRes(KadId localId, int localTcpPort, byte kadVersion,
+                                               List<KadContact> contacts) {
+        Objects.requireNonNull(localId, "localId cannot be null");
         Objects.requireNonNull(contacts, "contacts cannot be null");
-        ByteBuffer buf = ByteBuffer.allocate(2 + contacts.size() * 25).order(ByteOrder.LITTLE_ENDIAN);
+        ByteBuffer buf = ByteBuffer.allocate(16 + 2 + 1 + 2 + contacts.size() * 25).order(ByteOrder.LITTLE_ENDIAN);
+        buf.put(localId.getBytes());
+        buf.putShort((short) localTcpPort);
+        buf.put(kadVersion);
         buf.putShort((short) contacts.size());
         for (KadContact c : contacts) {
             writeContact(buf, c);
@@ -127,14 +133,22 @@ public final class KadPacket {
         return new KadPacket(KadOpCode.BOOTSTRAP_RES, data);
     }
 
+    /** Identity announced by a KADEMLIA2_BOOTSTRAP_RES, with the contacts it carries. */
+    public record BootstrapRes(KadId responderId, int responderTcpPort, byte responderVersion,
+                               List<KadContact> contacts) {}
+
     /**
-     * Parses a KADEMLIA2_BOOTSTRAP_RES packet into a list of contacts.
+     * Parses a KADEMLIA2_BOOTSTRAP_RES packet, or returns null when it is malformed.
      */
-    public static List<KadContact> parseBootstrapRes(byte[] data) {
-        if (data == null || data.length < 2) {
-            return List.of();
+    public static BootstrapRes parseBootstrapRes(byte[] data) {
+        if (data == null || data.length < 21) {
+            return null;
         }
         ByteBuffer buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN);
+        byte[] idBytes = new byte[16];
+        buf.get(idBytes);
+        int tcpPort = Short.toUnsignedInt(buf.getShort());
+        byte kadVersion = buf.get();
         int count = Short.toUnsignedInt(buf.getShort());
         List<KadContact> result = new ArrayList<>(Math.min(count, 100));
         for (int i = 0; i < count && buf.remaining() >= 25; i++) {
@@ -143,16 +157,16 @@ public final class KadPacket {
                 result.add(contact);
             }
         }
-        return result;
+        return new BootstrapRes(new KadId(idBytes), tcpPort, kadVersion, result);
     }
 
     /**
      * Creates a KADEMLIA2_HELLO_REQ packet.
      */
-    public static KadPacket createHelloReq(KadId senderId, int senderUdpPort, byte kadVersion) {
+    public static KadPacket createHelloReq(KadId senderId, int senderTcpPort, byte kadVersion) {
         ByteBuffer buf = ByteBuffer.allocate(32).order(ByteOrder.LITTLE_ENDIAN);
         buf.put(senderId.getBytes());
-        buf.putShort((short) senderUdpPort);
+        buf.putShort((short) senderTcpPort);
         buf.put(kadVersion);
         buf.put((byte) 0); // 0 tags
         byte[] data = new byte[buf.position()];
@@ -163,10 +177,10 @@ public final class KadPacket {
     /**
      * Creates a KADEMLIA2_HELLO_RES packet.
      */
-    public static KadPacket createHelloRes(KadId senderId, int senderUdpPort, byte kadVersion) {
+    public static KadPacket createHelloRes(KadId senderId, int senderTcpPort, byte kadVersion) {
         ByteBuffer buf = ByteBuffer.allocate(32).order(ByteOrder.LITTLE_ENDIAN);
         buf.put(senderId.getBytes());
-        buf.putShort((short) senderUdpPort);
+        buf.putShort((short) senderTcpPort);
         buf.put(kadVersion);
         buf.put((byte) 0); // 0 tags
         byte[] data = new byte[buf.position()];
@@ -174,7 +188,7 @@ public final class KadPacket {
         return new KadPacket(KadOpCode.HELLO_RES, data);
     }
 
-    public record HelloPayload(KadId senderId, int udpPort, byte kadVersion) {}
+    public record HelloPayload(KadId senderId, int tcpPort, byte kadVersion) {}
 
     /**
      * Parses a KADEMLIA2_HELLO_REQ or KADEMLIA2_HELLO_RES payload.
@@ -186,18 +200,21 @@ public final class KadPacket {
         ByteBuffer buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN);
         byte[] idBytes = new byte[16];
         buf.get(idBytes);
-        int udpPort = Short.toUnsignedInt(buf.getShort());
+        int tcpPort = Short.toUnsignedInt(buf.getShort());
         byte kadVersion = buf.get();
-        return new HelloPayload(new KadId(idBytes), udpPort, kadVersion);
+        return new HelloPayload(new KadId(idBytes), tcpPort, kadVersion);
     }
 
     /**
      * Creates a KADEMLIA2_REQ (Find Node) packet.
      */
-    public static KadPacket createFindNodeReq(byte targetType, KadId targetId) {
-        ByteBuffer buf = ByteBuffer.allocate(17).order(ByteOrder.LITTLE_ENDIAN);
+    public static KadPacket createFindNodeReq(KadId localId, byte targetType, KadId targetId) {
+        Objects.requireNonNull(localId, "localId cannot be null");
+        Objects.requireNonNull(targetId, "targetId cannot be null");
+        ByteBuffer buf = ByteBuffer.allocate(33).order(ByteOrder.LITTLE_ENDIAN);
         buf.put(targetType);
         buf.put(targetId.getBytes());
+        buf.put(localId.getBytes()); // sanity check on the responder side
         return new KadPacket(KadOpCode.REQ, buf.array());
     }
 
@@ -361,9 +378,9 @@ public final class KadPacket {
         buf.put(c.id().getBytes());
         byte[] addrBytes = c.address().getAddress();
         if (addrBytes.length == 4) {
-            buf.put(addrBytes);
+            // The IPv4 address is serialized least-significant byte first, like in nodes.dat.
+            buf.put(new byte[]{addrBytes[3], addrBytes[2], addrBytes[1], addrBytes[0]});
         } else {
-            // IPv4 fallback for non-IPv4
             buf.putInt(0);
         }
         buf.putShort((short) c.udpPort());
@@ -381,7 +398,8 @@ public final class KadPacket {
         byte version = buf.get();
 
         try {
-            InetAddress addr = InetAddress.getByAddress(ipBytes);
+            byte[] address = {ipBytes[3], ipBytes[2], ipBytes[1], ipBytes[0]};
+            InetAddress addr = InetAddress.getByAddress(address);
             return new KadContact(new KadId(idBytes), addr, udpPort, tcpPort, version);
         } catch (UnknownHostException e) {
             return null;

@@ -30,6 +30,7 @@ import org.slf4j.LoggerFactory;
 import java.net.InetAddress;
 import java.net.SocketException;
 import java.nio.ByteBuffer;
+import java.nio.file.Path;
 import java.util.Objects;
 
 /**
@@ -48,6 +49,7 @@ public class KadNode implements AutoCloseable {
     public static final String STAT_NODE_ID_LOW = "kad_node_id_lo";
 
     private final KadConfig config;
+    private final int tcpPort;
     private final int udpPort;
     private final KadRoutingTable routingTable;
     private final KadUdpService udpService;
@@ -55,6 +57,7 @@ public class KadNode implements AutoCloseable {
     private final KadMaintenanceService maintenanceService;
     private final KadSearchBridge searchBridge;
     private final KadHashBanService hashBanService;
+    private final KadNodesUpdater nodesUpdater;
 
     private volatile boolean running = false;
 
@@ -68,16 +71,31 @@ public class KadNode implements AutoCloseable {
      */
     public KadNode(KadConfig config, int tcpPort, DatabaseManager db, FileIndex fileIndex,
                    ChildAbuseFilter abuseFilter, FakeFileDetector fakeDetector) {
+        this(config, tcpPort, db, fileIndex, abuseFilter, fakeDetector, null);
+    }
+
+    /**
+     * @param nodesCache Path of the downloaded nodes.dat cache; when null the configured sources are not fetched.
+     */
+    public KadNode(KadConfig config, int tcpPort, DatabaseManager db, FileIndex fileIndex,
+                   ChildAbuseFilter abuseFilter, FakeFileDetector fakeDetector, Path nodesCache) {
         this.config = Objects.requireNonNull(config, "config cannot be null");
+        this.tcpPort = tcpPort;
         this.udpPort = config.effectivePort(tcpPort);
         this.routingTable = new KadRoutingTable(loadOrCreateNodeId(db), config.maxRoutingContacts());
         this.udpService = new KadUdpService(udpPort);
         this.bootstrapManager = new KadBootstrapManager(routingTable, udpService);
-        this.maintenanceService = new KadMaintenanceService(routingTable, udpService);
+        this.maintenanceService = new KadMaintenanceService(routingTable, udpService, tcpPort,
+                KadMaintenanceService.DEFAULT_CHECK_INTERVAL_MS,
+                KadMaintenanceService.DEFAULT_BUCKET_MAX_IDLE_MS,
+                KadMaintenanceService.DEFAULT_CONTACT_MAX_IDLE_MS);
         this.searchBridge = new KadSearchBridge(routingTable, udpService, abuseFilter, fakeDetector, fileIndex, db,
                 KadSearchBridge.DEFAULT_ALPHA_NODES, config.searchTimeoutSeconds() * 1000L,
                 config.autoIngestToH2(), config.minSourcesForIngest());
         this.hashBanService = db != null ? new KadHashBanService(db, fakeDetector, searchBridge) : null;
+        this.nodesUpdater = nodesCache != null && !config.nodesUrls().isBlank()
+                ? new KadNodesUpdater(bootstrapManager, nodesCache, config.nodesSources())
+                : null;
     }
 
     /**
@@ -113,6 +131,9 @@ public class KadNode implements AutoCloseable {
             hashBanService.initialize();
         }
         bootstrapManager.start();
+        if (nodesUpdater != null) {
+            nodesUpdater.start();
+        }
         maintenanceService.start();
         searchBridge.start();
         running = true;
@@ -169,6 +190,11 @@ public class KadNode implements AutoCloseable {
         return bootstrapManager;
     }
 
+    /** The downloaded nodes.dat updater, or null when the sources or the cache path are not configured. */
+    public KadNodesUpdater getNodesUpdater() {
+        return nodesUpdater;
+    }
+
     public KadMaintenanceService getMaintenanceService() {
         return maintenanceService;
     }
@@ -194,6 +220,9 @@ public class KadNode implements AutoCloseable {
             hashBanService.shutdown();
         }
         maintenanceService.close();
+        if (nodesUpdater != null) {
+            nodesUpdater.close();
+        }
         bootstrapManager.close();
         udpService.close();
         log.info("Kad node stopped");

@@ -64,7 +64,7 @@ class KadBootstrapManagerTest {
                     KadId cid = KadId.random();
                     contacts.add(new KadContact(cid, testIp("198.51.100." + (i + 1)), 4672, 4662, (byte) 2));
                 }
-                KadPacket res = KadPacket.createBootstrapRes(contacts);
+                KadPacket res = KadPacket.createBootstrapRes(KadId.random(), 4662, (byte) 2, contacts);
                 try {
                     peerUdp.send(res, remoteAddr, remotePort);
                 } catch (Exception e) {
@@ -79,12 +79,12 @@ class KadBootstrapManagerTest {
 
             // Wait for response to be processed by serverUdp
             long start = System.currentTimeMillis();
-            while ((table.size() < 6 || bootstrapMgr.getStatus() != KadBootstrapManager.Status.CONNECTED)
+            while ((table.size() < 7 || bootstrapMgr.getStatus() != KadBootstrapManager.Status.CONNECTED)
                     && (System.currentTimeMillis() - start) < 3000) {
                 Thread.sleep(50);
             }
 
-            assertEquals(6, table.size());
+            assertEquals(7, table.size());
             assertEquals(KadBootstrapManager.Status.CONNECTED, bootstrapMgr.getStatus());
             assertEquals(1, bootstrapMgr.getBootstrapSuccesses());
             assertEquals(6, bootstrapMgr.getContactsDiscovered());

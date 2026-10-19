@@ -18,6 +18,9 @@
 
 package org.jemule.config;
 
+import java.net.URI;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Properties;
 
 /**
@@ -31,6 +34,7 @@ import java.util.Properties;
  * @param searchTimeoutSeconds  Maximum duration of a forked Kad search, in seconds.
  * @param autoIngestToH2        Whether clean Kad files are persisted in the H2 database and indexed in memory.
  * @param minSourcesForIngest   Minimum number of sources a Kad file needs to be delivered and persisted.
+ * @param nodesUrls             Comma-separated nodes.dat URLs used to bootstrap the routing table (empty disables it).
  */
 public record KadConfig(
         boolean enabled,
@@ -40,16 +44,32 @@ public record KadConfig(
         boolean forkSearchEnabled,
         int searchTimeoutSeconds,
         boolean autoIngestToH2,
-        int minSourcesForIngest
+        int minSourcesForIngest,
+        String nodesUrls
 ) {
     /** Offset of the default Kad UDP port from the server TCP port (4661 + 11 = 4672). */
     public static final int PORT_OFFSET = 11;
 
+    /**
+     * Default nodes.dat sources. The eMule Security URL needs its {@code .dat} suffix; the historical
+     * {@code /nodes} path answers HTTP 404.
+     */
+    public static final String DEFAULT_NODES_URLS =
+            "https://upd.emule-security.org/nodes.dat,http://www.alldivx.de/nodes/nodes.dat";
+
     /** Default configuration: every Kad feature enabled, as documented in server.properties. */
-    public static final KadConfig DEFAULT = new KadConfig(true, 0, true, 500, true, 4, true, 1);
+    public static final KadConfig DEFAULT = new KadConfig(true, 0, true, 500, true, 4, true, 1, DEFAULT_NODES_URLS);
 
     /** Configuration with the embedded Kademlia node turned off. */
     public static final KadConfig DISABLED = new KadConfig(false, 0, false, 500, false, 4, false, 1);
+
+    /** Keeps source compatibility for callers that do not provide the nodes.dat sources. */
+    public KadConfig(boolean enabled, int port, boolean bootstrapFromClients, int maxRoutingContacts,
+                     boolean forkSearchEnabled, int searchTimeoutSeconds, boolean autoIngestToH2,
+                     int minSourcesForIngest) {
+        this(enabled, port, bootstrapFromClients, maxRoutingContacts, forkSearchEnabled, searchTimeoutSeconds,
+                autoIngestToH2, minSourcesForIngest, DEFAULT_NODES_URLS);
+    }
 
     public KadConfig {
         if (port < 0 || port > 65535) {
@@ -64,6 +84,33 @@ public record KadConfig(
         if (minSourcesForIngest < 0) {
             throw new IllegalArgumentException("kadMinSourcesForIngest cannot be negative");
         }
+        nodesUrls = nodesUrls == null ? "" : nodesUrls.trim();
+        parseNodesUrls(nodesUrls);
+    }
+
+    /** Parses the configured nodes.dat sources, separating them by commas, semicolons or whitespace. */
+    public List<URI> nodesSources() {
+        return parseNodesUrls(nodesUrls);
+    }
+
+    private static List<URI> parseNodesUrls(String value) {
+        List<URI> sources = new ArrayList<>();
+        if (value == null || value.isBlank()) return List.of();
+        for (String token : value.split("[,;\\s]+")) {
+            if (token.isBlank()) continue;
+            URI uri;
+            try {
+                uri = URI.create(token);
+            } catch (IllegalArgumentException e) {
+                throw new IllegalArgumentException("Invalid nodes.dat URL: " + token);
+            }
+            String scheme = uri.getScheme();
+            if (scheme == null || !(scheme.equalsIgnoreCase("http") || scheme.equalsIgnoreCase("https"))) {
+                throw new IllegalArgumentException("Unsupported nodes.dat URL: " + token);
+            }
+            sources.add(uri);
+        }
+        return List.copyOf(sources);
     }
 
     /** UDP port actually bound by the Kad node for a server listening on {@code tcpPort}. */
@@ -83,7 +130,8 @@ public record KadConfig(
                 Boolean.parseBoolean(props.getProperty("kadForkSearchEnabled", String.valueOf(DEFAULT.forkSearchEnabled()))),
                 Integer.parseInt(props.getProperty("kadSearchTimeoutSeconds", String.valueOf(DEFAULT.searchTimeoutSeconds())).trim()),
                 Boolean.parseBoolean(props.getProperty("kadAutoIngestToH2", String.valueOf(DEFAULT.autoIngestToH2()))),
-                Integer.parseInt(props.getProperty("kadMinSourcesForIngest", String.valueOf(DEFAULT.minSourcesForIngest())).trim())
+                Integer.parseInt(props.getProperty("kadMinSourcesForIngest", String.valueOf(DEFAULT.minSourcesForIngest())).trim()),
+                props.getProperty("kadNodesUrls", DEFAULT.nodesUrls())
         );
     }
 }

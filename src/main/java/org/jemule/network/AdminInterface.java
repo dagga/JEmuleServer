@@ -19,6 +19,8 @@
 package org.jemule.network;
 
 import org.jemule.Main;
+import org.jemule.config.ConfigApplyResult;
+import org.jemule.config.ConfigParameter;
 import org.jemule.core.ClientRegistry;
 import org.jemule.core.FileIndex;
 import org.jemule.kad.KadBootstrapManager;
@@ -26,6 +28,7 @@ import org.jemule.kad.KadContact;
 import org.jemule.kad.KadHashBanService;
 import org.jemule.kad.KadMaintenanceService;
 import org.jemule.kad.KadNode;
+import org.jemule.kad.KadNodesUpdater;
 import org.jemule.kad.KadSearchBridge;
 import org.jemule.security.FakeFileDetector;
 import org.jemule.security.IPFilter;
@@ -100,13 +103,15 @@ public class AdminInterface implements Runnable {
                     : parts.length > 1 ? parts[1] : "");
             case "files" -> showFiles();
             case "ban" -> handleBan(parts);
+            case "unban" -> handleUnban(parts);
             case "events" -> showEvents();
             case "kad" -> handleKad(parts);
             case "peers" -> showPeers();
-            case "filters" -> showFilters();
+            case "filters" -> handleFilters(parts);
             case "bots" -> showBots();
             case "blocks" -> showBlocks();
             case "settings" -> handleSettings(parts);
+            case "kick" -> handleKick(parts);
             case "help" -> showHelp();
             case "stop", "exit", "quit" -> {
                 out().println("Stopping server...");
@@ -211,6 +216,40 @@ public class AdminInterface implements Runnable {
         out().println("Hash " + hash + " added to blacklist" + (removed ? " and removed from the index." : "."));
     }
 
+    private void handleUnban(String[] parts) {
+        if (parts.length < 2) {
+            out().println("Usage: unban <hash>");
+            return;
+        }
+        String hash = parts[1].toUpperCase(Locale.ROOT);
+        if (!hash.matches("[0-9A-F]{32}")) {
+            out().println("Error: Hash must be 32 characters (hex).");
+            return;
+        }
+        boolean wasBanned = fakeFileDetector.unban(hash);
+        out().println(wasBanned ? "Hash " + hash + " removed from the blacklist."
+                : "Hash " + hash + " was not in the blacklist.");
+    }
+
+    private void handleKick(String[] parts) {
+        if (parts.length < 2) {
+            out().println("Usage: kick <client ID | nickname | ip>");
+            return;
+        }
+        if (server == null) {
+            out().println("Client disconnection is unavailable.");
+            return;
+        }
+        String target = (parts.length > 2 ? parts[1] + " " + parts[2] : parts[1]).trim();
+        if (target.chars().filter(c -> c == '.' || c == ':').count() >= 3) {
+            int kicked = server.kickIp(target);
+            out().println(kicked == 0 ? "No client matches " + target + "." : kicked + " client(s) disconnected.");
+            return;
+        }
+        boolean kicked = server.kickClient(target);
+        out().println(kicked ? "Client " + target + " disconnected." : "No client matches " + target + ".");
+    }
+
     private void showEvents() {
         org.jemule.core.event.EventStatistics stats = server != null ? server.getEventStatistics() : null;
         if (stats == null) {
@@ -232,6 +271,37 @@ public class AdminInterface implements Runnable {
             out().printf("%-28s | %s:%d | %ds ago%n", peer.name(), peer.endpoint().address().getHostAddress(),
                     peer.endpoint().tcpPort(), Math.max(0, (System.currentTimeMillis() - peer.verifiedAtMillis()) / 1000));
         }
+
+        KadNode kadNode = server != null ? server.getKadNode() : null;
+        List<KadContact> contacts = kadNode != null ? kadNode.getRoutingTable().getAllContacts() : List.of();
+        out().println("--- Kad Contacts (" + contacts.size() + ") ---");
+        out().printf("%-34s | %-21s | %-6s | %s%n", "Node ID", "Address", "UDP", "Seen");
+        long now = System.currentTimeMillis();
+        for (KadContact contact : contacts) {
+            out().printf("%-34s | %s:%d | %-6d | %ds ago%n", contact.id(),
+                    contact.address().getHostAddress(), contact.udpPort(), contact.tcpPort(),
+                    Math.max(0, (now - contact.lastSeen()) / 1000));
+        }
+    }
+
+    private void handleFilters(String[] parts) {
+        if (parts.length > 1 && parts[1].equalsIgnoreCase("reload")) {
+            if (server == null) {
+                out().println("Filter reload is unavailable.");
+                return;
+            }
+            String path = server.getConfig().ipFilterPath();
+            if (path == null || path.isBlank()) {
+                out().println("IP filter path is empty: nothing to reload.");
+            } else {
+                server.reloadIpFilter(path);
+                out().println("IP filter reload requested from " + path + ".");
+            }
+            server.reloadChildAbuseKeywords(server.getConfig().childAbuseKeywordsPath());
+            out().println("Child abuse keywords reloaded.");
+            return;
+        }
+        showFilters();
     }
 
     private void showFilters() {
@@ -282,19 +352,79 @@ public class AdminInterface implements Runnable {
                     out().println("Admin allowed MACs: " + server.getConfig().adminAllowedMacs());
                 }
             }
-            out().println("Change fake-file detection with: settings fakeFileDetectionEnabled <on|off>");
+            out().println("--- Configuration parameters (key=value [scope]) ---");
+            Map<String, String> pending = server != null ? server.pendingRestart() : Map.of();
+            for (ConfigParameter parameter : ConfigParameter.ordered()) {
+                Object value = parameter == ConfigParameter.FAKE_FILE_DETECTION_ENABLED
+                        ? fakeFileDetector.isEnabled()
+                        : server != null ? server.getConfig().value(parameter) : "";
+                String next = pending.get(parameter.key());
+                out().println("  " + parameter.key() + "=" + value + " [" + parameter.scope().id() + "]"
+                        + (next != null ? " (after restart: " + next + ")" : ""));
+            }
+            out().println("Usage: settings <key> <value> | settings reload | settings fakeFileDetectionEnabled <on|off>");
             return;
         }
         String[] args = parts.length > 2
                 ? (parts[1] + " " + parts[2]).trim().split("\\s+")
                 : parts[1].trim().split("\\s+");
-        if (args.length != 2 || !args[0].equalsIgnoreCase("fakeFileDetectionEnabled")
-                || !(args[1].equalsIgnoreCase("on") || args[1].equalsIgnoreCase("off"))) {
-            out().println("Usage: settings [fakeFileDetectionEnabled <on|off>]");
+        if (args.length == 1 && args[0].equalsIgnoreCase("reload")) {
+            if (server == null) {
+                out().println("Configuration reload is unavailable.");
+                return;
+            }
+            printConfigResult(server.reloadConfig());
             return;
         }
-        fakeFileDetector.setEnabled(args[1].equalsIgnoreCase("on"));
-        out().println("Fake-file detection " + (fakeFileDetector.isEnabled() ? "enabled." : "disabled."));
+        if (args.length != 2) {
+            out().println("Usage: settings <key> <value> | settings reload | settings fakeFileDetectionEnabled <on|off>");
+            return;
+        }
+        String key = args[0];
+        String value = args[1];
+        if (key.equalsIgnoreCase(ConfigParameter.FAKE_FILE_DETECTION_ENABLED.key())) {
+            if (value.equalsIgnoreCase("on") || value.equalsIgnoreCase("off")) {
+                value = String.valueOf(value.equalsIgnoreCase("on"));
+            }
+            ConfigApplyResult result = server == null ? null : server.updateConfig(Map.of(key, value));
+            if (result == null) {
+                fakeFileDetector.setEnabled(Boolean.parseBoolean(value));
+                out().println("Fake-file detection " + (fakeFileDetector.isEnabled() ? "enabled." : "disabled."));
+            } else {
+                printConfigResult(result);
+            }
+            return;
+        }
+        if (ConfigParameter.byKey(key) == null) {
+            out().println("Unknown configuration key: " + key);
+            return;
+        }
+        if (server == null) {
+            out().println("Configuration changes are unavailable.");
+            return;
+        }
+        printConfigResult(server.updateConfig(Map.of(key, value)));
+    }
+
+    private void printConfigResult(ConfigApplyResult result) {
+        if (result == null) {
+            out().println("Configuration change failed.");
+            return;
+        }
+        if (!result.errors().isEmpty()) {
+            result.errors().forEach(error -> out().println("Error: " + error));
+            return;
+        }
+        if (result.applied().isEmpty() && result.deferred().isEmpty()) {
+            out().println("No change.");
+            return;
+        }
+        if (!result.applied().isEmpty()) {
+            out().println("Applied: " + String.join(", ", result.applied()));
+        }
+        if (!result.deferred().isEmpty()) {
+            out().println("Restart required: " + String.join(", ", result.deferred()));
+        }
     }
 
     /** 'kad [status|contacts|bootstrap &lt;ip&gt; &lt;port&gt;|stats]': supervision of the embedded Kademlia node. */
@@ -321,6 +451,10 @@ public class AdminInterface implements Runnable {
         out().println("UDP Port: " + node.getUdpPort() + (node.isRunning() ? "" : " (not bound)"));
         out().println("Contacts: " + node.getRoutingTable().size() + " / " + node.getRoutingTable().maxContacts());
         out().println("Bootstrap from clients: " + (node.getConfig().bootstrapFromClients() ? "ENABLED" : "DISABLED"));
+        KadNodesUpdater nodes = node.getNodesUpdater();
+        out().println("Nodes.dat sources: " + (nodes == null ? "DISABLED"
+                : nodes.getSources().size() + " configured, " + nodes.getLastContactCount()
+                + " contacts loaded from " + (nodes.getLastSource().isBlank() ? "none" : nodes.getLastSource())));
         out().println("Forked search: " + (node.getConfig().forkSearchEnabled() ? "ENABLED" : "DISABLED"));
         out().println("H2 ingestion: " + (node.getConfig().autoIngestToH2() ? "ENABLED" : "DISABLED")
                 + " (min sources: " + node.getConfig().minSourcesForIngest() + ")");
@@ -394,6 +528,10 @@ public class AdminInterface implements Runnable {
         out().println("Bootstrap requests: " + bootstrap.getBootstrapAttempts()
                 + " (answered: " + bootstrap.getBootstrapSuccesses()
                 + ", contacts discovered: " + bootstrap.getContactsDiscovered() + ")");
+        KadNodesUpdater nodes = node.getNodesUpdater();
+        out().println("Nodes.dat list: " + (nodes == null ? "disabled"
+                : nodes.getLastContactCount() + " contacts, last refresh "
+                + (nodes.getLastRefresh() == 0 ? "never" : (System.currentTimeMillis() - nodes.getLastRefresh()) / 1000 + "s ago")));
         out().println("Maintenance: " + maintenance.getPingsSent() + " pings, " + maintenance.getRefreshCount()
                 + " bucket refreshes, " + maintenance.getContactsEvicted() + " contacts evicted");
         out().println("---------------------------");
@@ -406,12 +544,17 @@ public class AdminInterface implements Runnable {
         out().println("  clients <text>  - Search clients by nickname, IP, or client ID");
         out().println("  files           - Show file indexing stats");
         out().println("  ban <hash> [R]  - Ban a file hash (32 hex chars)");
+        out().println("  unban <hash>    - Remove a hash from the blacklist");
+        out().println("  kick <target>   - Disconnect a client by ID, nickname or IP");
         out().println("  events          - Show event counts (total and last minute)");
-        out().println("  peers           - List verified server peers and their names");
+        out().println("  peers           - List verified server peers and Kad contacts");
         out().println("  filters         - Show active IP and fake-file filters");
+        out().println("  filters reload  - Reload the IP filter and the child abuse keywords");
         out().println("  bots            - List potential bots by nickname heuristic");
         out().println("  blocks          - List persistently blocked file hashes");
-        out().println("  settings        - Show runtime settings; optionally toggle fake-file detection");
+        out().println("  settings        - Show runtime settings");
+        out().println("  settings <key> <value> - Change a configuration parameter");
+        out().println("  settings reload - Reload the configuration file without restarting");
         out().println("  kad status      - Show the Kademlia node status, UDP port and contact count");
         out().println("  kad contacts    - List the " + MAX_LISTED_KAD_CONTACTS + " most recent Kademlia contacts");
         out().println("  kad bootstrap <ip> <port> - Send a bootstrap request to a Kademlia node");

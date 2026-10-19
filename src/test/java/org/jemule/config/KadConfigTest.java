@@ -42,6 +42,8 @@ class KadConfigTest {
         assertEquals(4, kad.searchTimeoutSeconds());
         assertTrue(kad.autoIngestToH2());
         assertEquals(1, kad.minSourcesForIngest());
+        assertEquals(2, kad.nodesSources().size());
+        assertEquals("https://upd.emule-security.org/nodes.dat", kad.nodesSources().get(0).toString());
     }
 
     @Test
@@ -55,9 +57,13 @@ class KadConfigTest {
         props.setProperty("kadSearchTimeoutSeconds", "9");
         props.setProperty("kadAutoIngestToH2", "false");
         props.setProperty("kadMinSourcesForIngest", "3");
+        props.setProperty("kadNodesUrls", "https://example.org/nodes.dat,http://example.net/nodes.dat");
 
         KadConfig kad = KadConfig.fromProperties(props);
-        assertEquals(new KadConfig(false, 5000, false, 120, false, 9, false, 3), kad);
+        assertEquals(new KadConfig(false, 5000, false, 120, false, 9, false, 3,
+                "https://example.org/nodes.dat,http://example.net/nodes.dat"), kad);
+        assertEquals(2, kad.nodesSources().size());
+        assertEquals("http://example.net/nodes.dat", kad.nodesSources().get(1).toString());
     }
 
     @Test
@@ -67,6 +73,15 @@ class KadConfigTest {
         assertThrows(IllegalArgumentException.class, () -> new KadConfig(true, 0, true, 0, true, 4, true, 1));
         assertThrows(IllegalArgumentException.class, () -> new KadConfig(true, 0, true, 500, true, 0, true, 1));
         assertThrows(IllegalArgumentException.class, () -> new KadConfig(true, 0, true, 500, true, 4, true, -1));
+        assertThrows(IllegalArgumentException.class, () -> new KadConfig(true, 0, true, 500, true, 4, true, 1, "ftp://x/nodes.dat"));
+        assertThrows(IllegalArgumentException.class, () -> new KadConfig(true, 0, true, 500, true, 4, true, 1, "not a url"));
+    }
+
+    @Test
+    void emptyNodesUrlsDisableTheDownload() {
+        KadConfig kad = new KadConfig(true, 0, true, 500, true, 4, true, 1, " ");
+        assertTrue(kad.nodesSources().isEmpty());
+        assertTrue(kad.nodesUrls().isEmpty());
     }
 
     @Test
@@ -102,7 +117,8 @@ class KadConfigTest {
         }
         assertEquals(KadConfig.DEFAULT, KadConfig.fromProperties(props));
         for (String key : new String[]{"kadEnabled", "kadBootstrapFromClients", "kadMaxRoutingContacts",
-                "kadForkSearchEnabled", "kadSearchTimeoutSeconds", "kadAutoIngestToH2", "kadMinSourcesForIngest"}) {
+                "kadForkSearchEnabled", "kadSearchTimeoutSeconds", "kadAutoIngestToH2", "kadMinSourcesForIngest",
+                "kadNodesUrls"}) {
             assertNotNull(props.getProperty(key), key + " is documented in server.properties");
         }
     }

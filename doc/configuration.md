@@ -14,7 +14,7 @@ Options not set in that file use the defaults built into the server. Keep runtim
 | Filtering | `ipFilterPath`, `fakeFileDetectionEnabled`, `childAbuseKeywordsPath` | IP filter defaults to `./ipfilter.dat` and is refreshed from the HTTPS eMule Security ZIP source at startup and daily; fake-file heuristics and the child-abuse keyword list. The child-abuse filter cannot be disabled. |
 | Protection | `floodMaxRequestsPerSecond`, `cbFailureRateThreshold`, `cbMinimumNumberOfCalls`, `cbWaitDurationInSeconds` | Per-IP flood threshold and database circuit-breaker behavior. |
 | Server federation | `serverPeers`, `serverMetUrl` | Comma-separated IPv4 seeds and optional HTTPS `server.met` source loaded at startup. Downloaded endpoints are merged with existing candidates, not used to replace them; peers are verified before gossip or searches. |
-| Kademlia | `kadEnabled`, `kadPort`, `kadBootstrapFromClients`, `kadMaxRoutingContacts`, `kadForkSearchEnabled`, `kadSearchTimeoutSeconds`, `kadAutoIngestToH2`, `kadMinSourcesForIngest` | Embedded Kad node, search forwarding, bootstrapping and result ingestion. |
+| Kademlia | `kadEnabled`, `kadPort`, `kadBootstrapFromClients`, `kadMaxRoutingContacts`, `kadForkSearchEnabled`, `kadSearchTimeoutSeconds`, `kadAutoIngestToH2`, `kadMinSourcesForIngest`, `kadNodesUrls` | Embedded Kad node, search forwarding, bootstrapping (including nodes.dat downloads) and result ingestion. |
 
 Use `server.properties` for option defaults and additional details. Relative file paths are resolved from the process
 working directory.
@@ -27,6 +27,12 @@ The terminal CLI is available when the server has an interactive console. For se
 - `adminWebPort` enables the HTTP dashboard on loopback, defaulting to `8080`; set it to `0` to disable the panel.
 
 Neither interface has password authentication. Any local user who can access loopback can administer the server. Do not
-forward or proxy these ports to untrusted networks. The web panel supports status, client search, verified peers,
-filters, heuristic potential-bot matches, persistent hash blocks, and a runtime fake-file-detection toggle. That toggle
-is not written back to the configuration file.
+forward or proxy these ports to untrusted networks.
+
+The web panel supports status, client search, verified peers, filters, heuristic potential-bot matches, persistent hash
+blocks, client disconnection, and editing of `server.properties`. The settings page lists every parameter with its
+scope: `hot` values are applied immediately, `admin` values rebuild the admin interfaces, and `restart` values are
+written to the file and shown as "after restart" while the server keeps using its current value. Saving writes the changed keys back to the configuration file
+without touching its comments or key order; **Reload from file** applies changes made by hand. Invalid values are
+rejected and leave the running configuration unchanged. Changes to `adminAllowedIps` / `adminAllowedMacs` take effect
+immediately.

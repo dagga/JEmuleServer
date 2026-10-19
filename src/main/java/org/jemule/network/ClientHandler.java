@@ -52,7 +52,7 @@ public class ClientHandler implements Runnable, ClientContext {
     private static final Logger log = LoggerFactory.getLogger(ClientHandler.class);
 
     private final Socket socket;
-    private final ServerConfig config;
+    private volatile ServerConfig config;
     private final ClientRegistry registry;
     private final FileIndex fileIndex;
     private final FloodProtector floodProtector;
@@ -85,12 +85,28 @@ public class ClientHandler implements Runnable, ClientContext {
         this.server = server;
     }
 
+    /** A handler whose socket belongs to the given client state, so that an admin kick can find it. */
+    boolean matches(ClientState client) {
+        ClientState current = state;
+        return current != null && current.connectionId() == client.connectionId();
+    }
+
+    /** Closes the socket from another thread; the read loop then ends with an {@link IOException}. */
+    void disconnectNow() {
+        try {
+            socket.close();
+        } catch (IOException e) {
+            log.debug("Error closing kicked socket: {}", e.getMessage());
+        }
+    }
+
     /**
      * Entry point of the client handler thread.
      * Manages the lifecycle of a single client connection, from handshake to disconnection.
      */
     @Override
     public void run() {
+        if (server != null) server.registerConnection(this);
         try {
             socket.setSoTimeout(config.tcpKeepAliveTimeoutInSeconds() * 1000);
             String remoteAddr = maskIp(socket.getRemoteSocketAddress().toString());
@@ -117,6 +133,12 @@ public class ClientHandler implements Runnable, ClientContext {
 
             while (!socket.isClosed()) {
                 try {
+                    ServerConfig live = server != null ? server.configSnapshot() : config;
+                    if (live != config) {
+                        config = live;
+                        heartbeatIntervalMs = config.heartbeatIntervalSeconds() * 1000;
+                        if (heartbeatIntervalMs <= 0) socket.setSoTimeout(config.tcpKeepAliveTimeoutInSeconds() * 1000);
+                    }
                     // Adjust timeout for heartbeat if enabled
                     if (heartbeatIntervalMs > 0) {
                         long now = System.currentTimeMillis();
@@ -153,6 +175,7 @@ public class ClientHandler implements Runnable, ClientContext {
             log.error("IO Error: {}", e.getMessage());
         } finally {
             cleanup();
+            if (server != null) server.unregisterConnection(this);
         }
     }
 

@@ -45,6 +45,9 @@ public class KadBootstrapManager implements AutoCloseable {
 
     public static final int CONNECTED_THRESHOLD = 5;
 
+    /** Maximum number of pending bootstrap targets kept in the queue. */
+    private static final int MAX_QUEUE = 100;
+
     private final KadRoutingTable routingTable;
     private final KadUdpService udpService;
     private final ConcurrentLinkedQueue<BootstrapTarget> bootstrapQueue = new ConcurrentLinkedQueue<>();
@@ -113,8 +116,26 @@ public class KadBootstrapManager implements AutoCloseable {
         return true;
     }
 
+    /**
+     * Queues bootstrap requests for a downloaded contact list (nodes.dat). Only the addresses are used: the
+     * routing table is filled by the answers, whose contact IDs are in wire order.
+     *
+     * @return the number of targets queued
+     */
+    public int bootstrapFromNodes(List<KadContact> contacts) {
+        if (!running || contacts == null) return 0;
+        int queued = 0;
+        for (KadContact contact : contacts) {
+            if (bootstrapQueue.size() >= MAX_QUEUE) break;
+            enqueueTarget(contact.address(), contact.udpPort());
+            queued++;
+        }
+        processQueue();
+        return queued;
+    }
+
     private void enqueueTarget(InetAddress address, int udpPort) {
-        if (bootstrapQueue.size() < 100) {
+        if (bootstrapQueue.size() < MAX_QUEUE) {
             bootstrapQueue.offer(new BootstrapTarget(address, udpPort));
         }
     }
@@ -146,10 +167,22 @@ public class KadBootstrapManager implements AutoCloseable {
     }
 
     private void handleBootstrapRes(KadPacket packet, InetAddress remoteAddress, int remotePort) {
-        pendingRequests.decrementAndGet();
-        List<KadContact> contacts = KadPacket.parseBootstrapRes(packet.data());
+        pendingRequests.updateAndGet(v -> Math.max(0, v - 1));
+        KadPacket.BootstrapRes res = KadPacket.parseBootstrapRes(packet.data());
+        if (res == null) {
+            log.debug("Malformed KADEMLIA2_BOOTSTRAP_RES from {}:{}", remoteAddress.getHostAddress(), remotePort);
+            processQueue();
+            return;
+        }
+
+        // The responder itself is a valid Kad contact (its ID and TCP port are carried in the header).
+        routingTable.addOrUpdate(new KadContact(res.responderId(), remoteAddress, remotePort,
+                res.responderTcpPort(), res.responderVersion()));
+
+        List<KadContact> contacts = res.contacts();
         if (contacts.isEmpty()) {
             log.debug("Received empty KADEMLIA2_BOOTSTRAP_RES from {}:{}", remoteAddress.getHostAddress(), remotePort);
+            processQueue();
             return;
         }
 
@@ -170,12 +203,14 @@ public class KadBootstrapManager implements AutoCloseable {
 
         log.debug("Bootstrap successful from {}:{}: added {} contacts (total routing table: {})",
                 remoteAddress.getHostAddress(), remotePort, contacts.size(), routingTable.size());
+        processQueue();
     }
 
     private void handleHelloRes(KadPacket packet, InetAddress remoteAddress, int remotePort) {
         KadPacket.HelloPayload payload = KadPacket.parseHello(packet.data());
         if (payload != null) {
-            KadContact contact = new KadContact(payload.senderId(), remoteAddress, remotePort, 0, payload.kadVersion());
+            KadContact contact = new KadContact(payload.senderId(), remoteAddress, remotePort,
+                    payload.tcpPort(), payload.kadVersion());
             routingTable.addOrUpdate(contact);
             if (routingTable.size() >= CONNECTED_THRESHOLD) {
                 status = Status.CONNECTED;
