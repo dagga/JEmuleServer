@@ -29,6 +29,7 @@ import org.jemule.core.event.FileEvent;
 import org.jemule.core.event.EventStatistics;
 import org.jemule.kad.KadNode;
 import org.jemule.kad.KadSearchBridge;
+import org.jemule.security.AdminAccessFilter;
 import org.jemule.security.ChildAbuseFilter;
 import org.jemule.security.FakeFileDetector;
 import org.jemule.security.FloodProtector;
@@ -100,6 +101,7 @@ public class Server {
     private final ClientFactory clientFactory;
     private final AdminInterface admin;
     private final AdminWebPanel adminWebPanel;
+    private final AdminAccessFilter adminAccessFilter;
     private final InetAddress publicIp;
     private final KadNode kadNode;
     private volatile KadSearchBridge kadSearchBridge;
@@ -160,16 +162,13 @@ public class Server {
      */
     public Server(ServerConfig config, ClientFactory clientFactory) {
         this.config = config;
-        this.serverGossip = new ServerGossip(config.serverPeers());
         this.clientFactory = clientFactory;
         this.eventManager = new EventManager();
         setupDefaultListeners();
         this.floodProtector = new FloodProtector(config.floodMaxRequestsPerSecond());
         this.ipFilter = new IPFilter();
-        if (config.ipFilterPath() != null && !config.ipFilterPath().isBlank()) {
-            this.ipFilter.loadFromFile(config.ipFilterPath());
-        }
         this.ipFilterUpdater = createIpFilterUpdater(config.ipFilterPath());
+        this.serverGossip = new ServerGossip(config.serverPeers(), this.ipFilter);
         this.fakeFileDetector = new FakeFileDetector();
         this.fakeFileDetector.setEnabled(config.fakeFileDetectionEnabled());
         this.executor = Executors.newVirtualThreadPerTaskExecutor();
@@ -199,6 +198,7 @@ public class Server {
         this.kadNode = config.kad().enabled()
                 ? new KadNode(config.kad(), config.port(), db, fileIndex, abuseFilter, fakeFileDetector)
                 : null;
+        this.adminAccessFilter = new AdminAccessFilter(config.adminAllowedIps(), config.adminAllowedMacs());
         this.admin = new AdminInterface(this, registry, fileIndex, ipFilter, fakeFileDetector);
         this.adminWebPanel = new AdminWebPanel(this);
         this.publicIp = resolvePublicIp(config.publicIp());
@@ -292,6 +292,10 @@ public class Server {
         return ipFilter;
     }
 
+    public AdminAccessFilter getAdminAccessFilter() {
+        return adminAccessFilter;
+    }
+
     FakeFileDetector getFakeFileDetector() {
         return fakeFileDetector;
     }
@@ -354,6 +358,7 @@ public class Server {
         try {
             log.info("Virtual Threads ready for 50k+ concurrent clients");
 
+            startIpFilterLoading();
             startServerMetLoading();
             startUdpResponder();
             startKadNode();
@@ -365,12 +370,6 @@ public class Server {
                     if (!running) {
                         c.close();
                         break;
-                    }
-                    String clientIp = c.getInetAddress().getHostAddress();
-                    if (ipFilter.isBlocked(clientIp)) {
-                        log.warn("[SECURITY] Blocked TCP connection from {}", clientIp);
-                        c.close();
-                        continue;
                     }
                     c.setTcpNoDelay(true);
                     clientSockets.add(c);
@@ -394,6 +393,17 @@ public class Server {
             } catch (IOException ignored) {
             }
         }
+    }
+
+    private void startIpFilterLoading() {
+        if (config.ipFilterPath() == null || config.ipFilterPath().isBlank()) return;
+        executor.submit(() -> {
+            try {
+                ipFilter.loadFromFile(config.ipFilterPath());
+            } catch (Exception e) {
+                log.error("Could not load IP filter from {}: {}", config.ipFilterPath(), e.getMessage());
+            }
+        });
     }
 
     private void startServerMetLoading() {
@@ -476,7 +486,7 @@ public class Server {
     }
 
     /**
-     * Starts the embedded Kademlia node. The server keeps working on its local index if the Kad UDP port
+     * Starts the embedded Kademlia node asynchronously. The server keeps working on its local index if the Kad UDP port
      * cannot be bound.
      */
     private void startKadNode() {
@@ -484,14 +494,16 @@ public class Server {
             log.info("Kademlia node disabled (kadEnabled=false)");
             return;
         }
-        try {
-            kadNode.start();
-            if (kadNode.getConfig().forkSearchEnabled() && kadSearchBridge == null) {
-                kadSearchBridge = kadNode.getSearchBridge();
+        executor.submit(() -> {
+            try {
+                kadNode.start();
+                if (kadNode.getConfig().forkSearchEnabled() && kadSearchBridge == null) {
+                    kadSearchBridge = kadNode.getSearchBridge();
+                }
+            } catch (IOException e) {
+                log.error("Kad UDP port {} unavailable, Kademlia disabled: {}", kadNode.getUdpPort(), e.getMessage());
             }
-        } catch (IOException e) {
-            log.error("Kad UDP port {} unavailable, Kademlia disabled: {}", kadNode.getUdpPort(), e.getMessage());
-        }
+        });
     }
 
     private void startAdminInterface() {
@@ -511,14 +523,29 @@ public class Server {
     }
 
     /**
-     * Admin console over TCP, for a server running as a service without a terminal ("nc 127.0.0.1 &lt;adminPort&gt;").
-     * Bound to the loopback address only: there is no authentication, the access is that of the local machine.
+     * Admin console over TCP, for a server running as a service without a terminal ("nc &lt;host&gt; &lt;adminPort&gt;").
+     * Filtered at application level by {@link AdminAccessFilter}.
      */
     private void serveAdminPort() {
-        try (ServerSocket adminSocket = new ServerSocket(config.adminPort(), 5, InetAddress.getLoopbackAddress())) {
+        InetAddress bindAddr;
+        try {
+            bindAddr = InetAddress.getByName(config.adminBindAddress());
+        } catch (IOException e) {
+            log.error("Invalid adminBindAddress {}: {}", config.adminBindAddress(), e.getMessage());
+            bindAddr = InetAddress.getLoopbackAddress();
+        }
+        try (ServerSocket adminSocket = new ServerSocket(config.adminPort(), 5, bindAddr)) {
             log.info("Admin console listening on {}:{}", adminSocket.getInetAddress().getHostAddress(), config.adminPort());
             while (running) {
                 Socket s = adminSocket.accept();
+                if (!adminAccessFilter.isAllowed(s.getInetAddress())) {
+                    log.warn("Admin connection refused from {}: unauthorized IP or MAC", s.getRemoteSocketAddress());
+                    try {
+                        s.close();
+                    } catch (IOException ignored) {
+                    }
+                    continue;
+                }
                 Thread.ofVirtual().name("AdminSession").start(() -> {
                     try (s; var out = new java.io.PrintStream(s.getOutputStream(), true, java.nio.charset.StandardCharsets.UTF_8)) {
                         log.info("Admin session opened from {}", s.getRemoteSocketAddress());
@@ -545,11 +572,6 @@ public class Server {
     }
 
     private void handleUdp(java.net.DatagramSocket ds, java.net.DatagramPacket p) throws IOException {
-        String clientIp = p.getAddress().getHostAddress();
-        if (ipFilter.isBlocked(clientIp)) {
-            log.warn("[SECURITY] Blocked UDP packet from {}", clientIp);
-            return;
-        }
         if (p.getLength() < 2) return;
         byte[] recv = java.util.Arrays.copyOfRange(p.getData(), p.getOffset(), p.getOffset() + p.getLength());
         if (log.isDebugEnabled()) {

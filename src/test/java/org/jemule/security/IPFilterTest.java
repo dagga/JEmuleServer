@@ -118,4 +118,94 @@ class IPFilterTest {
         assertEquals(-1, IPFilter.ipToLong("::1"));
         assertEquals(0x01020304L, IPFilter.ipToLong("001.002.003.004"));
     }
+
+    @Test
+    void binaryCacheIsCreatedAndUsed(@TempDir Path tempDir) throws IOException {
+        Path filterFile = tempDir.resolve("ipfilter.dat");
+        Path binFile = tempDir.resolve("ipfilter.dat.bin");
+        Files.write(filterFile, List.of(
+            "001.002.003.004 - 001.002.003.007 , 000 , Blocked Range 1",
+            "192.168.1.1 - 192.168.1.1 , 000 , Single IP"
+        ));
+
+        assertFalse(Files.exists(binFile));
+
+        IPFilter filter1 = new IPFilter();
+        filter1.loadFromFile(filterFile.toString());
+        assertEquals(2, filter1.getFilterCount());
+        assertTrue(filter1.isBlocked("1.2.3.5"));
+        assertTrue(Files.exists(binFile));
+
+        // Second load should use the binary cache
+        IPFilter filter2 = new IPFilter();
+        filter2.loadFromFile(filterFile.toString());
+        assertEquals(2, filter2.getFilterCount());
+        assertTrue(filter2.isBlocked("1.2.3.5"));
+        assertTrue(filter2.isBlocked("192.168.1.1"));
+        assertFalse(filter2.isBlocked("192.168.1.2"));
+    }
+
+    @Test
+    void binaryCacheIsInvalidatedWhenDatFileChanges(@TempDir Path tempDir) throws IOException, InterruptedException {
+        Path filterFile = tempDir.resolve("ipfilter.dat");
+        Path binFile = tempDir.resolve("ipfilter.dat.bin");
+        Files.write(filterFile, List.of(
+            "001.002.003.004 - 001.002.003.007 , 000 , Blocked Range 1"
+        ));
+
+        IPFilter filter1 = new IPFilter();
+        filter1.loadFromFile(filterFile.toString());
+        assertEquals(1, filter1.getFilterCount());
+        assertTrue(Files.exists(binFile));
+
+        // Modify dat file with an additional entry
+        Thread.sleep(10); // Ensure timestamp changes if filesystem precision requires it
+        Files.write(filterFile, List.of(
+            "001.002.003.004 - 001.002.003.007 , 000 , Blocked Range 1",
+            "010.000.000.001 - 010.000.000.005 , 000 , New Range"
+        ));
+
+        IPFilter filter2 = new IPFilter();
+        filter2.loadFromFile(filterFile.toString());
+        assertEquals(2, filter2.getFilterCount());
+        assertTrue(filter2.isBlocked("10.0.0.3"));
+    }
+
+    @Test
+    void corruptedBinaryCacheFallsBackToTextParsing(@TempDir Path tempDir) throws IOException {
+        Path filterFile = tempDir.resolve("ipfilter.dat");
+        Path binFile = tempDir.resolve("ipfilter.dat.bin");
+        Files.write(filterFile, List.of(
+            "001.002.003.004 - 001.002.003.007 , 000 , Blocked Range 1"
+        ));
+
+        // Create corrupt binary file
+        Files.write(binFile, new byte[]{0, 1, 2, 3, 4, 5});
+
+        IPFilter filter = new IPFilter();
+        filter.loadFromFile(filterFile.toString());
+        assertEquals(1, filter.getFilterCount());
+        assertTrue(filter.isBlocked("1.2.3.5"));
+    }
+
+    @Test
+    void edgeCasesInParsing(@TempDir Path tempDir) throws IOException {
+        Path filterFile = tempDir.resolve("ipfilter.dat");
+        Files.write(filterFile, List.of(
+            "// C++ style comment",
+            "# Shell style comment",
+            "   ",
+            "invalid line without dash",
+            "1.2.3.4 - 1.2.3.2 , 000 , Inverted range",
+            "256.0.0.1 - 256.0.0.2 , 000 , Invalid IP",
+            "001.001.001.001 - 001.001.001.001 , invalid_level , Should block",
+            "002.002.002.002 - 002.002.002.002 , 050 , Blocked level 50"
+        ));
+
+        IPFilter filter = new IPFilter();
+        filter.loadFromFile(filterFile.toString());
+        assertEquals(2, filter.getFilterCount());
+        assertTrue(filter.isBlocked("1.1.1.1"));
+        assertTrue(filter.isBlocked("2.2.2.2"));
+    }
 }

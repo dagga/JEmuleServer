@@ -126,6 +126,26 @@ class ServerConfigTest {
         assertEquals(0, ServerConfig.fromProperties(disabled).adminWebPort());
     }
 
+    @Test
+    void testAdminAccessConfig() {
+        Properties props = new Properties();
+        props.setProperty("adminBindAddress", "192.168.1.1");
+        props.setProperty("adminAllowedIps", "192.168.1.0/24, 10.0.0.1");
+        props.setProperty("adminAllowedMacs", "00:11:22:33:44:55");
+
+        ServerConfig cfg = ServerConfig.fromProperties(props);
+        assertEquals("192.168.1.1", cfg.adminBindAddress());
+        assertEquals("192.168.1.0/24, 10.0.0.1", cfg.adminAllowedIps());
+        assertEquals("00:11:22:33:44:55", cfg.adminAllowedMacs());
+
+        ServerConfig copy = cfg.withAdminBindAddress("0.0.0.0")
+                .withAdminAllowedIps("127.0.0.1")
+                .withAdminAllowedMacs("");
+        assertEquals("0.0.0.0", copy.adminBindAddress());
+        assertEquals("127.0.0.1", copy.adminAllowedIps());
+        assertEquals("", copy.adminAllowedMacs());
+    }
+
     @org.junit.jupiter.api.Test
     void relativePathsAreResolvedAgainstTheDataDirectory() {
         java.nio.file.Path home = java.nio.file.Paths.get("/var/lib/jemuleserver");

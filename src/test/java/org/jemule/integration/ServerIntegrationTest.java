@@ -285,4 +285,66 @@ public class ServerIntegrationTest {
             return null;
         });
     }
+
+    @Test
+    public void clientsAreNotBlockedByIpFilter(@org.junit.jupiter.api.io.TempDir java.nio.file.Path tempDir) throws Exception {
+        java.nio.file.Path filterFile = tempDir.resolve("ipfilter.dat");
+        java.nio.file.Files.write(filterFile, List.of(
+                loopbackHost + " - " + loopbackHost + " , 000 , Blocked Loopback"
+        ));
+
+        ServerSocket ss = new ServerSocket(0);
+        int testPort = ss.getLocalPort();
+        ss.close();
+
+        ServerConfig d = ServerConfig.DEFAULT;
+        ServerConfig config = new ServerConfig(
+                testPort,
+                d.maxPacketSize(),
+                d.maxSearchResults(),
+                d.floodMaxRequestsPerSecond(),
+                d.maxUsers(),
+                d.maxFiles(),
+                d.maxFilesPerUser(),
+                d.maxSourcesPerFile(),
+                d.databasePath(),
+                filterFile.toString(),
+                d.fakeFileDetectionEnabled(),
+                d.cbFailureRateThreshold(),
+                d.cbMinimumNumberOfCalls(),
+                d.cbWaitDurationInSeconds(),
+                d.tcpKeepAliveTimeoutInSeconds(),
+                d.heartbeatIntervalSeconds(),
+                d.publicIp()
+        );
+
+        Server testServer = new Server(config, new ClientFactory());
+        Thread testThread = new Thread(() -> {
+            try {
+                testServer.start();
+            } catch (IOException ignored) {
+            }
+        });
+        testThread.setDaemon(true);
+        testThread.start();
+        Thread.sleep(300);
+
+        try {
+            try (Socket s = new Socket()) {
+                s.setSoTimeout(3000);
+                s.connect(new java.net.InetSocketAddress(loopbackHost, testPort), 3000);
+                InputStream in = s.getInputStream();
+                OutputStream out = s.getOutputStream();
+
+                Packet login = new Packet(Packet.PROTOCOL_ED2K, OpCode.LOGIN_REQUEST.value,
+                        org.jemule.network.EmuleTestSupport.loginRequest(new byte[16], 4662, "filtered-client", 0));
+                login.write(out, false);
+
+                Packet p_ver = readPacketOrEOF(in);
+                Assertions.assertNotNull(p_ver, "Client IP is not blocked by ipfilter.dat");
+            }
+        } finally {
+            testServer.stop();
+        }
+    }
 }

@@ -21,6 +21,7 @@ package org.jemule.network;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import org.jemule.Main;
+import org.jemule.config.ServerConfig;
 import org.jemule.core.ClientState;
 import org.jemule.core.DatabaseManager;
 import org.jemule.security.FakeFileDetector;
@@ -104,12 +105,22 @@ final class AdminWebPanel implements AutoCloseable {
 
     synchronized void start(int port) throws IOException {
         if (http != null) return;
-        http = HttpServer.create(new InetSocketAddress(InetAddress.getByName("127.0.0.1"), port), 32);
+        String bindConfig = (server != null && server.getConfig() != null)
+                ? server.getConfig().adminBindAddress()
+                : ServerConfig.DEFAULT_ADMIN_BIND_ADDRESS;
+        InetAddress bindAddr;
+        try {
+            bindAddr = InetAddress.getByName(bindConfig);
+        } catch (Exception e) {
+            log.error("Invalid adminBindAddress {}: {}", bindConfig, e.getMessage());
+            bindAddr = InetAddress.getByName("127.0.0.1");
+        }
+        http = HttpServer.create(new InetSocketAddress(bindAddr, port), 32);
         executor = Executors.newVirtualThreadPerTaskExecutor();
         http.setExecutor(executor);
         http.createContext("/", this::handle);
         http.start();
-        log.info("Admin web panel listening at http://127.0.0.1:{}/", http.getAddress().getPort());
+        log.info("Admin web panel listening at http://{}:{}/", bindAddr.getHostAddress(), http.getAddress().getPort());
     }
 
     int port() {
@@ -137,12 +148,13 @@ final class AdminWebPanel implements AutoCloseable {
     }
 
     private void route(HttpExchange exchange) throws IOException {
-        if (!exchange.getRemoteAddress().getAddress().isLoopbackAddress()) {
-            sendError(exchange, 403, "Loopback access only");
+        InetAddress remoteAddress = exchange.getRemoteAddress().getAddress();
+        if (server.getAdminAccessFilter() != null && !server.getAdminAccessFilter().isAllowed(remoteAddress)) {
+            sendError(exchange, 403, "Access denied by admin access filter");
             return;
         }
-        if (!isLocalHost(exchange.getRequestHeaders().getFirst("Host"))) {
-            sendError(exchange, 403, "Local Host header required");
+        if (!isAllowedHost(exchange.getRequestHeaders().getFirst("Host"))) {
+            sendError(exchange, 403, "Valid Host header required");
             return;
         }
         String path = exchange.getRequestURI().getPath();
@@ -169,8 +181,8 @@ final class AdminWebPanel implements AutoCloseable {
             sendError(exchange, 405, "Method not allowed");
             return;
         }
-        if (!isLocalOrigin(exchange.getRequestHeaders().getFirst("Origin"), port())) {
-            sendError(exchange, 403, "A loopback Origin header is required");
+        if (!isAllowedOrigin(exchange.getRequestHeaders().getFirst("Origin"), port())) {
+            sendError(exchange, 403, "A valid Origin header is required");
             return;
         }
         Map<String, String> form = readForm(exchange);
@@ -286,16 +298,19 @@ final class AdminWebPanel implements AutoCloseable {
 
     private Map<String, Object> settings() {
         var config = server.getConfig();
-        return Map.of(
-                "serverPort", config.port(),
-                "maxUsers", config.maxUsers(),
-                "maxFiles", config.maxFiles(),
-                "maxSearchResults", config.maxSearchResults(),
-                "floodMaxRequestsPerSecond", config.floodMaxRequestsPerSecond(),
-                "adminConsolePort", config.adminPort(),
-                "adminWebPort", config.adminWebPort(),
-                "fakeFileDetectionEnabled", server.getFakeFileDetector().isEnabled()
-        );
+        Map<String, Object> map = new java.util.LinkedHashMap<>();
+        map.put("serverPort", config.port());
+        map.put("maxUsers", config.maxUsers());
+        map.put("maxFiles", config.maxFiles());
+        map.put("maxSearchResults", config.maxSearchResults());
+        map.put("floodMaxRequestsPerSecond", config.floodMaxRequestsPerSecond());
+        map.put("adminConsolePort", config.adminPort());
+        map.put("adminWebPort", config.adminWebPort());
+        map.put("adminBindAddress", config.adminBindAddress());
+        map.put("adminAllowedIps", config.adminAllowedIps());
+        map.put("adminAllowedMacs", config.adminAllowedMacs());
+        map.put("fakeFileDetectionEnabled", server.getFakeFileDetector().isEnabled());
+        return map;
     }
 
     private static Map<String, String> readForm(HttpExchange exchange) throws IOException {
@@ -332,19 +347,29 @@ final class AdminWebPanel implements AutoCloseable {
         }
     }
 
-    private static boolean isLocalOrigin(String origin, int panelPort) {
+    private boolean isAllowedOrigin(String origin, int panelPort) {
         if (origin == null) return false;
         try {
             URI uri = URI.create(origin);
             String host = uri.getHost();
-            return "http".equalsIgnoreCase(uri.getScheme()) && uri.getPort() == panelPort && host != null
-                    && (host.equalsIgnoreCase("localhost") || host.equals("127.0.0.1") || host.equals("::1"));
+            if (host == null || uri.getPort() != panelPort) return false;
+            String scheme = uri.getScheme();
+            if (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme)) return false;
+            if (host.equalsIgnoreCase("localhost") || host.equals("127.0.0.1") || host.equals("::1")) {
+                return true;
+            }
+            try {
+                InetAddress originAddr = InetAddress.getByName(host);
+                return server.getAdminAccessFilter() == null || server.getAdminAccessFilter().isAllowed(originAddr);
+            } catch (Exception e) {
+                return false;
+            }
         } catch (IllegalArgumentException e) {
             return false;
         }
     }
 
-    private boolean isLocalHost(String hostHeader) {
+    private boolean isAllowedHost(String hostHeader) {
         if (hostHeader == null) return false;
         String host = hostHeader;
         int requestPort = -1;
@@ -357,8 +382,18 @@ final class AdminWebPanel implements AutoCloseable {
                 return false;
             }
         }
-        return (host.equalsIgnoreCase("localhost") || host.equals("127.0.0.1"))
-                && (requestPort == -1 || requestPort == port());
+        if (requestPort != -1 && requestPort != port()) {
+            return false;
+        }
+        if (host.equalsIgnoreCase("localhost") || host.equals("127.0.0.1") || host.equals("::1")) {
+            return true;
+        }
+        try {
+            InetAddress addr = InetAddress.getByName(host);
+            return server.getAdminAccessFilter() == null || server.getAdminAccessFilter().isAllowed(addr);
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     private static void json(HttpExchange exchange, int status, Object value) throws IOException {

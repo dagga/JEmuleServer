@@ -1,6 +1,7 @@
 package org.jemule.network;
 
 import org.jemule.protocol.Tag;
+import org.jemule.security.IPFilter;
 import org.jemule.security.ServerObfuscation;
 
 import java.net.DatagramPacket;
@@ -60,6 +61,7 @@ final class ServerGossip {
     record Status(int udpKey) {
     }
 
+    private final IPFilter ipFilter;
     private final Map<Endpoint, Pending> pending = new ConcurrentHashMap<>();
     private final Map<Endpoint, VerifiedPeer> verified = new ConcurrentHashMap<>();
     private final Map<Endpoint, Boolean> candidates = new ConcurrentHashMap<>();
@@ -69,14 +71,25 @@ final class ServerGossip {
     private volatile long lastProbeAtMillis;
 
     ServerGossip(String configuredPeers) {
-        parseEndpoints(configuredPeers).forEach(endpoint -> candidates.put(endpoint, Boolean.TRUE));
+        this(configuredPeers, new IPFilter());
+    }
+
+    ServerGossip(String configuredPeers, IPFilter ipFilter) {
+        this.ipFilter = ipFilter != null ? ipFilter : new IPFilter();
+        parseEndpoints(configuredPeers, this.ipFilter).forEach(endpoint -> candidates.put(endpoint, Boolean.TRUE));
     }
 
     Collection<VerifiedPeer> verifiedPeers() {
+        if (ipFilter != null) {
+            verified.keySet().removeIf(endpoint -> ipFilter.isBlocked(endpoint.address()));
+        }
         return List.copyOf(verified.values());
     }
 
     Collection<Endpoint> candidateEndpoints() {
+        if (ipFilter != null) {
+            candidates.keySet().removeIf(endpoint -> ipFilter.isBlocked(endpoint.address()));
+        }
         return List.copyOf(candidates.keySet());
     }
 
@@ -91,6 +104,10 @@ final class ServerGossip {
 
     void poll(DatagramSocket socket, long now) {
         expirePending(now);
+        if (ipFilter != null) {
+            candidates.keySet().removeIf(endpoint -> ipFilter.isBlocked(endpoint.address()));
+            verified.keySet().removeIf(endpoint -> ipFilter.isBlocked(endpoint.address()));
+        }
         if (now - lastProbeAtMillis < PROBE_INTERVAL_MILLIS) return;
         lastProbeAtMillis = now;
         List<Endpoint> endpoints = new ArrayList<>(candidates.keySet());
@@ -132,10 +149,12 @@ final class ServerGossip {
     byte[] clientServerList(InetAddress publicIp, int tcpPort) {
         List<Endpoint> endpoints = new ArrayList<>();
         if (publicIp instanceof Inet4Address && !publicIp.isAnyLocalAddress()
-                && !publicIp.isLoopbackAddress() && tcpPort > 0 && tcpPort <= 65531) {
+                && !publicIp.isLoopbackAddress() && tcpPort > 0 && tcpPort <= 65531
+                && (ipFilter == null || !ipFilter.isBlocked(publicIp))) {
             endpoints.add(new Endpoint(publicIp, tcpPort));
         }
         verified.values().stream().map(VerifiedPeer::endpoint)
+                .filter(endpoint -> ipFilter == null || !ipFilter.isBlocked(endpoint.address()))
                 .filter(endpoint -> !endpoints.contains(endpoint))
                 .sorted(Comparator.comparing((Endpoint endpoint) -> endpoint.address().getHostAddress())
                         .thenComparingInt(Endpoint::tcpPort))
@@ -151,6 +170,7 @@ final class ServerGossip {
 
     boolean handle(DatagramSocket socket, InetAddress source, int sourcePort, byte[] packet, boolean wasObfuscated,
                    InetAddress publicIp, int localTcpPort, long now) {
+        if (ipFilter != null && ipFilter.isBlocked(source)) return false;
         if (packet.length < 2 || (packet[0] & 0xFF) != PROTOCOL) return false;
         int opcode = packet[1] & 0xFF;
         Endpoint endpoint = endpointForSource(source, sourcePort);
@@ -247,11 +267,14 @@ final class ServerGossip {
     private void sendList(DatagramSocket socket, Endpoint endpoint, Collection<VerifiedPeer> peers,
                           InetAddress publicIp, int localTcpPort, boolean obfuscated) {
         if (endpoint == null) return;
+        if (ipFilter != null && ipFilter.isBlocked(endpoint.address())) return;
         List<Endpoint> entries = new ArrayList<>();
-        if (publicIp instanceof Inet4Address && !publicIp.isAnyLocalAddress() && !publicIp.isLoopbackAddress()) {
+        if (publicIp instanceof Inet4Address && !publicIp.isAnyLocalAddress() && !publicIp.isLoopbackAddress()
+                && (ipFilter == null || !ipFilter.isBlocked(publicIp))) {
             entries.add(new Endpoint(publicIp, localTcpPort));
         }
         peers.stream().map(VerifiedPeer::endpoint).filter(peer -> !peer.equals(endpoint))
+                .filter(peer -> ipFilter == null || !ipFilter.isBlocked(peer.address()))
                 .sorted(Comparator.comparing((Endpoint peer) -> peer.address().getHostAddress())
                         .thenComparingInt(Endpoint::tcpPort))
                 .forEach(peer -> {
@@ -340,6 +363,10 @@ final class ServerGossip {
     }
 
     static Collection<Endpoint> parseEndpoints(String configuredPeers) {
+        return parseEndpoints(configuredPeers, null);
+    }
+
+    static Collection<Endpoint> parseEndpoints(String configuredPeers, IPFilter ipFilter) {
         Map<Endpoint, Boolean> endpoints = new ConcurrentHashMap<>();
         if (configuredPeers == null || configuredPeers.isBlank()) return endpoints.keySet();
         for (String value : configuredPeers.split(",")) {
@@ -352,7 +379,9 @@ final class ServerGossip {
             try {
                 InetAddress address = InetAddress.getByName(entry.substring(0, colon).trim());
                 int port = Integer.parseInt(entry.substring(colon + 1).trim());
-                endpoints.put(new Endpoint(address, port), Boolean.TRUE);
+                if (ipFilter == null || !ipFilter.isBlocked(address)) {
+                    endpoints.put(new Endpoint(address, port), Boolean.TRUE);
+                }
                 if (endpoints.size() > MAX_PEERS) {
                     throw new IllegalArgumentException("serverPeers exceeds the maximum of " + MAX_PEERS + " entries");
                 }
@@ -412,6 +441,7 @@ final class ServerGossip {
 
     private synchronized boolean addCandidate(Endpoint endpoint) {
         if (endpoint == null || rejected.containsKey(endpoint) || candidates.size() >= MAX_PEERS) return false;
+        if (ipFilter != null && ipFilter.isBlocked(endpoint.address())) return false;
         return candidates.putIfAbsent(endpoint, Boolean.TRUE) == null;
     }
 

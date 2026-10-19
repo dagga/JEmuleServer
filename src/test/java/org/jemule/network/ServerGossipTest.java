@@ -1,22 +1,93 @@
 package org.jemule.network;
 
 import org.jemule.protocol.Tag;
+import org.jemule.security.IPFilter;
 import org.jemule.security.ServerObfuscation;
 import org.jemule.security.UdpObfuscation;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.io.IOException;
 import java.net.InetAddress;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class ServerGossipTest {
     private static final int CHALLENGE = 0x12345678;
+
+    @Test
+    void filtersConfiguredServerSeedsMatchingIpFilter(@TempDir Path tempDir) throws IOException {
+        Path filterFile = tempDir.resolve("ipfilter.dat");
+        Files.write(filterFile, List.of("192.0.2.10 - 192.0.2.10 , 000 , Blocked Seed"));
+        IPFilter filter = new IPFilter();
+        filter.loadFromFile(filterFile.toString());
+
+        var peers = ServerGossip.parseEndpoints("127.0.0.1:4661, 192.0.2.10:5000", filter);
+        assertEquals(1, peers.size());
+        assertEquals(InetAddress.getByName("127.0.0.1"), peers.iterator().next().address());
+
+        ServerGossip gossip = new ServerGossip("127.0.0.1:4661, 192.0.2.10:5000", filter);
+        assertEquals(1, gossip.candidateEndpoints().size());
+        assertEquals(InetAddress.getByName("127.0.0.1"), gossip.candidateEndpoints().iterator().next().address());
+    }
+
+    @Test
+    void filtersServerMetAndClientReportedServersMatchingIpFilter(@TempDir Path tempDir) throws Exception {
+        Path filterFile = tempDir.resolve("ipfilter.dat");
+        Files.write(filterFile, List.of("192.0.2.2 - 192.0.2.2 , 000 , Blocked Met Candidate"));
+        IPFilter filter = new IPFilter();
+        filter.loadFromFile(filterFile.toString());
+
+        ByteBuffer met = ByteBuffer.allocate(1024).order(ByteOrder.LITTLE_ENDIAN);
+        met.put((byte) 0xE0).putInt(2);
+        putServerMetRecord(met, new byte[]{(byte) 192, 0, 2, 1}, 4661);
+        putServerMetRecord(met, new byte[]{(byte) 192, 0, 2, 2}, 4662);
+
+        List<ServerGossip.Endpoint> parsed = ServerMetLoader.parse(
+                java.util.Arrays.copyOf(met.array(), met.position()));
+        ServerGossip gossip = new ServerGossip("", filter);
+        assertEquals(1, gossip.addServerMetCandidates(parsed));
+        assertEquals(1, gossip.candidateEndpoints().size());
+        assertEquals(InetAddress.getByName("192.0.2.1"), gossip.candidateEndpoints().iterator().next().address());
+
+        byte[] report = ByteBuffer.allocate(1 + 2 * 6).order(ByteOrder.LITTLE_ENDIAN)
+                .put((byte) 2)
+                .put(new byte[]{(byte) 198, 51, 100, 21}).putShort((short) 4661)
+                .put(new byte[]{(byte) 192, 0, 2, 2}).putShort((short) 4662)
+                .array();
+        assertEquals(1, gossip.addClientReportedServerList(report));
+        assertEquals(2, gossip.candidateEndpoints().size());
+    }
+
+    @Test
+    void excludesBlockedServersFromClientServerListAndIgnoresGossipFromBlockedSources(@TempDir Path tempDir) throws Exception {
+        Path filterFile = tempDir.resolve("ipfilter.dat");
+        Files.write(filterFile, List.of("192.0.2.99 - 192.0.2.99 , 000 , Blocked Server"));
+        IPFilter filter = new IPFilter();
+        filter.loadFromFile(filterFile.toString());
+
+        ServerGossip gossip = new ServerGossip("", filter);
+        InetAddress blockedIp = InetAddress.getByName("192.0.2.99");
+        byte[] statReq = ByteBuffer.allocate(6).order(ByteOrder.LITTLE_ENDIAN)
+                .put((byte) 0xE3).put((byte) 0x96).putInt(12345).array();
+
+        try (DatagramSocket socket = new DatagramSocket()) {
+            assertFalse(gossip.handle(socket, blockedIp, 4665, statReq, false,
+                    InetAddress.getByName("127.0.0.1"), 4661, System.currentTimeMillis()));
+        }
+
+        byte[] response = gossip.clientServerList(blockedIp, 4661);
+        assertEquals(1, response.length);
+        assertEquals(0, response[0]);
+    }
 
     @Test
     void parsesConfiguredIpv4SeedEndpointsAndRejectsInvalidEntries() {

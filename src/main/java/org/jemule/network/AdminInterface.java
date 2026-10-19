@@ -276,6 +276,11 @@ public class AdminInterface implements Runnable {
             if (server != null) {
                 out().println("Admin web port: " + server.getConfig().adminWebPort());
                 out().println("Admin console port: " + server.getConfig().adminPort());
+                out().println("Admin bind address: " + server.getConfig().adminBindAddress());
+                out().println("Admin allowed IPs: " + server.getConfig().adminAllowedIps());
+                if (!server.getConfig().adminAllowedMacs().isEmpty()) {
+                    out().println("Admin allowed MACs: " + server.getConfig().adminAllowedMacs());
+                }
             }
             out().println("Change fake-file detection with: settings fakeFileDetectionEnabled <on|off>");
             return;

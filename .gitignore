@@ -25,6 +25,10 @@ Thumbs.db
 *.log
 /jemule_db.mv.db
 /jemule_db.trace.db
+/ipfilter.dat
+/ipfilter.dat.bin
+/ipfilter.dat.trace
+*.bin
 
 # Specifications (kept local)
 /SFD_*.md

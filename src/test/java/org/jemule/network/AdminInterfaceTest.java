@@ -218,6 +218,25 @@ public class AdminInterfaceTest {
     }
 
     @Test
+    void settingsCommandShowsAdminConfiguration() {
+        org.jemule.config.ServerConfig config = org.jemule.config.ServerConfig.DEFAULT
+                .withAdminPort(4670)
+                .withAdminWebPort(8080)
+                .withAdminBindAddress("0.0.0.0")
+                .withAdminAllowedIps("127.0.0.1,192.168.1.0/24")
+                .withAdminAllowedMacs("00:11:22:33:44:55");
+        org.mockito.Mockito.when(server.getConfig()).thenReturn(config);
+
+        admin.handleCommand("settings");
+        String out = outContent.toString();
+        assertTrue(out.contains("Admin console port: 4670"), out);
+        assertTrue(out.contains("Admin web port: 8080"), out);
+        assertTrue(out.contains("Admin bind address: 0.0.0.0"), out);
+        assertTrue(out.contains("Admin allowed IPs: 127.0.0.1,192.168.1.0/24"), out);
+        assertTrue(out.contains("Admin allowed MACs: 00:11:22:33:44:55"), out);
+    }
+
+    @Test
     void settingsCommandCanToggleFakeFileHeuristics() {
         admin.handleCommand("settings fakeFileDetectionEnabled off");
 

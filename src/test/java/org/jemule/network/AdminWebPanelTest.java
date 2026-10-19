@@ -17,6 +17,7 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -45,7 +46,7 @@ class AdminWebPanelTest {
 
         try (AdminWebPanel panel = new AdminWebPanel(server)) {
             panel.start(0);
-            assertTrue(panel.isLoopbackBound());
+            assertFalse(panel.isLoopbackBound());
             URI uri = URI.create("http://127.0.0.1:" + panel.port() + "/api/clients?q=alice");
             HttpResponse<String> response = HttpClient.newHttpClient().send(
                     HttpRequest.newBuilder(uri).GET().build(), HttpResponse.BodyHandlers.ofString());
@@ -77,7 +78,7 @@ class AdminWebPanelTest {
                     .build();
             HttpResponse<String> response = HttpClient.newHttpClient().send(request, HttpResponse.BodyHandlers.ofString());
             assertEquals(403, response.statusCode());
-            assertTrue(response.body().contains("\"error\":\"A loopback Origin header is required\""), response.body());
+            assertTrue(response.body().contains("\"error\":\"A valid Origin header is required\""), response.body());
             verify(detector, never()).setEnabled(false);
         }
     }
@@ -130,4 +131,38 @@ class AdminWebPanelTest {
         }
     }
 
+    @Test
+    void rejectsRequestsFromDeniedIpAddress() throws Exception {
+        Server server = mock(Server.class);
+        org.jemule.security.AdminAccessFilter filter = new org.jemule.security.AdminAccessFilter("192.168.1.10", "");
+        when(server.getAdminAccessFilter()).thenReturn(filter);
+
+        try (AdminWebPanel panel = new AdminWebPanel(server)) {
+            panel.start(0);
+            URI uri = URI.create("http://127.0.0.1:" + panel.port() + "/api/status");
+            HttpResponse<String> response = HttpClient.newHttpClient().send(
+                    HttpRequest.newBuilder(uri).GET().build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(403, response.statusCode());
+            assertTrue(response.body().contains("Access denied by admin access filter"), response.body());
+        }
+    }
+
+    @Test
+    void allowsRequestsFromAllowedIpAddress() throws Exception {
+        Server server = mock(Server.class);
+        org.jemule.security.AdminAccessFilter filter = new org.jemule.security.AdminAccessFilter("127.0.0.1", "");
+        when(server.getAdminAccessFilter()).thenReturn(filter);
+        when(server.getClientRegistry()).thenReturn(mock(ClientRegistry.class));
+        when(server.getFileIndex()).thenReturn(mock(FileIndex.class));
+        when(server.getIPFilter()).thenReturn(mock(IPFilter.class));
+
+        try (AdminWebPanel panel = new AdminWebPanel(server)) {
+            panel.start(0);
+            URI uri = URI.create("http://127.0.0.1:" + panel.port() + "/api/status");
+            HttpResponse<String> response = HttpClient.newHttpClient().send(
+                    HttpRequest.newBuilder(uri).GET().build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, response.statusCode());
+            assertTrue(response.body().contains("\"version\""), response.body());
+        }
+    }
 }
