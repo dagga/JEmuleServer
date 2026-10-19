@@ -143,6 +143,14 @@ public class KadUdpService implements AutoCloseable {
         }
         if (receiverThread != null) {
             receiverThread.interrupt();
+            try {
+                receiverThread.join(5000);
+                if (receiverThread.isAlive()) {
+                    log.warn("Kad UDP receiver thread did not stop in time");
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
         }
         log.info("Kad UDP service stopped");
     }

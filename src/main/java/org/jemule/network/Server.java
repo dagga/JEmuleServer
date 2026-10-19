@@ -51,6 +51,7 @@ import java.util.List;
 import java.util.Arrays;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Main server class that coordinates networking, security, and data management.
@@ -62,6 +63,7 @@ public class Server {
     private final ServerGossip serverGossip;
     private final ServerSearchBridge serverSearchBridge;
     private final ClientRegistry registry = new ClientRegistry();
+    private final java.util.Set<Socket> clientSockets = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private final FileIndex fileIndex;
     private final FloodProtector floodProtector;
     private final IPFilter ipFilter;
@@ -360,6 +362,10 @@ public class Server {
             while (running && !ss.isClosed()) {
                 try {
                     Socket c = ss.accept();
+                    if (!running) {
+                        c.close();
+                        break;
+                    }
                     String clientIp = c.getInetAddress().getHostAddress();
                     if (ipFilter.isBlocked(clientIp)) {
                         log.warn("[SECURITY] Blocked TCP connection from {}", clientIp);
@@ -367,7 +373,15 @@ public class Server {
                         continue;
                     }
                     c.setTcpNoDelay(true);
-                    executor.submit(new ClientHandler(c, config, registry, fileIndex, floodProtector, fakeFileDetector, eventManager, clientFactory, this));
+                    clientSockets.add(c);
+                    executor.submit(() -> {
+                        try {
+                            new ClientHandler(c, config, registry, fileIndex, floodProtector, fakeFileDetector,
+                                    eventManager, clientFactory, this).run();
+                        } finally {
+                            clientSockets.remove(c);
+                        }
+                    });
                 } catch (java.net.SocketTimeoutException e) {
                     // Just a timeout, go back to loop start and check 'running'
                 } catch (IOException e) {
@@ -795,12 +809,31 @@ public class Server {
     public void stop() {
         running = false;
         adminWebPanel.close();
-        executor.shutdownNow();
         serverSearchBridge.close();
         if (ipFilterUpdater != null) ipFilterUpdater.close();
         kadSearchBridge = null;
         if (kadNode != null) {
             kadNode.close();
+        }
+        clientSockets.forEach(socket -> {
+            try {
+                socket.close();
+            } catch (IOException e) {
+                log.debug("Error closing client socket during shutdown: {}", e.getMessage());
+            }
+        });
+        executor.shutdown();
+        try {
+            if (!executor.awaitTermination(30, TimeUnit.SECONDS)) {
+                log.warn("Client handlers did not stop in time; interrupting remaining tasks");
+                executor.shutdownNow();
+                if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
+                    log.error("Some client handlers remain active while shutting down");
+                }
+            }
+        } catch (InterruptedException e) {
+            executor.shutdownNow();
+            Thread.currentThread().interrupt();
         }
         if (db != null) {
             try {

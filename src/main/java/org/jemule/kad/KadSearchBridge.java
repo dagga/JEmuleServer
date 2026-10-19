@@ -322,30 +322,39 @@ public class KadSearchBridge implements AutoCloseable {
         log.debug("Received SEARCH_RES with {} files from {}:{} for target {}",
                 files.size(), remoteAddress.getHostAddress(), remotePort, parsed.targetId());
 
+        List<FileMetadata> acceptedFiles = new ArrayList<>();
+        List<FileMetadata> filesToIngest = new ArrayList<>();
         for (FileMetadata file : files) {
             if (acceptFile(file)) {
                 int sources = file.sourceCount();
                 if (sources >= minSourcesForIngest) {
                     if (autoIngestToH2) {
                         if (fileIndex != null) {
-                            fileIndex.addFile(file);
-                            filesIngested.incrementAndGet();
-                            log.debug("Ingested Kad file into FileIndex & H2: {} ({}, sources={})",
-                                    file.name(), file.hash(), sources);
+                            filesToIngest.add(file);
                         } else if (databaseManager != null) {
-                            databaseManager.saveFile(file);
-                            filesIngested.incrementAndGet();
-                            log.debug("Saved Kad file into H2 database: {} ({}, sources={})",
-                                    file.name(), file.hash(), sources);
+                            filesToIngest.add(file);
                         }
                     }
-                    session.addResult(file);
+                    acceptedFiles.add(file);
                 } else {
                     log.debug("Kad file ignored (sources {} < minSources {}): {} ({})",
                             sources, minSourcesForIngest, file.name(), file.hash());
                 }
             }
         }
+        if (!filesToIngest.isEmpty()) {
+            if (fileIndex != null) {
+                fileIndex.addFiles(filesToIngest);
+            } else if (databaseManager != null) {
+                databaseManager.saveFiles(filesToIngest);
+            }
+            filesIngested.addAndGet(filesToIngest.size());
+            for (FileMetadata file : filesToIngest) {
+                log.debug("Ingested Kad file into FileIndex & H2: {} ({}, sources={})",
+                        file.name(), file.hash(), file.sourceCount());
+            }
+        }
+        acceptedFiles.forEach(session::addResult);
     }
 
     /**

@@ -139,9 +139,16 @@ public final class ServerSearchBridge implements AutoCloseable {
         if (expectedSessions.isEmpty()) return false;
         List<FileMetadata> decoded = decodeResults(packet);
         if (decoded == null) return true;
+        Map<String, FileMetadata> matchingFiles = new java.util.LinkedHashMap<>();
+        for (FileMetadata file : decoded) {
+            if (expectedSessions.stream().anyMatch(session -> session.query.test(file))) {
+                matchingFiles.putIfAbsent(file.hash().toUpperCase(Locale.ROOT), file);
+            }
+        }
+        List<FileMetadata> ingested = ingestAll(matchingFiles.values());
         for (SearchSession session : expectedSessions) {
-            for (FileMetadata file : decoded) {
-                if (session.query.test(file) && ingest(file)) {
+            for (FileMetadata file : ingested) {
+                if (session.query.test(file)) {
                     session.results.putIfAbsent(file.hash().toUpperCase(Locale.ROOT), file);
                 }
             }
@@ -204,11 +211,12 @@ public final class ServerSearchBridge implements AutoCloseable {
         return FileMetadata.withoutSources(hash, name, size, type, List.copyOf(tags));
     }
 
-    private boolean ingest(FileMetadata file) {
-        if (file.hash() == null || fileIndex.isChildAbuse(file.hash(), file.name())
-                || fakeFileDetector != null && fakeFileDetector.isFake(file.hash(), file.name(), file.size())) return false;
-        fileIndex.addFile(file);
-        return true;
+    private List<FileMetadata> ingestAll(Collection<FileMetadata> files) {
+        List<FileMetadata> accepted = files.stream()
+                .filter(file -> file.hash() != null && !fileIndex.isChildAbuse(file.hash(), file.name()))
+                .filter(file -> fakeFileDetector == null || !fakeFileDetector.isFake(file.hash(), file.name(), file.size()))
+                .toList();
+        return fileIndex.addFiles(accepted);
     }
 
     private static ServerGossip.Endpoint endpointForSource(InetAddress source, int sourcePort) {

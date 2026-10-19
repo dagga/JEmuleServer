@@ -129,6 +129,27 @@ public class FileIndex {
      * @return the metadata instance now stored in the index for this hash
      */
     public FileMetadata addFile(FileMetadata meta) {
+        List<FileMetadata> toPersist = new ArrayList<>(1);
+        FileMetadata stored = addFileInternal(meta, toPersist);
+        if (db != null && !toPersist.isEmpty()) db.saveFiles(toPersist);
+        return stored;
+    }
+
+    /**
+     * Adds a group of files to the in-memory index and persists changed entries in one database transaction.
+     */
+    public List<FileMetadata> addFiles(Collection<FileMetadata> files) {
+        if (files == null || files.isEmpty()) return List.of();
+        List<FileMetadata> toPersist = new ArrayList<>(files.size());
+        List<FileMetadata> stored = new ArrayList<>(files.size());
+        for (FileMetadata file : files) {
+            if (file != null && file.hash() != null) stored.add(addFileInternal(file, toPersist));
+        }
+        if (db != null && !toPersist.isEmpty()) db.saveFiles(toPersist);
+        return List.copyOf(stored);
+    }
+
+    private FileMetadata addFileInternal(FileMetadata meta, List<FileMetadata> toPersist) {
         FileMetadata incoming = meta;
         boolean[] isNew = {false};
         boolean[] sourceCountChanged = {false};
@@ -161,17 +182,13 @@ public class FileIndex {
                 indexTokens(stored);
             }
             searchCache.clear(); // Invalidate cache when adding a new file
-            if (db != null) {
-                db.saveFile(stored);
-            }
+            toPersist.add(stored);
             if (eventManager != null) {
                 eventManager.broadcast(new FileEvent(FileEvent.PUBLISHED, stored.name(), stored.hash(), "File published: " + stored.name()));
             }
         } else if (sourceCountChanged[0]) {
             searchCache.clear();
-            if (db != null) {
-                db.saveFile(stored);
-            }
+            toPersist.add(stored);
         }
         return stored;
     }

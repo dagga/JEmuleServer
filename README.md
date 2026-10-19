@@ -27,7 +27,7 @@ Building requires a JDK 21 (Gradle toolchain). To compile the project and genera
 ./gradlew build
 ```
 
-The JAR file will be generated in `build/libs/JEmuleServer-1.2.3.jar`.
+The JAR file will be generated in `build/libs/JEmuleServer-1.2.4.jar`.
 
 ## Installation from the release packages
 
@@ -67,7 +67,7 @@ This task starts the JVM with `-Djava.net.preferIPv4Stack=true` (IPv4 only); use
 Once the project is compiled, you can start the server with the following command:
 
 ```bash
-java --add-modules=jdk.httpserver -jar build/libs/JEmuleServer-1.2.3.jar [config_file] [port]
+java --add-modules=jdk.httpserver -jar build/libs/JEmuleServer-1.2.4.jar [config_file] [port]
 ```
 
 - Note: The server binds to the IPv6 wildcard when available, so IPv6 clients can connect. Avoid forcing the JVM to

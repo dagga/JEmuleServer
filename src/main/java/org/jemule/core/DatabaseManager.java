@@ -27,7 +27,9 @@ import org.slf4j.LoggerFactory;
 
 import java.sql.*;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
@@ -197,53 +199,67 @@ public class DatabaseManager implements AutoCloseable {
     }
 
     public void saveFile(FileMetadata meta) {
+        saveFiles(List.of(meta));
+    }
+
+    public void saveFiles(Collection<FileMetadata> files) {
+        if (files == null || files.isEmpty()) return;
         try {
             locked(() -> {
-                saveFileInternal(meta);
+                saveFilesInternal(files);
                 return null;
             });
         } catch (Throwable e) {
-            logger.error("Circuit breaker prevented or caught error during saveFile: {}", e.getMessage());
+            logger.error("Circuit breaker prevented or caught error during saveFiles ({} files): {}",
+                    files.size(), e.getMessage(), e);
         }
     }
 
-    private void saveFileInternal(FileMetadata meta) throws SQLException {
+    private void saveFilesInternal(Collection<FileMetadata> files) throws SQLException {
+        Map<String, FileMetadata> uniqueFiles = new LinkedHashMap<>();
+        for (FileMetadata file : files) {
+            if (file != null) uniqueFiles.put(file.hash(), file);
+        }
+        if (uniqueFiles.isEmpty()) return;
+
         try {
             connection.setAutoCommit(false);
-            try (PreparedStatement ps = connection.prepareStatement(
-                    "MERGE INTO files (hash, name, size, type) KEY (hash) VALUES (?, ?, ?, ?)")) {
-                ps.setString(1, meta.hash());
-                ps.setString(2, meta.name());
-                ps.setLong(3, meta.size());
-                ps.setString(4, meta.type());
-                ps.executeUpdate();
-            }
+            try (PreparedStatement mergeFile = connection.prepareStatement(
+                         "MERGE INTO files (hash, name, size, type) KEY (hash) VALUES (?, ?, ?, ?)");
+                 PreparedStatement deleteTags = connection.prepareStatement("DELETE FROM file_tags WHERE file_hash = ?");
+                 PreparedStatement insertTag = connection.prepareStatement(
+                         "INSERT INTO file_tags (file_hash, tag_type, tag_name, tag_value_str, tag_value_blob) VALUES (?, ?, ?, ?, ?)")) {
+                for (FileMetadata meta : uniqueFiles.values()) {
+                    mergeFile.setString(1, meta.hash());
+                    mergeFile.setString(2, meta.name());
+                    mergeFile.setLong(3, meta.size());
+                    mergeFile.setString(4, meta.type());
+                    mergeFile.addBatch();
 
-            try (PreparedStatement ps = connection.prepareStatement("DELETE FROM file_tags WHERE file_hash = ?")) {
-                ps.setString(1, meta.hash());
-                ps.executeUpdate();
-            }
-
-            if (!meta.tags().isEmpty()) {
-                try (PreparedStatement ps = connection.prepareStatement(
-                        "INSERT INTO file_tags (file_hash, tag_type, tag_name, tag_value_str, tag_value_blob) VALUES (?, ?, ?, ?, ?)")) {
-                    for (Tag tag : meta.tags()) {
-                        ps.setString(1, meta.hash());
-                        ps.setByte(2, tag.type());
-                        ps.setString(3, tag.name());
-                        
-                        if (tag.value() instanceof byte[] bytes) {
-                            ps.setNull(4, Types.CLOB);
-                            ps.setBytes(5, bytes);
-                        } else {
-                            ps.setString(4, String.valueOf(tag.value()));
-                            ps.setNull(5, Types.BLOB);
-                        }
-                        ps.addBatch();
-                    }
-                    ps.executeBatch();
+                    deleteTags.setString(1, meta.hash());
+                    deleteTags.addBatch();
                 }
+                mergeFile.executeBatch();
+                deleteTags.executeBatch();
+
+                for (FileMetadata meta : uniqueFiles.values()) {
+                    for (Tag tag : meta.tags()) {
+                        insertTag.setString(1, meta.hash());
+                        insertTag.setByte(2, tag.type());
+                        insertTag.setString(3, tag.name());
+                        if (tag.value() instanceof byte[] bytes) {
+                            insertTag.setNull(4, Types.CLOB);
+                            insertTag.setBytes(5, bytes);
+                        } else {
+                            insertTag.setString(4, String.valueOf(tag.value()));
+                            insertTag.setNull(5, Types.BLOB);
+                        }
+                        insertTag.addBatch();
+                    }
+                }
+                insertTag.executeBatch();
             }
+
             connection.commit();
         } catch (SQLException e) {
             try { connection.rollback(); } catch (SQLException ex) { /* ignore */ }
