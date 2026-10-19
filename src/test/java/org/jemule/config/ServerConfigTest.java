@@ -58,7 +58,15 @@ class ServerConfigTest {
         assertEquals(ServerConfig.DEFAULT.port(), cfg.port());
         assertEquals(ServerConfig.DEFAULT.maxFiles(), cfg.maxFiles());
         assertEquals(0, cfg.adminPort(), "the admin port is disabled by default");
+        assertEquals(ServerConfig.DEFAULT_IP_FILTER_PATH, cfg.ipFilterPath());
         assertEquals(ServerConfig.DEFAULT_SERVER_MET_URL, cfg.serverMetUrl());
+    }
+
+    @Test
+    void emptyIpFilterPathDisablesAutomaticUpdates() {
+        Properties properties = new Properties();
+        properties.setProperty("ipFilterPath", "");
+        assertEquals("", ServerConfig.fromProperties(properties).ipFilterPath());
     }
 
     @Test

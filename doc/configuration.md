@@ -11,7 +11,7 @@ Options not set in that file use the defaults built into the server. Keep runtim
 | Network | `port`, `publicIp`, `maxPacketSize`, `tcpKeepAliveTimeoutInSeconds`, `heartbeatIntervalSeconds`, `lowIdCheckTimeoutSeconds` | Listener, advertised address, packet size and connection/liveness behavior. |
 | Capacity | `maxUsers`, `maxFiles`, `maxFilesPerUser`, `maxSourcesPerFile`, `maxSearchResults` | Limits for clients, indexed files, published files, source replies and search results. |
 | Storage | `databasePath` | H2 database location. |
-| Filtering | `ipFilterPath`, `fakeFileDetectionEnabled`, `childAbuseKeywordsPath` | Optional IP list, fake-file heuristics and the child-abuse keyword list. The child-abuse filter cannot be disabled. |
+| Filtering | `ipFilterPath`, `fakeFileDetectionEnabled`, `childAbuseKeywordsPath` | IP filter defaults to `./ipfilter.dat` and is refreshed from the HTTPS eMule Security ZIP source at startup and daily; fake-file heuristics and the child-abuse keyword list. The child-abuse filter cannot be disabled. |
 | Protection | `floodMaxRequestsPerSecond`, `cbFailureRateThreshold`, `cbMinimumNumberOfCalls`, `cbWaitDurationInSeconds` | Per-IP flood threshold and database circuit-breaker behavior. |
 | Server federation | `serverPeers`, `serverMetUrl` | Comma-separated IPv4 seeds and optional HTTPS `server.met` source loaded at startup. Downloaded endpoints are merged with existing candidates, not used to replace them; peers are verified before gossip or searches. |
 | Kademlia | `kadEnabled`, `kadPort`, `kadBootstrapFromClients`, `kadMaxRoutingContacts`, `kadForkSearchEnabled`, `kadSearchTimeoutSeconds`, `kadAutoIngestToH2`, `kadMinSourcesForIngest` | Embedded Kad node, search forwarding, bootstrapping and result ingestion. |

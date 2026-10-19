@@ -24,6 +24,7 @@ class IPFilterUpdaterTest {
     void bundledSourcesUseHttps() throws IOException {
         assertFalse(IPFilterUpdater.bundledSources().isEmpty());
         assertTrue(IPFilterUpdater.bundledSources().stream().allMatch(source -> source.getScheme().equals("https")));
+        assertTrue(IPFilterUpdater.bundledSources().contains(URI.create("https://upd.emule-security.org/ipfilter.zip")));
     }
 
     @Test

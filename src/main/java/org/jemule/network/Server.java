@@ -164,7 +164,7 @@ public class Server {
         setupDefaultListeners();
         this.floodProtector = new FloodProtector(config.floodMaxRequestsPerSecond());
         this.ipFilter = new IPFilter();
-        if (config.ipFilterPath() != null) {
+        if (config.ipFilterPath() != null && !config.ipFilterPath().isBlank()) {
             this.ipFilter.loadFromFile(config.ipFilterPath());
         }
         this.ipFilterUpdater = createIpFilterUpdater(config.ipFilterPath());

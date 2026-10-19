@@ -96,6 +96,7 @@ public record ServerConfig(
      */
     public static final int DEFAULT_LOWID_CHECK_TIMEOUT_SECONDS = 5;
     public static final String DEFAULT_SERVER_MET_URL = "https://upd.emule-security.org/server.met";
+    public static final String DEFAULT_IP_FILTER_PATH = "./ipfilter.dat";
 
     /**
      * Constructor without the HighID test timeout (uses {@link #DEFAULT_LOWID_CHECK_TIMEOUT_SECONDS}).
@@ -223,7 +224,7 @@ public record ServerConfig(
             5000,
             200,
             "./jemule_db",
-            null,
+            DEFAULT_IP_FILTER_PATH,
             true,
             50.0f,
             10,
