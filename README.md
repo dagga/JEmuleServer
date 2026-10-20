@@ -1,6 +1,6 @@
 # JEmuleServer
 
-JEmuleServer is an eMule server written in Java (version 1.2.9).
+JEmuleServer is an eMule server written in Java (version 1.2.10).
 
 Downloads (installers and JAR) are on the [releases page](https://github.com/dagga/JEmuleServer/releases); the changes
 of each version are described in `doc/release-notes-v<version>.md` (latest: [1.2.9](doc/release-notes-v1.2.9.md)).
@@ -27,7 +27,7 @@ Building requires a JDK 21 (Gradle toolchain). To compile the project and genera
 ./gradlew build
 ```
 
-The JAR file will be generated in `build/libs/JEmuleServer-1.2.9.jar`.
+The JAR file will be generated in `build/libs/JEmuleServer-1.2.10.jar`.
 
 ## Installation from the release packages
 
@@ -140,17 +140,25 @@ that brings this content to its clients without exposing them to illicit files:
   `kadNodesUrls` sources (refreshed daily, cached next to the database) and sends bootstrap requests to its nodes.
   When a HighID client logs in, the node also asks its Kad ports (`listenPort + 10` and `4672`) for contacts.
   `kad bootstrap <ip> <port>` adds a node by hand.
-- **Forked search**: each `OP_SEARCHREQUEST` is answered from the local index and sent at the same time to the 3
-  closest Kad contacts (`KADEMLIA2_SEARCH_KEY_REQ`, keyword hashed with MD4).
+- **Forked search**: each `OP_SEARCHREQUEST` is answered from the local index and sent at the same time to the 8 Kad
+  nodes closest to its longest required word (`KADEMLIA2_SEARCH_KEY_REQ`, keyword hashed with MD4), with the whole
+  query so that the nodes only return matching files. A node that returns a full page of 300 files is asked for the
+  next ones, up to 900.
+- **Flood limits**: the server never sends a Kad node more requests than the node accepts per minute from one IP, so
+  that the nodes neither drop its requests nor ban it.
 - **Filtering**: every file returned by Kad goes through the banned hashes, the [child abuse filter](#child-abuse-filter)
   and the fake file detector. An illicit file is never sent to a client and its hash is banned for good.
 - **Cache warming**: clean Kad files with at least one source are stored in the H2 database and indexed. The next
   searches on the same terms find them locally, in the first batch of results.
 
 The client waits for Kad only when nothing matches locally (cold search), at most `kadSearchTimeoutSeconds`; the files
-found are then paginated by 50 with the "More" button (`OP_QUERY_MORE_RESULT`). When local results exist, they are
-sent at once and the Kad search keeps enriching the database in the background. A server that cannot reach Kad
-answers as fast as without it.
+found are then paginated by 300 with the "More" button (`OP_QUERY_MORE_RESULT`), up to the 1,800 files an eMule
+client accepts. When local results exist, they are sent at once and the Kad files follow with the "More" button. A
+server that cannot reach Kad answers as fast as without it.
+
+Searches are also forked to the verified eD2K servers (UDP global search). A server answers it with its first 10 to
+30 matches only, and UDP has no "More" request: when a server returns a full answer, the search is repeated on it once
+per file type (at most 4 times per minute and per server), which returns about five times as many files.
 
 The node listens on UDP port `kadPort` (default: TCP port + 11, i.e. `4672`). Its settings, with their defaults:
 

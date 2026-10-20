@@ -52,21 +52,21 @@ class KadSearchBridgeTest {
     @Test
     void testExtractKeywordFromQuery() {
         SearchQuery q1 = new SearchQuery.TermQuery("ubuntu", SearchQuery.ID_FILENAME);
-        assertEquals("ubuntu", KadSearchBridge.extractKeyword(q1));
+        assertEquals("ubuntu", KadSearchTerms.keyword(q1));
 
         SearchQuery q2 = new SearchQuery.AndQuery(
                 new SearchQuery.TermQuery("linux", SearchQuery.ID_FILENAME),
                 new SearchQuery.NumericQuery(SearchQuery.ID_FILESIZE, SearchQuery.OP_GREATER, 1000)
         );
-        assertEquals("linux", KadSearchBridge.extractKeyword(q2));
+        assertEquals("linux", KadSearchTerms.keyword(q2));
 
         SearchQuery q3 = new SearchQuery.OrQuery(
                 new SearchQuery.NumericQuery(SearchQuery.ID_FILESIZE, SearchQuery.OP_GREATER, 500),
                 new SearchQuery.TermQuery("debian", SearchQuery.ID_FILENAME)
         );
-        assertEquals("debian", KadSearchBridge.extractKeyword(q3));
+        assertEquals("debian", KadSearchTerms.keyword(q3));
 
-        assertNull(KadSearchBridge.extractKeyword(new SearchQuery.NumericQuery(SearchQuery.ID_FILESIZE, SearchQuery.OP_GREATER, 500)));
+        assertNull(KadSearchTerms.keyword(new SearchQuery.NumericQuery(SearchQuery.ID_FILESIZE, SearchQuery.OP_GREATER, 500)));
     }
 
     @Test
@@ -117,6 +117,73 @@ class KadSearchBridgeTest {
             assertEquals(1, results.size());
             assertEquals(expectedFileHash, results.get(0).hash());
             assertEquals("matrix-reloaded.avi", results.get(0).name());
+        }
+    }
+
+    @Test
+    void searchesTheIndexOfTheLongestWordWithTheWholeQuery() throws Exception {
+        KadRoutingTable table = new KadRoutingTable(KadId.random());
+        try (KadUdpService serverUdp = new KadUdpService(0);
+             KadUdpService peerUdp = new KadUdpService(0);
+             KadSearchBridge bridge = new KadSearchBridge(table, serverUdp, 3, 1000)) {
+            serverUdp.start();
+            peerUdp.start();
+            bridge.start();
+            table.addOrUpdate(new KadContact(table.generateRandomIdForBucket(1), InetAddress.getLoopbackAddress(), peerUdp.getPort()));
+
+            AtomicReference<KadPacket.SearchKeyReq> received = new AtomicReference<>();
+            CountDownLatch latch = new CountDownLatch(1);
+            peerUdp.registerListener(KadOpCode.SEARCH_KEY_REQ, (packet, addr, port) -> {
+                received.set(KadPacket.parseSearchKeyReq(packet.data()));
+                latch.countDown();
+            });
+
+            SearchQuery query = new SearchQuery.AndQuery(
+                    new SearchQuery.TermQuery("the", SearchQuery.ID_FILENAME),
+                    new SearchQuery.TermQuery("reloaded", SearchQuery.ID_FILENAME));
+            bridge.forkSearch(query);
+            assertTrue(latch.await(3, TimeUnit.SECONDS));
+            assertEquals(KadId.fromKeyword("reloaded"), received.get().keywordHash(), "the rarer, longer word");
+            assertEquals(0, received.get().startPosition());
+            assertArrayEquals(KadSearchTerms.encode(query, "reloaded"), received.get().searchTerms(),
+                    "the node filters its entries with the whole query");
+        }
+    }
+
+    @Test
+    void requestsTheNextPageFromANodeThatFilledOne() throws Exception {
+        KadRoutingTable table = new KadRoutingTable(KadId.random());
+        try (KadUdpService serverUdp = new KadUdpService(0);
+             KadUdpService peerUdp = new KadUdpService(0);
+             KadSearchBridge bridge = new KadSearchBridge(table, serverUdp, 3, 1500)) {
+            serverUdp.start();
+            peerUdp.start();
+            bridge.start();
+            table.addOrUpdate(new KadContact(table.generateRandomIdForBucket(1), InetAddress.getLoopbackAddress(), peerUdp.getPort()));
+
+            KadId keyword = KadId.fromKeyword("concert");
+            List<Integer> startPositions = new java.util.concurrent.CopyOnWriteArrayList<>();
+            peerUdp.registerListener(KadOpCode.SEARCH_KEY_REQ, (packet, addr, port) -> {
+                int start = KadPacket.parseSearchKeyReq(packet.data()).startPosition();
+                startPositions.add(start);
+                List<FileMetadata> page = new ArrayList<>();
+                for (int i = start; i < start + KadSearchBridge.RESULTS_PER_PAGE; i++) { // an endless index
+                    page.add(new FileMetadata(String.format("%032x", i + 1), "concert " + i + ".avi", 1000L, "Video",
+                            List.of(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, 1))));
+                }
+                try {
+                    for (int i = 0; i < page.size(); i += 50) {
+                        peerUdp.send(KadPacket.createSearchRes(keyword, page.subList(i, i + 50)), addr, port);
+                    }
+                } catch (Exception e) {
+                    fail(e);
+                }
+            });
+
+            List<FileMetadata> results = bridge.forkSearch("concert").get(5, TimeUnit.SECONDS);
+            assertEquals(List.of(0, 300, 600), startPositions, "at most MAX_PAGES_PER_NODE pages per node");
+            assertEquals(KadSearchBridge.MAX_PAGES_PER_NODE * KadSearchBridge.RESULTS_PER_PAGE,
+                    results.stream().map(FileMetadata::hash).distinct().count());
         }
     }
 

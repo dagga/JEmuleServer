@@ -132,15 +132,17 @@ class ProtocolSequenceTest {
         EventManager em = new EventManager();
         InetAddress remote = InetAddress.getByName("127.0.0.1");
         DummySocket s = new DummySocket(remote, remote, 11111);
-        FakeClientContext ctx = new FakeClientContext(s, ServerConfig.DEFAULT, cf, reg, fi, em);
+        java.util.Properties props = new java.util.Properties();
+        props.setProperty("maxSearchResults", "1000");
+        FakeClientContext ctx = new FakeClientContext(s, ServerConfig.fromProperties(props), cf, reg, fi, em);
 
         // Create state and assign
         org.jemule.core.ClientState st = new org.jemule.core.ClientState(remote, 11111, 42, System.currentTimeMillis(), new AtomicLong(System.currentTimeMillis()));
         ctx.setState(st);
 
-        // Populate file index with 60 entries (offered by this client) to force pagination
-        for (int i = 0; i < 60; i++) {
-            FileMetadata m = new FileMetadata(String.format("H%02d", i), "TestFile" + i + ".txt", 1000 + i, "Doc");
+        // Populate file index with more entries than one batch (offered by this client) to force pagination
+        for (int i = 0; i < SearchHandler.BATCH_SIZE + 10; i++) {
+            FileMetadata m = new FileMetadata(String.format("H%03d", i), "TestFile" + i + ".txt", 1000 + i, "Doc");
             m.sources().put(FileIndex.sourceKey(st), st);
             fi.addFile(m);
         }

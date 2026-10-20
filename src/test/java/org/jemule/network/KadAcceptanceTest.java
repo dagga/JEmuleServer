@@ -88,8 +88,14 @@ class KadAcceptanceTest {
             KadPacket.SearchKeyReq req = KadPacket.parseSearchKeyReq(packet.data());
             List<FileMetadata> files = req != null ? peerCatalog.get(req.keywordHash()) : null;
             if (files != null) {
+                // Like CIndexed::SendValidKeywordResult: at most 300 entries from the start position, 50 per packet
+                List<FileMetadata> page = files.subList(Math.min(req.startPosition(), files.size()),
+                        Math.min(req.startPosition() + 300, files.size()));
                 try {
-                    peer.send(KadPacket.createSearchRes(req.keywordHash(), files), addr, port);
+                    for (int i = 0; i < page.size(); i += 50) {
+                        peer.send(KadPacket.createSearchRes(req.keywordHash(),
+                                page.subList(i, Math.min(i + 50, page.size()))), addr, port);
+                    }
                 } catch (Exception e) {
                     fail(e);
                 }
@@ -192,9 +198,14 @@ class KadAcceptanceTest {
         assertEquals(1, storedHashes().size());
         peerJoinsTheRoutingTable(); // the peer knows nothing about "holiday"
 
-        SearchAnswer a = search(client("10.1.1.1"), "holiday");
+        FakeContext ctx = client("10.1.1.1");
+        SearchAnswer a = search(ctx, "holiday");
         assertEquals(List.of("11111111111111111111111111111111"), hashes(a));
-        assertEquals(0, a.more());
+        assertEquals(1, a.more(), "the Kad search is still running");
+
+        SearchAnswer more = queryMore(ctx);
+        assertTrue(more.results().isEmpty(), "Kad found nothing more");
+        assertEquals(0, more.more());
     }
 
     @Test
@@ -244,9 +255,10 @@ class KadAcceptanceTest {
     }
 
     @Test
-    void tc06_coldSearchOverFiftyResultsIsPaginatedWithQueryMore() throws Exception {
+    void tc06_coldSearchPagesTheKadIndexAndIsPaginatedWithQueryMore() throws Exception {
+        // More than one page of the node's index (300 entries per KADEMLIA2_SEARCH_KEY_REQ)
         List<FileMetadata> files = new ArrayList<>();
-        for (int i = 0; i < 60; i++) {
+        for (int i = 0; i < 650; i++) {
             files.add(kadFile(String.format("%032x", i + 1), "lecture part " + i + ".mkv", 2));
         }
         peerCatalog.put(KadId.fromKeyword("lecture"), files);
@@ -254,13 +266,16 @@ class KadAcceptanceTest {
 
         FakeContext ctx = client("10.1.1.1");
         SearchAnswer first = search(ctx, "lecture");
-        assertEquals(50, first.results().size());
+        assertEquals(SearchHandler.BATCH_SIZE, first.results().size());
         assertEquals(1, first.more(), "more=1 when results remain");
 
         SearchAnswer second = queryMore(ctx);
-        assertEquals(10, second.results().size());
-        assertEquals(0, second.more());
-        assertEquals(60, storedHashes().size(), "the whole cold discovery is ingested");
+        assertEquals(SearchHandler.BATCH_SIZE, second.results().size());
+        assertEquals(1, second.more());
+        SearchAnswer third = queryMore(ctx);
+        assertEquals(50, third.results().size(), "the third page of the node's index was requested");
+        assertEquals(0, third.more());
+        assertEquals(650, storedHashes().size(), "the whole cold discovery is ingested");
     }
 
     /** Runs a search and returns its answer time in milliseconds, checking the returned hashes. */
@@ -269,7 +284,6 @@ class KadAcceptanceTest {
         SearchAnswer a = search(ctx, keyword);
         long elapsedMs = (System.nanoTime() - start) / 1_000_000;
         assertEquals(expectedHashes, hashes(a));
-        assertEquals(0, a.more());
         return elapsedMs;
     }
 
@@ -302,7 +316,7 @@ class KadAcceptanceTest {
     }
 
     @Test
-    void tc08_warmSearchIsServedAtOnceFromH2WithoutQueryMore() throws Exception {
+    void tc08_warmSearchIsServedAtOnceFromH2WithoutResendingKnownFiles() throws Exception {
         String desktop = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
         String server = "ffffffffffffffffffffffffffffffff";
         peerCatalog.put(KadId.fromKeyword("ubuntu"), List.of(
@@ -315,13 +329,17 @@ class KadAcceptanceTest {
         assertEquals(List.of(desktop, server), storedHashes());
 
         // Warm search by another client, the Kad peer still being reachable
+        FakeContext ctx = client("10.2.2.2");
         long start = System.nanoTime();
-        SearchAnswer warm = search(client("10.2.2.2"), "ubuntu");
+        SearchAnswer warm = search(ctx, "ubuntu");
         long elapsedMs = (System.nanoTime() - start) / 1_000_000;
 
         assertEquals(List.of(desktop, server), hashes(warm), "the whole catalog is in the first batch");
-        assertEquals(0, warm.more(), "no OP_QUERY_MORE_RESULT needed");
+        assertEquals(1, warm.more(), "the Kad results are offered through OP_QUERY_MORE_RESULT");
         assertTrue(elapsedMs < 100, "served from H2 without waiting for Kad: " + elapsedMs + " ms");
+        SearchAnswer more = queryMore(ctx);
+        assertTrue(more.results().isEmpty(), "files already sent are not sent again");
+        assertEquals(0, more.more());
     }
 
     @Test
@@ -344,7 +362,7 @@ class KadAcceptanceTest {
             long start = System.nanoTime();
             SearchAnswer a = search(ctx, fullBatch ? words[i % words.length] : String.valueOf(1000 + i));
             durations[i] = System.nanoTime() - start;
-            assertEquals(fullBatch ? 50 : 1, a.results().size());
+            assertEquals(fullBatch ? SearchHandler.BATCH_SIZE : 1, a.results().size());
         }
         Arrays.sort(durations);
         long p95Ms = durations[(int) (durations.length * 0.95) - 1] / 1_000_000;
