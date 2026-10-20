@@ -313,8 +313,8 @@ public class KadSearchBridge implements AutoCloseable {
         if (existing == null) {
             if (routingTable.findClosest(keywordHash, 1).isEmpty()) {
                 // Isolated DHT: no contact can be queried, the search is over at once
-                created.complete();
                 activeSessions.remove(key, created);
+                created.complete();
             } else {
                 // Keyword searches must first walk the DHT towards the keyword hash: the nodes responsible for the
                 // keyword index are the K closest to it, which are almost never already in our routing table.
@@ -331,8 +331,9 @@ public class KadSearchBridge implements AutoCloseable {
                     } catch (RuntimeException e) {
                         log.debug("Kad search for '{}' failed: {}", description, e.getMessage());
                     } finally {
-                        created.complete();
+                        // Removed first: whoever sees the results sees the session over, and a new search starts afresh
                         activeSessions.remove(key, created);
+                        created.complete();
                     }
                 });
             }
