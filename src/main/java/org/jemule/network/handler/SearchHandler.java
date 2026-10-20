@@ -16,16 +16,22 @@ import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
 public class SearchHandler {
     private static final Logger log = LoggerFactory.getLogger(SearchHandler.class);
-    private static final int BATCH_SIZE = 50;
+    /**
+     * Results per OP_SEARCHRESULT. eMule clients send OP_QUERY_MORE_RESULT at most 5 times per search
+     * (MAX_MORE_SEARCH_REQ, sized for "(1+5)*300 = 1800" results), so the batch size bounds what a client can see.
+     */
+    public static final int BATCH_SIZE = 300;
 
     public void handleSearch(ClientContext context, byte[] data, OutputStream out) throws IOException {
         if (data == null || data.length < 1) {
@@ -57,20 +63,20 @@ public class SearchHandler {
         CompletableFuture<List<FileMetadata>> remoteResults = startRemoteSearches(context, query, data);
         boolean deferRemoteResults = false;
         if (remoteResults != null) {
-            if (dedupMap.isEmpty()) {
-                long timeoutMs = Math.max(
-                        context.getKadSearchBridge() == null ? 0 : context.getKadSearchBridge().getSearchTimeoutMs(),
-                        context.getServerSearchBridge() == null ? 0 : context.getServerSearchBridge().getSearchTimeoutMs());
+            if (remoteResults.isDone()) {
+                addMatchingResults(dedupMap, remoteResults.join(), query);
+            } else if (dedupMap.isEmpty()) {
                 try {
                     addMatchingResults(dedupMap,
-                            remoteResults.get(timeoutMs + 1000, TimeUnit.MILLISECONDS), query);
+                            remoteResults.get(remoteTimeoutMs(context) + 1000, TimeUnit.MILLISECONDS), query);
                 } catch (TimeoutException e) {
                     log.debug("Remote search timed out for query: {}", query);
                     deferRemoteResults = true;
                 } catch (Exception e) {
                     log.debug("Remote search failed for query {}: {}", query, e.getMessage());
                 }
-            } else if (dedupMap.size() >= BATCH_SIZE) {
+            } else {
+                // Local results are sent at once; the Kad and server results are offered through "More"
                 deferRemoteResults = true;
             }
         }
@@ -83,16 +89,25 @@ public class SearchHandler {
         context.getState().initializePendingSearch(searchGeneration, pending, deferRemoteResults);
         if (deferRemoteResults) {
             SearchQuery activeQuery = query;
+            Set<String> known = new HashSet<>(dedupMap.keySet()); // already sent or pending
             remoteResults.whenComplete((results, error) -> {
                 if (error != null) {
                     log.debug("Remote search failed: {}", error.getMessage());
                     context.getState().completePendingSearch(searchGeneration, List.of());
                 } else {
-                    context.getState().completePendingSearch(searchGeneration, matchingResults(activeQuery, results));
+                    context.getState().completePendingSearch(searchGeneration, matchingResults(activeQuery, results).stream()
+                            .filter(file -> !known.contains(file.hash().toUpperCase(Locale.ROOT)))
+                            .toList());
                 }
             });
         }
         sendSearchResults(context, batch, combined.size() > BATCH_SIZE || deferRemoteResults, out);
+    }
+
+    private static long remoteTimeoutMs(ClientContext context) {
+        return Math.max(
+                context.getKadSearchBridge() == null ? 0 : context.getKadSearchBridge().getSearchTimeoutMs(),
+                context.getServerSearchBridge() == null ? 0 : context.getServerSearchBridge().getSearchTimeoutMs());
     }
 
     private CompletableFuture<List<FileMetadata>> startRemoteSearches(ClientContext context, SearchQuery query,
@@ -141,6 +156,15 @@ public class SearchHandler {
     }
 
     public void handleQueryMoreResult(ClientContext context, OutputStream out) throws IOException {
+        // Nothing left but remote results still expected: answer with them rather than with an empty batch,
+        // which would use up one of the client's few "More" requests
+        try {
+            context.getState().awaitablePendingSearch().get(remoteTimeoutMs(context) + 1000, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (Exception e) {
+            log.debug("Remote results still missing for OP_QUERY_MORE_RESULT: {}", e.getMessage());
+        }
         ClientState.PendingSearchBatch pending = context.getState().takePendingSearchBatch(BATCH_SIZE);
         if (pending == null) return;
         sendSearchResults(context, pending.results(), pending.moreAvailable(), out);

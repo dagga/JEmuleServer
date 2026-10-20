@@ -27,7 +27,9 @@ import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.SocketException;
 import java.net.SocketTimeoutException;
+import java.util.EnumMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -44,6 +46,7 @@ public class KadUdpService implements AutoCloseable {
     private final int requestedPort;
     private final ConcurrentHashMap<KadOpCode, List<KadPacketListener>> opcodeListeners = new ConcurrentHashMap<>();
     private final List<KadPacketListener> globalListeners = new CopyOnWriteArrayList<>();
+    private final Map<KadOpCode, KadRequestBudget> floodGuard = floodGuard();
 
     private volatile DatagramSocket socket;
     private volatile boolean running = false;
@@ -110,7 +113,36 @@ public class KadUdpService implements AutoCloseable {
     }
 
     /**
+     * Thrown instead of sending a request the destination node would take for a flood.
+     */
+    public static final class FloodLimitException extends IOException {
+        FloodLimitException(KadOpCode opCode, InetAddress destination) {
+            super(opCode + " not sent: " + destination.getHostAddress() + " already received as many as it accepts per minute");
+        }
+    }
+
+    /**
+     * Requests per minute and per IP accepted by eMule nodes (CPacketTracking::InTrackListIsAllowedPacket). A node
+     * drops the requests above the limit and bans the IP above five times the limit; the server never goes above it.
+     */
+    private static Map<KadOpCode, KadRequestBudget> floodGuard() {
+        Map<KadOpCode, KadRequestBudget> limits = new EnumMap<>(KadOpCode.class);
+        limits.put(KadOpCode.BOOTSTRAP_REQ, new KadRequestBudget(2));
+        limits.put(KadOpCode.HELLO_REQ, new KadRequestBudget(3));
+        limits.put(KadOpCode.REQ, new KadRequestBudget(10));
+        limits.put(KadOpCode.SEARCH_KEY_REQ, new KadRequestBudget(3));
+        limits.put(KadOpCode.SEARCH_SOURCE_REQ, new KadRequestBudget(3));
+        limits.put(KadOpCode.SEARCH_NOTES_REQ, new KadRequestBudget(3));
+        limits.put(KadOpCode.PUBLISH_KEY_REQ, new KadRequestBudget(3));
+        limits.put(KadOpCode.PUBLISH_SOURCE_REQ, new KadRequestBudget(2));
+        limits.put(KadOpCode.PING, new KadRequestBudget(2));
+        return limits;
+    }
+
+    /**
      * Sends a Kademlia UDP packet to the given remote destination.
+     *
+     * @throws FloodLimitException if the packet is a request the destination would drop as a flood
      */
     public void send(KadPacket packet, InetAddress destination, int port) throws IOException {
         Objects.requireNonNull(packet, "packet cannot be null");
@@ -122,6 +154,12 @@ public class KadUdpService implements AutoCloseable {
         DatagramSocket s = this.socket;
         if (!running || s == null || s.isClosed()) {
             throw new IOException("Kad UDP service is not running");
+        }
+
+        KadOpCode opCode = packet.getOpCode();
+        KadRequestBudget budget = opCode == null ? null : floodGuard.get(opCode);
+        if (budget != null && !budget.tryAcquire(destination)) {
+            throw new FloodLimitException(opCode, destination);
         }
 
         byte[] raw = packet.encode();

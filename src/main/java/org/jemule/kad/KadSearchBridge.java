@@ -22,7 +22,6 @@ import org.jemule.core.DatabaseManager;
 import org.jemule.core.FileIndex;
 import org.jemule.core.FileSource;
 import org.jemule.core.FileMetadata;
-import org.jemule.core.Keywords;
 import org.jemule.core.SearchQuery;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -37,6 +36,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashSet;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -71,8 +71,18 @@ public class KadSearchBridge implements AutoCloseable {
     private static final long LOOKUP_ROUND_TIMEOUT_MS = 600;
     /** Number of nodes queried for the keyword once the lookup has converged. */
     private static final int SEARCH_NODES = 8;
+    /** Closest nodes considered when some of them cannot be queried now (flood limit). */
+    private static final int SEARCH_CANDIDATES = 2 * SEARCH_NODES;
     /** Minimum time left to the keyword index holders to answer, even when the lookup used up the timeout. */
     private static final long MIN_RESULT_WAIT_MS = 1000;
+    /** A node returns at most 300 entries per KADEMLIA2_SEARCH_KEY_REQ (CIndexed::SendValidKeywordResult). */
+    static final int RESULTS_PER_PAGE = 300;
+    /** Entries received from a node beyond which its page is taken as full (a few datagrams may be lost). */
+    private static final int FULL_PAGE_THRESHOLD = 270;
+    /** Pages requested from one node for one search, the first included. */
+    static final int MAX_PAGES_PER_NODE = 3;
+    /** How long the nodes found by a lookup are reused for later searches of the same keyword. */
+    private static final long CLOSEST_NODES_TTL_MS = 120_000;
 
     private final KadRoutingTable routingTable;
     private final KadUdpService udpService;
@@ -85,8 +95,9 @@ public class KadSearchBridge implements AutoCloseable {
     private final boolean autoIngestToH2;
     private final int minSourcesForIngest;
 
-    private final ConcurrentHashMap<KadId, KadSearchSession> activeSessions = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<SessionKey, KadSearchSession> activeSessions = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<KadId, NodeLookup> pendingLookups = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<KadId, ClosestNodes> closestNodes = new ConcurrentHashMap<>();
     private final Set<String> bannedHashes = ConcurrentHashMap.newKeySet();
     private final List<IllicitFileListener> illicitListeners = new CopyOnWriteArrayList<>();
 
@@ -103,18 +114,36 @@ public class KadSearchBridge implements AutoCloseable {
         void onIllicitFile(FileMetadata file, String reason);
     }
 
+    /** Searches share a session when they query the same keyword with the same search expression. */
+    private record SessionKey(KadId target, String searchTerms) {}
+
+    /** Nodes found closest to a keyword by a lookup, reused for a while by the next searches of that keyword. */
+    private record ClosestNodes(CompletableFuture<List<KadContact>> nodes, long createdAt) {
+        boolean expired(long now) {
+            return nodes.isDone() && (now - createdAt > CLOSEST_NODES_TTL_MS || nodes.join().isEmpty());
+        }
+    }
+
     public static class KadSearchSession {
         private final KadId targetId;
         private final String keyword;
+        private final byte[] searchTerms;
         private final long createdAt;
         private final List<FileMetadata> results = new CopyOnWriteArrayList<>();
         /** Contacts the search was sent to: the only ones whose answers are accepted. */
         private final Set<InetSocketAddress> queried = ConcurrentHashMap.newKeySet();
+        /** Paging state of each queried contact. */
+        private final Map<InetSocketAddress, NodePages> pages = new ConcurrentHashMap<>();
         private final CompletableFuture<List<FileMetadata>> future = new CompletableFuture<>();
 
         public KadSearchSession(KadId targetId, String keyword) {
+            this(targetId, keyword, null);
+        }
+
+        public KadSearchSession(KadId targetId, String keyword, byte[] searchTerms) {
             this.targetId = targetId;
             this.keyword = keyword;
+            this.searchTerms = searchTerms;
             this.createdAt = System.currentTimeMillis();
         }
 
@@ -130,8 +159,42 @@ public class KadSearchBridge implements AutoCloseable {
             return createdAt;
         }
 
+        public byte[] searchTerms() {
+            return searchTerms;
+        }
+
         void addQueried(InetAddress address, int port) {
-            queried.add(new InetSocketAddress(address, port));
+            InetSocketAddress node = new InetSocketAddress(address, port);
+            pages.putIfAbsent(node, new NodePages());
+            queried.add(node);
+        }
+
+        void removeQueried(InetAddress address, int port) {
+            InetSocketAddress node = new InetSocketAddress(address, port);
+            queried.remove(node);
+            pages.remove(node);
+        }
+
+        /**
+         * Counts the entries a node returned. Once they nearly fill the last page requested, the node probably
+         * holds more: the next page starts where that one ends.
+         *
+         * @return the start position of the next page to request from the node, or -1
+         */
+        int nextPage(InetAddress address, int port, int entries) {
+            NodePages node = pages.get(new InetSocketAddress(address, port));
+            if (node == null) return -1;
+            synchronized (node) {
+                node.received += entries;
+                int next = node.start + RESULTS_PER_PAGE;
+                if (node.received < node.start + FULL_PAGE_THRESHOLD || node.requested >= MAX_PAGES_PER_NODE
+                        || next > KadPacket.MAX_START_POSITION) {
+                    return -1;
+                }
+                node.start = next;
+                node.requested++;
+                return next;
+            }
         }
 
         public boolean wasQueried(InetAddress address, int port) {
@@ -210,74 +273,48 @@ public class KadSearchBridge implements AutoCloseable {
     }
 
     /**
-     * Extracts the primary text keyword from a SearchQuery tree.
-     */
-    public static String extractKeyword(SearchQuery query) {
-        if (query == null) return null;
-        if (query instanceof SearchQuery.TermQuery t && t.id() == SearchQuery.ID_FILENAME) {
-            return t.term();
-        }
-        if (query instanceof SearchQuery.AndQuery and) {
-            String left = extractKeyword(and.left());
-            if (left != null && !left.isBlank()) return left;
-            return extractKeyword(and.right());
-        }
-        if (query instanceof SearchQuery.OrQuery or) {
-            String left = extractKeyword(or.left());
-            if (left != null && !left.isBlank()) return left;
-            return extractKeyword(or.right());
-        }
-        if (query instanceof SearchQuery.NotQuery not) {
-            return extractKeyword(not.left());
-        }
-        return null;
-    }
-
-    /**
-     * Forks a SearchQuery to the Kademlia DHT asynchronously.
+     * Forks a SearchQuery to the Kademlia DHT asynchronously. The longest word every result must contain selects
+     * the keyword index, and the whole query is sent along (restrictive search), so that the index holders only
+     * count matching entries in the 300 they return.
      *
      * @param query The parsed SearchQuery.
      * @return A CompletableFuture providing discovered files, or completing with an empty list if not applicable.
      */
     public CompletableFuture<List<FileMetadata>> forkSearch(SearchQuery query) {
-        String keyword = extractKeyword(query);
-        return forkSearch(keyword);
+        String keyword = query == null ? null : KadSearchTerms.keyword(query);
+        if (keyword == null) {
+            return CompletableFuture.completedFuture(List.of());
+        }
+        return forkSearch(keyword, KadSearchTerms.encode(query, keyword), query.toString());
     }
 
     /**
-     * Forks a search query by raw keyword text.
+     * Forks a search query by raw keyword text: every word is required.
      */
     public CompletableFuture<List<FileMetadata>> forkSearch(String keyword) {
-        if (!running || keyword == null || keyword.isBlank()) {
+        if (keyword == null || keyword.isBlank()) {
             return CompletableFuture.completedFuture(List.of());
         }
+        return forkSearch(new SearchQuery.TermQuery(keyword, SearchQuery.ID_FILENAME));
+    }
 
-        String[] tokens = Keywords.split(keyword);
-        if (tokens.length == 0) {
+    private CompletableFuture<List<FileMetadata>> forkSearch(String keyword, byte[] searchTerms, String description) {
+        if (!running) {
             return CompletableFuture.completedFuture(List.of());
         }
+        KadId keywordHash = KadId.fromKeyword(keyword);
+        SessionKey key = new SessionKey(keywordHash, searchTerms == null ? "" : HexFormat.of().formatHex(searchTerms));
 
-        // Use the first significant token (length >= 3 preferred)
-        String primaryToken = tokens[0];
-        for (String t : tokens) {
-            if (t.length() >= 3) {
-                primaryToken = t;
-                break;
-            }
-        }
-
-        KadId keywordHash = KadId.fromKeyword(primaryToken);
-
-        // Searches running at the same time for this keyword hash share one session. The session is registered
-        // before the requests are sent, so that an immediate answer finds it.
-        KadSearchSession created = new KadSearchSession(keywordHash, keyword);
-        KadSearchSession existing = activeSessions.putIfAbsent(keywordHash, created);
+        // Identical searches running at the same time share one session. The session is registered before the
+        // requests are sent, so that an immediate answer finds it.
+        KadSearchSession created = new KadSearchSession(keywordHash, description, searchTerms);
+        KadSearchSession existing = activeSessions.putIfAbsent(key, created);
         KadSearchSession session = existing != null ? existing : created;
         if (existing == null) {
             if (routingTable.findClosest(keywordHash, 1).isEmpty()) {
                 // Isolated DHT: no contact can be queried, the search is over at once
                 created.complete();
-                activeSessions.remove(keywordHash, created);
+                activeSessions.remove(key, created);
             } else {
                 // Keyword searches must first walk the DHT towards the keyword hash: the nodes responsible for the
                 // keyword index are the K closest to it, which are almost never already in our routing table.
@@ -285,17 +322,17 @@ public class KadSearchBridge implements AutoCloseable {
                     try {
                         // The lookup is part of the search timeout, which bounds how long the client waits
                         long deadline = System.currentTimeMillis() + searchTimeoutMs;
-                        List<KadContact> nodes = lookupClosestNodes(created.targetId());
+                        List<KadContact> nodes = closestNodes(created.targetId());
                         if (dispatchSearchRequest(created, nodes) > 0) {
                             Thread.sleep(Math.max(MIN_RESULT_WAIT_MS, deadline - System.currentTimeMillis()));
                         }
                     } catch (InterruptedException ignored) {
                         Thread.currentThread().interrupt();
                     } catch (RuntimeException e) {
-                        log.debug("Kad search for '{}' failed: {}", keyword, e.getMessage());
+                        log.debug("Kad search for '{}' failed: {}", description, e.getMessage());
                     } finally {
                         created.complete();
-                        activeSessions.remove(keywordHash, created);
+                        activeSessions.remove(key, created);
                     }
                 });
             }
@@ -306,35 +343,64 @@ public class KadSearchBridge implements AutoCloseable {
     }
 
     /**
+     * Returns the contacts closest to {@code target}: those of a recent lookup, or of a new one. Searches of the
+     * same keyword at the same time wait for a single lookup.
+     */
+    private List<KadContact> closestNodes(KadId target) {
+        long now = System.currentTimeMillis();
+        closestNodes.values().removeIf(cached -> cached.expired(now));
+        ClosestNodes mine = new ClosestNodes(new CompletableFuture<>(), now);
+        ClosestNodes current = closestNodes.computeIfAbsent(target, ignored -> mine);
+        if (current == mine) {
+            try {
+                LookupResult result = lookupClosestNodes(target);
+                if (!result.answered()) {
+                    closestNodes.remove(target, mine); // only the contacts of a routing table: not worth keeping
+                }
+                mine.nodes().complete(result.contacts());
+            } finally {
+                mine.nodes().complete(List.of()); // the lookup failed: an empty list is not kept
+            }
+        }
+        return current.nodes().join().stream().filter(c -> !c.isDead()).toList();
+    }
+
+    /**
      * Iteratively walks the DHT towards {@code target}, collecting the contacts closest to it.
      * Each KADEMLIA2_REQ carries the contacted node's own ID as the sanity check expected by eMule/aMule.
      *
      * @return the closest live contacts known after the lookup (possibly empty).
      */
-    private List<KadContact> lookupClosestNodes(KadId target) {
+    private LookupResult lookupClosestNodes(KadId target) {
         List<KadContact> candidates = new ArrayList<>(routingTable.findClosest(target, SEARCH_NODES));
         Set<KadId> queried = new HashSet<>();
+        boolean answered = false;
 
         for (int round = 0; round < LOOKUP_ROUNDS; round++) {
             List<KadContact> toQuery = candidates.stream()
                     .filter(c -> !c.isDead() && !queried.contains(c.id()))
                     .sorted(Comparator.comparing(c -> c.id().distance(target)))
-                    .limit(LOOKUP_ALPHA)
                     .toList();
             if (toQuery.isEmpty()) break;
 
             NodeLookup lookup = new NodeLookup();
             pendingLookups.put(target, lookup);
             try {
+                int sent = 0;
                 for (KadContact contact : toQuery) {
+                    if (sent == LOOKUP_ALPHA) break;
                     queried.add(contact.id());
-                    lookup.queried.add(new InetSocketAddress(contact.address(), contact.udpPort()));
+                    InetSocketAddress node = new InetSocketAddress(contact.address(), contact.udpPort());
+                    lookup.queried.add(node);
                     lookup.outstanding.incrementAndGet();
                     try {
                         udpService.send(KadPacket.createFindNodeReq(contact.id(), FIND_VALUE_TYPE, target),
                                 contact.address(), contact.udpPort());
+                        sent++;
                     } catch (IOException e) {
+                        // a node at its flood limit is skipped for the next closest one
                         lookup.outstanding.decrementAndGet();
+                        lookup.queried.remove(node);
                         log.debug("Failed to send Kad find-node to {}: {}", contact, e.getMessage());
                     }
                 }
@@ -345,6 +411,7 @@ public class KadSearchBridge implements AutoCloseable {
                 pendingLookups.remove(target, lookup);
             }
 
+            answered |= !lookup.contacts.isEmpty();
             boolean discovered = false;
             for (KadContact contact : lookup.contacts) {
                 if (candidates.stream().noneMatch(c -> c.id().equals(contact.id()))) {
@@ -361,8 +428,11 @@ public class KadSearchBridge implements AutoCloseable {
                 .filter(c -> !c.isDead())
                 .sorted(Comparator.comparing(c -> c.id().distance(target)))
                 .forEach(c -> unique.putIfAbsent(c.id(), c));
-        return new ArrayList<>(unique.values());
+        return new LookupResult(new ArrayList<>(unique.values()), answered);
     }
+
+    /** Contacts closest to a target, and whether any node answered the lookup. */
+    private record LookupResult(List<KadContact> contacts, boolean answered) {}
 
     /**
      * Handles a KADEMLIA2_RES (closest contacts) answering one of our lookup requests.
@@ -389,7 +459,8 @@ public class KadSearchBridge implements AutoCloseable {
     }
 
     /**
-     * Sends KADEMLIA2_SEARCH_KEY_REQ to the nodes responsible for the keyword.
+     * Sends KADEMLIA2_SEARCH_KEY_REQ to the nodes responsible for the keyword, skipping those that already
+     * received as many search requests from this server as they accept per minute (see KadUdpService#send).
      *
      * @return The number of requests actually sent.
      */
@@ -399,9 +470,10 @@ public class KadSearchBridge implements AutoCloseable {
             return 0;
         }
 
-        KadPacket req = KadPacket.createSearchKeyReq(session.targetId(), 0);
+        KadPacket req = KadPacket.createSearchKeyReq(session.targetId(), 0, session.searchTerms());
         int sent = 0;
-        for (KadContact contact : targetNodes.subList(0, Math.min(SEARCH_NODES, targetNodes.size()))) {
+        for (KadContact contact : targetNodes.subList(0, Math.min(SEARCH_CANDIDATES, targetNodes.size()))) {
+            if (sent == SEARCH_NODES) break;
             try {
                 session.addQueried(contact.address(), contact.udpPort()); // before the answer can arrive
                 udpService.send(req, contact.address(), contact.udpPort());
@@ -409,6 +481,7 @@ public class KadSearchBridge implements AutoCloseable {
                 log.debug("Sent KADEMLIA2_SEARCH_KEY_REQ for '{}' ({}) to {}:{}",
                         session.keyword(), session.targetId(), contact.address().getHostAddress(), contact.udpPort());
             } catch (IOException e) {
+                session.removeQueried(contact.address(), contact.udpPort());
                 log.debug("Failed to send search request to {}:{} - {}", contact.address().getHostAddress(), contact.udpPort(), e.getMessage());
             }
         }
@@ -416,16 +489,35 @@ public class KadSearchBridge implements AutoCloseable {
         return sent;
     }
 
+    /**
+     * Requests the next page of a keyword index from a node whose answer filled the previous page.
+     */
+    private void requestNextPage(KadSearchSession session, InetAddress address, int port, int startPosition) {
+        if (!running) return;
+        try {
+            udpService.send(KadPacket.createSearchKeyReq(session.targetId(), startPosition, session.searchTerms()),
+                    address, port);
+            requestsSent.incrementAndGet();
+            log.debug("Requested Kad results {} to {} for '{}' from {}:{}", startPosition,
+                    startPosition + RESULTS_PER_PAGE - 1, session.keyword(), address.getHostAddress(), port);
+        } catch (IOException e) {
+            log.debug("Failed to request the next page from {}:{} - {}", address.getHostAddress(), port, e.getMessage());
+        }
+    }
+
     protected void handleSearchRes(KadPacket packet, InetAddress remoteAddress, int remotePort) {
         KadPacket.SearchRes parsed = KadPacket.parseSearchRes(packet.data());
         if (parsed == null) return;
 
-        KadSearchSession session = activeSessions.get(parsed.targetId());
-        if (session == null) {
+        List<KadSearchSession> sessions = activeSessions.values().stream()
+                .filter(s -> s.targetId().equals(parsed.targetId()))
+                .toList();
+        if (sessions.isEmpty()) {
             log.debug("Received SEARCH_RES for unknown or expired target: {}", parsed.targetId());
             return;
         }
-        if (!session.wasQueried(remoteAddress, remotePort)) {
+        sessions = sessions.stream().filter(s -> s.wasQueried(remoteAddress, remotePort)).toList();
+        if (sessions.isEmpty()) {
             // Unsolicited answer: accepting it would let anyone fill the database with the files of their choice
             log.debug("Ignored SEARCH_RES from {}:{}, not queried for target {}",
                     remoteAddress.getHostAddress(), remotePort, parsed.targetId());
@@ -469,7 +561,13 @@ public class KadSearchBridge implements AutoCloseable {
                         file.name(), file.hash(), file.sourceCount());
             }
         }
-        acceptedFiles.forEach(session::addResult);
+        for (KadSearchSession session : sessions) {
+            acceptedFiles.forEach(session::addResult);
+            int nextPage = session.nextPage(remoteAddress, remotePort, files.size());
+            if (nextPage > 0) {
+                requestNextPage(session, remoteAddress, remotePort, nextPage);
+            }
+        }
     }
 
     /**
@@ -552,7 +650,7 @@ public class KadSearchBridge implements AutoCloseable {
     }
 
     public KadSearchSession getSession(KadId targetId) {
-        return activeSessions.get(targetId);
+        return activeSessions.values().stream().filter(s -> s.targetId().equals(targetId)).findFirst().orElse(null);
     }
 
     public int getActiveSessionCount() {
@@ -602,7 +700,15 @@ public class KadSearchBridge implements AutoCloseable {
         activeSessions.clear();
         pendingLookups.values().forEach(lookup -> lookup.done.complete(null));
         pendingLookups.clear();
+        closestNodes.clear();
         log.info("KadSearchBridge stopped");
+    }
+
+    /** Entries received from one node for one search, and the last page requested from it. */
+    private static final class NodePages {
+        int received;
+        int start;
+        int requested = 1;
     }
 
     /**

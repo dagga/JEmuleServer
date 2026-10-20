@@ -203,6 +203,21 @@ class KadPacketTest {
     }
 
     @Test
+    void restrictiveSearchFlagsTheStartPositionAndCarriesTheSearchTerms() {
+        byte[] terms = {0x01, 0x03, 0x00, 'i', 's', 'o'};
+        KadPacket req = KadPacket.createSearchKeyReq(KadId.fromKeyword("linux"), 300, terms);
+        assertEquals(300 | 0x8000, Short.toUnsignedInt(ByteBuffer.wrap(req.data(), 16, 2).order(ByteOrder.LITTLE_ENDIAN).getShort()));
+        assertArrayEquals(terms, Arrays.copyOfRange(req.data(), 18, req.data().length));
+
+        KadPacket.SearchKeyReq parsed = KadPacket.parseSearchKeyReq(req.data());
+        assertEquals(300, parsed.startPosition());
+        assertArrayEquals(terms, parsed.searchTerms());
+        assertNull(KadPacket.parseSearchKeyReq(KadPacket.createSearchKeyReq(KadId.fromKeyword("linux"), 0).data()).searchTerms());
+        assertThrows(IllegalArgumentException.class,
+                () -> KadPacket.createSearchKeyReq(KadId.fromKeyword("linux"), KadPacket.MAX_START_POSITION + 1));
+    }
+
+    @Test
     void decodesPackedKadPacket() {
         KadId target = KadId.fromKeyword("ubuntu");
         FileMetadata meta = FileMetadata.withoutSources("0123456789ABCDEF0123456789ABCDEF", "ubuntu-24.04.iso",

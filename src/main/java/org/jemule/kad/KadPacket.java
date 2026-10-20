@@ -276,16 +276,39 @@ public final class KadPacket {
         return new FindNodeResult(KadId.fromWire(targetBytes), contacts);
     }
 
-    public record SearchKeyReq(KadId keywordHash, int startPosition) {}
+    /**
+     * A KADEMLIA2_SEARCH_KEY_REQ. {@code searchTerms} is the search expression of a restrictive search, or null.
+     */
+    public record SearchKeyReq(KadId keywordHash, int startPosition, byte[] searchTerms) {}
+
+    /** Highest start position: the top bit of the field flags a restrictive search (search terms follow). */
+    public static final int MAX_START_POSITION = 0x7FFF;
+    private static final int SEARCH_TERMS_FLAG = 0x8000;
 
     /**
      * Creates a KADEMLIA2_SEARCH_KEY_REQ packet for a keyword search.
      */
     public static KadPacket createSearchKeyReq(KadId keywordHash, int startPosition) {
+        return createSearchKeyReq(keywordHash, startPosition, null);
+    }
+
+    /**
+     * Creates a KADEMLIA2_SEARCH_KEY_REQ <code>&lt;target 16&gt;&lt;start position 2&gt;[&lt;search terms&gt;]</code>
+     * (CKademliaUDPListener::Process_KADEMLIA2_SEARCH_KEY_REQ). The node skips the first {@code startPosition}
+     * matching entries and returns at most 300; with search terms, only the entries matching them are counted.
+     *
+     * @param searchTerms search expression in the ed2k search tree format, or null for all the keyword's entries
+     */
+    public static KadPacket createSearchKeyReq(KadId keywordHash, int startPosition, byte[] searchTerms) {
         Objects.requireNonNull(keywordHash, "keywordHash cannot be null");
-        ByteBuffer buf = ByteBuffer.allocate(18).order(ByteOrder.LITTLE_ENDIAN);
+        if (startPosition < 0 || startPosition > MAX_START_POSITION) {
+            throw new IllegalArgumentException("Start position out of range: " + startPosition);
+        }
+        boolean restrictive = searchTerms != null && searchTerms.length > 0;
+        ByteBuffer buf = ByteBuffer.allocate(18 + (restrictive ? searchTerms.length : 0)).order(ByteOrder.LITTLE_ENDIAN);
         buf.put(keywordHash.toWire());
-        buf.putShort((short) startPosition);
+        buf.putShort((short) (restrictive ? startPosition | SEARCH_TERMS_FLAG : startPosition));
+        if (restrictive) buf.put(searchTerms);
         return new KadPacket(KadOpCode.SEARCH_KEY_REQ, buf.array());
     }
 
@@ -300,7 +323,12 @@ public final class KadPacket {
         byte[] hash = new byte[16];
         buf.get(hash);
         int startPos = buf.remaining() >= 2 ? Short.toUnsignedInt(buf.getShort()) : 0;
-        return new SearchKeyReq(KadId.fromWire(hash), startPos);
+        byte[] terms = null;
+        if ((startPos & SEARCH_TERMS_FLAG) != 0) {
+            terms = new byte[buf.remaining()];
+            buf.get(terms);
+        }
+        return new SearchKeyReq(KadId.fromWire(hash), startPos & MAX_START_POSITION, terms);
     }
 
     public record SearchRes(KadId targetId, List<FileMetadata> files) {}

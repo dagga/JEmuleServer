@@ -53,13 +53,19 @@ command `kad bootstrap <ip> <port>` sends the same request to a given node.
 ```
 Client ──OP_SEARCHREQUEST──▶ SearchHandler ──▶ FileIndex (H2 + memory)
                                   │
-                                  └──▶ KadSearchBridge ──SEARCH_KEY_REQ──▶ 3 closest Kad contacts
-                                              ◀──SEARCH_RES── (filtered, ingested)
+                                  └──▶ KadSearchBridge ──SEARCH_KEY_REQ──▶ 8 nodes closest to the keyword
+                                              ◀──SEARCH_RES── (filtered, ingested, next pages requested)
 ```
 
 1. The query is answered from `FileIndex`.
-2. The first significant keyword (3 characters or more) is hashed and sent in `SEARCH_KEY_REQ` to the 3 closest
-   contacts. Identical searches running at the same time share one Kad session.
+2. The keyword whose index is queried is the longest word every result must contain (a word inside an `OR`, or on
+   the right of a `NOT`, is not required), as eMule does when it rearranges Kad keywords: a longer word is rarer, so
+   its index is smaller. Words are split like Kad indexes them (eMule's `INV_KAD_KEYWORD_CHARS`, at least 3 UTF-8
+   bytes). The DHT is walked towards the keyword hash, and the nodes found are reused for 2 minutes by the next
+   searches of that keyword. `SEARCH_KEY_REQ` is sent to the 8 closest nodes, with the whole client query as a
+   search expression (restrictive search, start position flag `0x8000`) unless the keyword alone is searched: the
+   nodes then only return entries matching the query. Identical searches running at the same time share one Kad
+   session.
 3. A `SEARCH_RES` is only accepted from a contact the search was sent to: an unsolicited answer, from any other
    address, is ignored, so that nobody can fill the database with files of their choice. Each file of an accepted
    `SEARCH_RES` is checked, in this order: banned hashes, `ChildAbuseFilter`, `FakeFileDetector`.
@@ -69,14 +75,36 @@ Client ──OP_SEARCHREQUEST──▶ SearchHandler ──▶ FileIndex (H2 + m
    Its `FT_SOURCES` count is retained and returned in the client's `OP_SEARCHRESULT`; when the same hash is already
    indexed from connected clients or an earlier Kad result, the highest known count is preserved. Files without
    sources are dropped.
+5. A node returns at most 300 entries per request (`CIndexed::SendValidKeywordResult`) and skips the first
+   `start position` ones. Once a node returned 270 entries or more for the last page requested, the next page is
+   requested from it (start position 300, then 600), up to 3 pages per node and per search. eMule clients never
+   use the start position.
 
 How long the client waits depends on the local results:
 
 | Local results | Answer |
 | :--- | :--- |
-| None (cold search) | The server waits for the Kad answers, at most `kadSearchTimeoutSeconds`, then sends the deduplicated Kad files. Beyond 50 files, the first `OP_SEARCHRESULT` has `more = 1` and `OP_QUERY_MORE_RESULT` returns the next batches. |
-| 1 to 49 (warm search) | The local results are sent at once. The Kad search keeps running in the background: its files are ingested and will be found locally by the next searches. |
-| 50 or more | The first 50 local results are sent at once with `more = 1`; the Kad files join the results left for `OP_QUERY_MORE_RESULT`. |
+| None (cold search) | The server waits for the Kad answers, at most `kadSearchTimeoutSeconds`, then sends the deduplicated Kad files. Beyond 300 files, the first `OP_SEARCHRESULT` has `more = 1` and `OP_QUERY_MORE_RESULT` returns the next batches. |
+| 1 or more (warm search) | The first 300 local results are sent at once with `more = 1`; the Kad files not already sent join the results left for `OP_QUERY_MORE_RESULT`. A request for more results arriving before the Kad answers waits for them, at most `kadSearchTimeoutSeconds`, rather than using up one of the client's requests with an empty answer. |
+
+Each `OP_SEARCHRESULT` carries up to 300 files: eMule clients send `OP_QUERY_MORE_RESULT` at most 5 times per search
+(`MAX_MORE_SEARCH_REQ`), so a client can receive up to 1,800 files. The eD2K servers the search is also forked to
+(`ServerSearchBridge`) contribute in the same way.
+
+### 3.4 Flood limits of the Kad nodes
+
+An eMule node counts the requests it receives from each IP (`CPacketTracking::InTrackListIsAllowedPacket`): above a
+per-minute limit it drops them, and above five times the limit it bans the IP. All the clients of the server search
+from its single IP, so `KadUdpService` replays that count for every node and refuses to send a request the node would
+drop (`FloodLimitException`): the search goes to the next closest node instead, and a maintenance ping is postponed.
+
+| Request | Per minute and per node IP |
+| :--- | :---: |
+| `SEARCH_KEY_REQ`, `SEARCH_SOURCE_REQ`, `SEARCH_NOTES_REQ`, `PUBLISH_KEY_REQ`, `HELLO_REQ` | 3 |
+| `BOOTSTRAP_REQ`, `PUBLISH_SOURCE_REQ`, `PING` | 2 |
+| `REQ` | 10 |
+
+A node forgets one request every 60/limit seconds; the server waits 10% longer. Answers are not limited.
 
 A search that cannot send any request (empty routing table, closed socket) ends at once: a server isolated from Kad
 answers as fast as without Kad. Only TCP searches are forked; global UDP searches (`OP_GLOBSEARCHREQ`) are answered
@@ -95,7 +123,7 @@ Kad packets have no length header: `<protocol 1><opcode 1><payload>`, integers i
 | `HELLO_RES_ACK` | `0xE4` / `0x22` | `<id 16>` | decoded |
 | `REQ` | `0xE4` / `0x21` | `<type 1><target 16><check id 16>` | sent (bucket refresh) |
 | `RES` | `0xE4` / `0x29` | `<target 16><count 1><contacts>` | decoded |
-| `SEARCH_KEY_REQ` | `0xE4` / `0x33` | `<keyword hash 16><start position 2>` | sent |
+| `SEARCH_KEY_REQ` | `0xE4` / `0x33` | `<keyword hash 16><start position 2>[<search expression>]`; the top bit of the start position announces the expression (ed2k search tree format) | sent |
 | `SEARCH_RES` | `0xE4` / `0x3B` | `<target 16><count 2>(<file hash 16><tag list>)*` | received |
 
 > **Interoperability**: the framing follows the Kad2 protocol of eMule / mule (`OP_KADEMLIAHEADER` `0xE4`,

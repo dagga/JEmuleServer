@@ -121,6 +121,8 @@ public class KadMaintenanceService implements AutoCloseable {
             contact.recordFailure(); // Will be cleared to 0 when HELLO_RES arrives
             pingsSent.incrementAndGet();
             log.debug("Sent maintenance liveness ping to {}", contact);
+        } catch (KadUdpService.FloodLimitException e) {
+            log.debug("Liveness ping to {} postponed: {}", contact, e.getMessage()); // not a failure of the contact
         } catch (IOException e) {
             contact.recordFailure();
             log.debug("Failed to send liveness ping to {}: {}", contact, e.getMessage());

@@ -165,11 +165,14 @@ class SearchCompatibilityTest {
 
     @Test
     void moreResultsFlagAndQueryMore() throws Exception {
-        for (int i = 0; i < 60; i++) {
+        java.util.Properties props = new java.util.Properties();
+        props.setProperty("maxSearchResults", "1000");
+        client = loggedInContext("10.1.2.4", 50001, ServerConfig.fromProperties(props), registry, index);
+        for (int i = 0; i < SearchHandler.BATCH_SIZE + 10; i++) {
             publish(String.format("%032x", i + 1), "episode " + i + ".avi", 100_000_000L + i, 2);
         }
         SearchAnswer first = search(new SearchTree().keyword("episode").toBytes());
-        assertEquals(50, first.results().size());
+        assertEquals(SearchHandler.BATCH_SIZE, first.results().size());
         assertEquals(1, first.more(), "more results are available");
 
         ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -226,7 +229,7 @@ class SearchCompatibilityTest {
             long elapsedMs = (System.nanoTime() - start) / 1_000_000;
 
             assertEquals(List.of(localHash), answer.results().stream().map(SearchResult::hash).toList());
-            assertEquals(0, answer.more());
+            assertEquals(1, answer.more(), "the Kad results are offered through OP_QUERY_MORE_RESULT");
             assertTrue(elapsedMs < 1000, "the local results must not wait for Kad: " + elapsedMs + " ms");
             assertTrue(reqLatch.await(3, TimeUnit.SECONDS), "the search is still forked to Kad");
         }
@@ -406,7 +409,7 @@ class SearchCompatibilityTest {
 
             KadId keywordHash = KadId.fromKeyword("anime");
             List<FileMetadata> sixtyFiles = new ArrayList<>();
-            for (int i = 0; i < 60; i++) {
+            for (int i = 0; i < SearchHandler.BATCH_SIZE + 10; i++) {
                 sixtyFiles.add(new FileMetadata(
                         String.format("%032x", i + 100),
                         "anime-episode-" + i + ".mkv",
@@ -419,9 +422,11 @@ class SearchCompatibilityTest {
             CountDownLatch reqLatch = new CountDownLatch(1);
             peerUdp.registerListener(KadOpCode.SEARCH_KEY_REQ, (packet, addr, port) -> {
                 reqLatch.countDown();
-                KadPacket resPkt = KadPacket.createSearchRes(keywordHash, sixtyFiles);
                 try {
-                    peerUdp.send(resPkt, addr, port);
+                    for (int i = 0; i < sixtyFiles.size(); i += 50) {
+                        peerUdp.send(KadPacket.createSearchRes(keywordHash,
+                                sixtyFiles.subList(i, Math.min(i + 50, sixtyFiles.size()))), addr, port);
+                    }
                 } catch (Exception e) {
                     fail(e);
                 }
@@ -429,11 +434,11 @@ class SearchCompatibilityTest {
 
             client.setKadSearchBridge(bridge);
 
-            // First batch (50 items, more=1)
+            // First batch (full, more=1)
             SearchAnswer first = search(new SearchTree().keyword("anime").toBytes());
             assertTrue(reqLatch.await(3, TimeUnit.SECONDS), "Peer should receive search request");
-            assertEquals(50, first.results().size());
-            assertEquals(1, first.more(), "More results flag must be set for cold search > 50 items");
+            assertEquals(SearchHandler.BATCH_SIZE, first.results().size());
+            assertEquals(1, first.more(), "More results flag must be set for a cold search beyond one batch");
 
             // Query more (remaining 10 items, more=0)
             ByteArrayOutputStream out = new ByteArrayOutputStream();

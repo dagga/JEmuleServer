@@ -73,6 +73,78 @@ class ServerSearchBridgeTest {
     }
 
     @Test
+    void splitsAFullServerAnswerIntoOneSearchPerFileType() throws Exception {
+        InetAddress loopback = InetAddress.getByName("127.0.0.1");
+        try (DatagramSocket local = bind(loopback); DatagramSocket peerSocket = bind(loopback);
+             DatabaseManager database = new DatabaseManager("mem:server_partition_" + System.nanoTime())) {
+            peerSocket.setSoTimeout(500);
+            ServerGossip.VerifiedPeer peer = new ServerGossip.VerifiedPeer(
+                    new ServerGossip.Endpoint(loopback, peerSocket.getLocalPort() - 4), "verified", 0, System.currentTimeMillis());
+            try (ServerSearchBridge bridge = new ServerSearchBridge(() -> List.of(peer), () -> local,
+                    new FileIndex(database), new FakeFileDetector(), 2000)) {
+                for (int search = 0; search <= ServerSearchBridge.MAX_PARTITIONS_PER_SERVER_PER_MINUTE; search++) {
+                    String keyword = "linux" + search;
+                    byte[] searchTree = keywordTree(keyword);
+                    bridge.forkSearch(new SearchQuery.TermQuery(keyword, SearchQuery.ID_FILENAME), searchTree);
+                    assertArrayEquals(ServerSearchBridge.searchRequest(searchTree), data(receive(peerSocket)));
+
+                    // The server returns as many results as it sends at most: they are probably truncated
+                    java.io.ByteArrayOutputStream answer = new java.io.ByteArrayOutputStream();
+                    for (int i = 0; i < ServerSearchBridge.PARTITION_THRESHOLD; i++) {
+                        answer.writeBytes(searchResult(String.format("%02d", search) + "%030X".formatted(i + 1),
+                                keyword + " " + i + ".iso", 1024, 2));
+                    }
+                    assertTrue(bridge.handle(loopback, peerSocket.getLocalPort(), answer.toByteArray()));
+
+                    if (search < ServerSearchBridge.MAX_PARTITIONS_PER_SERVER_PER_MINUTE) {
+                        for (String type : ServerSearchBridge.PARTITION_TYPES) {
+                            assertArrayEquals(ServerSearchBridge.searchRequest(
+                                    ServerSearchBridge.withFileType(searchTree, type)), data(receive(peerSocket)));
+                        }
+                        // Answers to the split searches do not split them again
+                        assertTrue(bridge.handle(loopback, peerSocket.getLocalPort(), answer.toByteArray()));
+                    }
+                    assertThrows(java.net.SocketTimeoutException.class, () -> receive(peerSocket),
+                            "nothing more is sent to the server");
+                }
+            }
+        }
+    }
+
+    @Test
+    void doesNotSplitASearchAlreadyRestrictedToAFileType() throws Exception {
+        InetAddress loopback = InetAddress.getByName("127.0.0.1");
+        try (DatagramSocket local = bind(loopback); DatagramSocket peerSocket = bind(loopback);
+             DatabaseManager database = new DatabaseManager("mem:server_no_partition_" + System.nanoTime())) {
+            peerSocket.setSoTimeout(500);
+            ServerGossip.VerifiedPeer peer = new ServerGossip.VerifiedPeer(
+                    new ServerGossip.Endpoint(loopback, peerSocket.getLocalPort() - 4), "verified", 0, System.currentTimeMillis());
+            try (ServerSearchBridge bridge = new ServerSearchBridge(() -> List.of(peer), () -> local,
+                    new FileIndex(database), new FakeFileDetector(), 2000)) {
+                SearchQuery query = new SearchQuery.AndQuery(new SearchQuery.TermQuery("linux", SearchQuery.ID_FILENAME),
+                        new SearchQuery.TermQuery("Pro", SearchQuery.ID_FILETYPE));
+                bridge.forkSearch(query, ServerSearchBridge.withFileType(keywordTree("linux"), "Pro"));
+                receive(peerSocket);
+                java.io.ByteArrayOutputStream answer = new java.io.ByteArrayOutputStream();
+                for (int i = 0; i < 2 * ServerSearchBridge.PARTITION_THRESHOLD; i++) {
+                    answer.writeBytes(searchResult("%032X".formatted(i + 1), "linux " + i + ".iso", 1024, 2));
+                }
+                assertTrue(bridge.handle(loopback, peerSocket.getLocalPort(), answer.toByteArray()));
+                assertThrows(java.net.SocketTimeoutException.class, () -> receive(peerSocket));
+            }
+        }
+    }
+
+    private static byte[] keywordTree(String keyword) {
+        return ByteBuffer.allocate(3 + keyword.length()).order(ByteOrder.LITTLE_ENDIAN)
+                .put((byte) 0x01).putShort((short) keyword.length()).put(keyword.getBytes()).array();
+    }
+
+    private static byte[] data(DatagramPacket packet) {
+        return java.util.Arrays.copyOf(packet.getData(), packet.getLength());
+    }
+
+    @Test
     void decodesMultipleResultsAndRejectsMalformedOrMetadataIncompletePackets() {
         byte[] first = searchResult("0123456789ABCDEF0123456789ABCDEF", "Linux.iso", 1024, 4);
         byte[] second = searchResult("FEDCBA9876543210FEDCBA9876543210", "Ubuntu.iso", 2048, 2);

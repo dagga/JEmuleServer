@@ -44,6 +44,9 @@ public final class ClientState {
     private List<FileMetadata> pendingSearchResults;
     private long pendingSearchGeneration;
     private boolean pendingSearchLoading;
+    /** Completed when the remote results of the pending search arrived (at once if none are expected). */
+    private java.util.concurrent.CompletableFuture<Void> pendingSearchArrival =
+            java.util.concurrent.CompletableFuture.completedFuture(null);
 
     // Information announced by the client in OP_LOGINREQUEST (ServerConnect::ConnectionEstablished)
     private volatile byte[] userHash = new byte[16];
@@ -124,33 +127,53 @@ public final class ClientState {
         pendingSearchGeneration++;
         pendingSearchResults = new java.util.ArrayList<>();
         pendingSearchLoading = false;
+        pendingSearchArrival.complete(null); // a client waiting for the previous search stops waiting
         return pendingSearchGeneration;
     }
 
     public synchronized void initializePendingSearch(long generation, List<FileMetadata> results, boolean loading) {
         if (generation != pendingSearchGeneration) return;
-        pendingSearchResults = new java.util.ArrayList<>(results);
+        // null once the client was told that no more results are available
+        pendingSearchResults = results.isEmpty() && !loading ? null : new java.util.ArrayList<>(results);
         pendingSearchLoading = loading;
+        pendingSearchArrival = loading ? new java.util.concurrent.CompletableFuture<>()
+                : java.util.concurrent.CompletableFuture.completedFuture(null);
+    }
+
+    /**
+     * Returns a future completed when the remote results of the pending search arrived, so that a client asking
+     * for more results while nothing is left yet can wait for them.
+     */
+    public synchronized java.util.concurrent.CompletableFuture<Void> awaitablePendingSearch() {
+        boolean nothingLeft = pendingSearchResults == null || pendingSearchResults.isEmpty();
+        return nothingLeft ? pendingSearchArrival : java.util.concurrent.CompletableFuture.completedFuture(null);
     }
 
     public synchronized void completePendingSearch(long generation, List<FileMetadata> results) {
         if (generation != pendingSearchGeneration) return;
         if (pendingSearchResults == null) pendingSearchResults = new java.util.ArrayList<>();
+        java.util.Set<String> pending = new java.util.HashSet<>();
+        for (FileMetadata result : pendingSearchResults) {
+            if (result != null && result.hash() != null) pending.add(result.hash().toUpperCase(java.util.Locale.ROOT));
+        }
         for (FileMetadata file : results) {
-            if (file == null || file.hash() == null) continue;
-            boolean exists = pendingSearchResults.stream().anyMatch(result ->
-                    result != null && result.hash() != null && result.hash().equalsIgnoreCase(file.hash()));
-            if (!exists) pendingSearchResults.add(file);
+            if (file != null && file.hash() != null && pending.add(file.hash().toUpperCase(java.util.Locale.ROOT))) {
+                pendingSearchResults.add(file);
+            }
         }
         pendingSearchLoading = false;
+        pendingSearchArrival.complete(null);
     }
 
     public synchronized PendingSearchBatch takePendingSearchBatch(int batchSize) {
-        if (pendingSearchResults == null || (pendingSearchResults.isEmpty() && !pendingSearchLoading)) return null;
+        // An empty batch still answers the client, which announced more results and waits for this answer
+        if (pendingSearchResults == null) return null;
         int count = Math.min(pendingSearchResults.size(), batchSize);
         List<FileMetadata> batch = new java.util.ArrayList<>(pendingSearchResults.subList(0, count));
         pendingSearchResults.subList(0, count).clear();
-        return new PendingSearchBatch(batch, !pendingSearchResults.isEmpty() || pendingSearchLoading);
+        boolean moreAvailable = !pendingSearchResults.isEmpty() || pendingSearchLoading;
+        if (!moreAvailable) pendingSearchResults = null;
+        return new PendingSearchBatch(batch, moreAvailable);
     }
 
     public static long ipToLong(InetAddress addr) {
