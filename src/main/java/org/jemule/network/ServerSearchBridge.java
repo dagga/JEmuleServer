@@ -147,12 +147,12 @@ public final class ServerSearchBridge implements AutoCloseable {
             }
         }
         if (session.peers.isEmpty()) {
-            session.complete();
             sessions.remove(key, session);
+            session.complete();
         } else {
             CompletableFuture.delayedExecutor(searchTimeoutMillis, TimeUnit.MILLISECONDS).execute(() -> {
-                session.complete();
                 sessions.remove(key, session);
+                session.complete();
             });
         }
         return session.future;
