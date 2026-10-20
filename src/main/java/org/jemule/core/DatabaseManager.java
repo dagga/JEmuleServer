@@ -37,8 +37,17 @@ import java.util.concurrent.locks.ReentrantLock;
 
 public class DatabaseManager implements AutoCloseable {
     private static final Logger logger = LoggerFactory.getLogger(DatabaseManager.class);
-    private final Connection connection;
+    /** Minimum time between two attempts to reopen a database closed by a fatal error. */
+    private static final long REOPEN_INTERVAL_MS = 10_000;
+
+    private final String url;
+    /** Replaced when the database is reopened after a fatal error; only used while holding {@link #lock}. */
+    private volatile Connection connection;
     private final CircuitBreaker circuitBreaker;
+    /** Set by {@link #close()}: a database closed on purpose is never reopened. */
+    private volatile boolean closed;
+    private long lastReopenAttempt;
+    private final java.util.concurrent.atomic.AtomicLong reopenCount = new java.util.concurrent.atomic.AtomicLong();
     /**
      * Serializes the use of the single JDBC connection: its auto-commit mode is switched for the transaction of
      * saveFile, which must not interleave with the statements of other threads. A lock rather than synchronized,
@@ -51,7 +60,7 @@ public class DatabaseManager implements AutoCloseable {
     }
 
     public DatabaseManager(String dbPath, float failureRateThreshold, int minCalls, int waitDurationInSeconds) throws SQLException {
-        String url = "jdbc:h2:" + dbPath;
+        this.url = "jdbc:h2:" + dbPath;
         this.connection = DriverManager.getConnection(url, "sa", "");
         
         CircuitBreakerConfig config = CircuitBreakerConfig.custom()
@@ -64,16 +73,77 @@ public class DatabaseManager implements AutoCloseable {
         initSchema();
     }
 
-    /** Runs a database operation through the circuit breaker, holding the connection lock. */
+    /**
+     * Runs a database operation through the circuit breaker, holding the connection lock. When the database was
+     * closed by a fatal error (H2 closes it after an OutOfMemoryError, for example), it is reopened and the operation
+     * runs once more, so that writes resume without restarting the server.
+     */
     private <T> T locked(CheckedSupplier<T> operation) throws Throwable {
         return circuitBreaker.executeCheckedSupplier(() -> {
             lock.lock();
             try {
-                return operation.get();
+                try {
+                    return operation.get();
+                } catch (SQLException e) {
+                    if (!isDatabaseClosed(e) || !reopen(e)) throw e;
+                    return operation.get();
+                }
             } finally {
                 lock.unlock();
             }
         });
+    }
+
+    /** Whether {@code e} means that the database or the connection is closed, as after a fatal error. */
+    static boolean isDatabaseClosed(Throwable e) {
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            if (t instanceof SQLException sql) {
+                switch (sql.getErrorCode()) {
+                    case org.h2.api.ErrorCode.DATABASE_IS_CLOSED, org.h2.api.ErrorCode.DATABASE_CALLED_AT_SHUTDOWN,
+                         org.h2.api.ErrorCode.OUT_OF_MEMORY, org.h2.api.ErrorCode.CONNECTION_BROKEN_1,
+                         org.h2.api.ErrorCode.OBJECT_CLOSED -> {
+                        return true;
+                    }
+                    default -> { }
+                }
+            }
+            if (t.getMessage() != null && t.getMessage().contains("This store is closed")) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Reopens the database after a fatal error. Called with {@link #lock} held.
+     *
+     * @return true if the operation can be retried on a new connection
+     */
+    private boolean reopen(SQLException cause) {
+        if (closed) return false;
+        long now = System.currentTimeMillis();
+        if (now - lastReopenAttempt < REOPEN_INTERVAL_MS) return false;
+        lastReopenAttempt = now;
+        logger.error("The database was closed by a fatal error ({}): reopening it", cause.getMessage());
+        try {
+            connection.close();
+        } catch (SQLException ignored) {
+            // the connection is already unusable
+        }
+        try {
+            connection = DriverManager.getConnection(url, "sa", "");
+            initSchema();
+            reopenCount.incrementAndGet();
+            logger.error("Database reopened: writes resume. Check the memory of the JVM (-XX:MaxRAMPercentage)");
+            return true;
+        } catch (SQLException e) {
+            logger.error("Could not reopen the database (next attempt in {} s): {}", REOPEN_INTERVAL_MS / 1000,
+                    e.getMessage());
+            return false;
+        }
+    }
+
+    /** Times the database was reopened after a fatal error since the server started. */
+    public long getReopenCount() {
+        return reopenCount.get();
     }
 
     private void initSchema() throws SQLException {
@@ -425,6 +495,7 @@ public class DatabaseManager implements AutoCloseable {
 
     @Override
     public void close() throws SQLException {
+        closed = true;
         lock.lock();
         try {
             if (connection != null && !connection.isClosed()) {

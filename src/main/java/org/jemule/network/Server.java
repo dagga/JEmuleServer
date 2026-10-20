@@ -137,6 +137,26 @@ public class Server {
         this.kadSearchBridge = kadSearchBridge;
     }
 
+    private static final long MB = 1024 * 1024;
+    /** Heap for everything but the index: Kad, searches, client sessions, H2 cache. */
+    private static final long BASE_HEAP_BYTES = 256 * MB;
+    /** Index heap per file: about 360 MB per 1,000,000 files, with a margin. */
+    private static final long HEAP_BYTES_PER_FILE = 400;
+
+    /**
+     * Warns when the maximum heap is too small for the indexed files. The JVM only takes a quarter of the RAM by
+     * default: on a 1 GB server, that is about 240 MB, and an OutOfMemoryError makes H2 close the database.
+     *
+     * @return the warning, or null if the heap is large enough
+     */
+    static String heapWarning(long maxHeapBytes, long files) {
+        long recommended = BASE_HEAP_BYTES + files * HEAP_BYTES_PER_FILE;
+        if (maxHeapBytes >= recommended) return null;
+        return String.format("Heap: %d MB at most for %d indexed files, about %d MB recommended. Start the JVM with "
+                + "-XX:MaxRAMPercentage=75 (or -Xmx) to avoid an OutOfMemoryError, which closes the database",
+                maxHeapBytes / MB, files, recommended / MB);
+    }
+
     /**
      * Background Kad searches of the UDP global searches received from clients of other servers.
      */
@@ -220,6 +240,12 @@ public class Server {
         this.abuseFilter = ChildAbuseFilter.load(config.childAbuseKeywordsPath());
         this.fileIndex = new FileIndex(db, eventManager, abuseFilter);
         this.fileIndex.setPersistenceExecutor(ingestion);
+        String heapWarning = heapWarning(Runtime.getRuntime().maxMemory(), fileIndex.fileCount());
+        if (heapWarning != null) {
+            log.warn(heapWarning);
+        } else {
+            log.info("Heap: {} MB at most for {} indexed files", Runtime.getRuntime().maxMemory() / MB, fileIndex.fileCount());
+        }
         this.globalSearchForwarder = new GlobalSearchForwarder(() -> kadSearchBridge, abuseFilter,
                 config.kad().enabled() && config.kad().forkSearchEnabled() && config.kad().forkGlobalSearches());
         this.serverSearchBridge = new ServerSearchBridge(serverGossip::verifiedPeers,
