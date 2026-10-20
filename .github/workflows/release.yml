@@ -89,7 +89,7 @@ jobs:
               --license-file LICENSE.LGPL \
               --linux-package-name jemuleserver --linux-app-category net \
               --linux-rpm-license-type LGPLv3 \
-              --java-options "-XX:ThreadPriorityPolicy=1" \
+              --java-options "-XX:ThreadPriorityPolicy=1" --java-options "-XX:MaxRAMPercentage=75" \
               --add-modules "$JLINK_MODULES" --jlink-options "$JLINK_OPTIONS"
           done
           ls -l dist

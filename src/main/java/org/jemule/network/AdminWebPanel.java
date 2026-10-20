@@ -264,15 +264,18 @@ final class AdminWebPanel implements AutoCloseable {
     private Map<String, Object> status() {
         Runtime runtime = Runtime.getRuntime();
         double load = java.lang.management.ManagementFactory.getOperatingSystemMXBean().getSystemLoadAverage();
-        return Map.of(
-                "version", Main.VERSION,
-                "uptimeSeconds", Math.max(0, (System.currentTimeMillis() - startedAt) / 1000),
-                "connectedClients", server.getClientRegistry().size(),
-                "lowIdClients", server.getClientRegistry().lowIdCount(),
-                "indexedFiles", server.getFileIndex().fileCount(),
-                "ipFilterRanges", server.getIPFilter().getFilterCount(),
-                "heapUsedMb", (runtime.totalMemory() - runtime.freeMemory()) / 1024 / 1024,
-                "systemLoad", Double.isFinite(load) ? load : "unavailable"
+        DatabaseManager database = server.getDatabaseManager();
+        return Map.ofEntries(
+                Map.entry("version", Main.VERSION),
+                Map.entry("uptimeSeconds", Math.max(0, (System.currentTimeMillis() - startedAt) / 1000)),
+                Map.entry("connectedClients", server.getClientRegistry().size()),
+                Map.entry("lowIdClients", server.getClientRegistry().lowIdCount()),
+                Map.entry("indexedFiles", server.getFileIndex().fileCount()),
+                Map.entry("ipFilterRanges", server.getIPFilter().getFilterCount()),
+                Map.entry("heapUsedMb", (runtime.totalMemory() - runtime.freeMemory()) / 1024 / 1024),
+                Map.entry("heapMaxMb", runtime.maxMemory() / 1024 / 1024),
+                Map.entry("databaseReopens", database == null ? 0L : database.getReopenCount()),
+                Map.entry("systemLoad", Double.isFinite(load) ? load : "unavailable")
         );
     }
 

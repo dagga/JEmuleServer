@@ -1,6 +1,6 @@
 # JEmuleServer
 
-JEmuleServer is an eMule server written in Java (version 1.2.13).
+JEmuleServer is an eMule server written in Java (version 1.2.14).
 
 Downloads (installers and JAR) are on the [releases page](https://github.com/dagga/JEmuleServer/releases); the changes
 of each version are described in `doc/release-notes-v<version>.md` (latest: [1.2.9](doc/release-notes-v1.2.9.md)).
@@ -27,7 +27,7 @@ Building requires a JDK 21 (Gradle toolchain). To compile the project and genera
 ./gradlew build
 ```
 
-The JAR file will be generated in `build/libs/JEmuleServer-1.2.13.jar`.
+The JAR file will be generated in `build/libs/JEmuleServer-1.2.14.jar`.
 
 ## Installation from the release packages
 
@@ -68,7 +68,7 @@ the JAR for IPv6.
 Once the project is compiled, you can start the server with the following command:
 
 ```bash
-java -XX:ThreadPriorityPolicy=1 --add-modules=jdk.httpserver -jar build/libs/JEmuleServer-1.2.13.jar [config_file] [port]
+java -XX:MaxRAMPercentage=75 -XX:ThreadPriorityPolicy=1 --add-modules=jdk.httpserver -jar build/libs/JEmuleServer-1.2.14.jar [config_file] [port]
 ```
 
 - `-XX:ThreadPriorityPolicy=1`: on Linux, the JVM ignores thread priorities without it. The server runs its threads
@@ -76,6 +76,8 @@ java -XX:ThreadPriorityPolicy=1 --add-modules=jdk.httpserver -jar build/libs/JEm
   writes), regular operations; ingestion and regular operations never hold back a client or a search. Lowering a
   priority works for any user; raising the admin tier above the clients needs root or `CAP_SYS_NICE`. The startup log
   says whether the priorities are applied. The .deb and .rpm launchers already pass the option.
+- `-XX:MaxRAMPercentage=75`: lets the heap grow to 75% of the RAM instead of 25% (see Memory sizing below); the .deb
+  and .rpm launchers already pass it.
 
 - Note: The server binds to the IPv6 wildcard when available, so IPv6 clients can connect. Avoid forcing the JVM to
   prefer IPv4 (i.e. do not use `-Djava.net.preferIPv4Stack=true`) if you expect IPv6 connectivity. The ed2k protocol
@@ -88,8 +90,13 @@ java -XX:ThreadPriorityPolicy=1 --add-modules=jdk.httpserver -jar build/libs/JEm
 Every known file is kept in memory for the searches: plan about 360 MB of index heap per 1,000,000 files (363 MB for
 999,913 files in the latest `./gradlew benchmark -Pfiles=1000000 -Pheap=768m -Pcpus=1` run, see below). The JVM only
 takes a quarter of the RAM by default; on a small dedicated server, let it use more, e.g.
-`java -XX:MaxRAMPercentage=75 -jar ...` (the systemd unit of the packages already does). With 1,000,000 files, a 1 GB
+`java -XX:MaxRAMPercentage=75 -jar ...` (the .deb and .rpm launchers already do). With 1,000,000 files, a 1 GB
 server with one vCPU starts in about 30 s and answers searches in a few milliseconds.
+
+The startup log gives the maximum heap and warns when it is too small for the indexed files (about 256 MB plus 400
+bytes per file); the Status view of the web panel shows `heapUsedMb` and `heapMaxMb`. An OutOfMemoryError makes H2
+close the database: the server then reopens it at the next database operation and logs it, so that writes resume
+without a restart (`databaseReopens` in the Status view), but the heap must be enlarged.
 
 `./gradlew benchmark -Pfiles=1000000 -Pheap=768m -Pcpus=1` fills a database with the given number of files, then
 reports the startup time, the heap used by the index and the search latency under these limits.
