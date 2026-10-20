@@ -33,11 +33,10 @@ import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.FileTime;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 
 /**
  * IPv4 filter loaded from an eMule ipfilter.dat file: <code>start - end , level , description</code>.
@@ -256,17 +255,21 @@ public class IPFilter {
         }
 
         List<IPRange> previous = blockedRanges;
-        Set<IPRange> changes = new HashSet<>(previous);
-        changes.addAll(updated);
-        Set<IPRange> common = new HashSet<>(previous);
-        common.retainAll(updated);
-        int changed = changes.size() - common.size();
+        int changed = previous.size() + updated.size() - 2 * countCommon(previous, updated);
         double difference = previous.isEmpty() ? 0 : (double) changed / Math.max(previous.size(), updated.size());
         if (difference >= MAX_UPDATE_DIFFERENCE) {
             appendTrace(destination, "Rejected update from " + source + ": difference " + percent(difference)
                     + " is not below 10% (" + previous.size() + " current ranges, " + updated.size()
                     + " downloaded ranges, " + changed + " changed ranges)");
             return false;
+        }
+
+        if (changed == 0 && Files.exists(destination)) {
+            // Same ranges: keep the file and only record the check, which postpones the next download
+            Files.setLastModifiedTime(destination, FileTime.fromMillis(System.currentTimeMillis()));
+            writeBinaryCache(getBinaryCachePath(destination), destination, previous);
+            log.info("IP filter from {} is unchanged: {} blocking ranges", source, previous.size());
+            return true;
         }
 
         Path absolute = destination.toAbsolutePath();
@@ -289,6 +292,29 @@ public class IPFilter {
         log.info("Applied IP filter update from {}: {} blocking ranges ({}% difference)",
                 source, blockedRanges.size(), percent(difference));
         return true;
+    }
+
+    /**
+     * Counts the ranges present in both lists, which are sorted by start and disjoint (see {@link #merge(List)}).
+     */
+    private static int countCommon(List<IPRange> a, List<IPRange> b) {
+        int common = 0;
+        int i = 0;
+        int j = 0;
+        while (i < a.size() && j < b.size()) {
+            IPRange x = a.get(i);
+            IPRange y = b.get(j);
+            if (x.equals(y)) {
+                common++;
+                i++;
+                j++;
+            } else if (x.start() < y.start() || (x.start() == y.start() && x.end() < y.end())) {
+                i++;
+            } else {
+                j++;
+            }
+        }
+        return common;
     }
 
     void traceRejectedUpdate(Path destination, String detail) {

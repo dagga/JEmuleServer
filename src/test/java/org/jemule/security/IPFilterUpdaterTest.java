@@ -109,6 +109,50 @@ class IPFilterUpdaterTest {
         }
     }
 
+    @Test
+    void unchangedDownloadKeepsTheFileAndPostponesTheNextUpdate(@TempDir Path tempDir) throws Exception {
+        List<String> localFilter = new ArrayList<>(ranges(20));
+        localFilter.add(0, "# local copy");
+        Path destination = writeFilter(tempDir, localFilter);
+        Files.setLastModifiedTime(destination, java.nio.file.attribute.FileTime.fromMillis(
+                System.currentTimeMillis() - java.time.Duration.ofDays(2).toMillis()));
+        IPFilter filter = new IPFilter();
+        filter.loadFromFile(destination.toString());
+        assertEquals(0, IPFilterUpdater.initialDelayMillis(destination, System.currentTimeMillis()));
+
+        HttpServer server = serve(String.join("\n", ranges(20)).getBytes(StandardCharsets.ISO_8859_1));
+        try {
+            try (IPFilterUpdater updater = updater(filter, destination, server)) {
+                assertTrue(updater.refreshNow());
+                assertEquals(localFilter, Files.readAllLines(destination, StandardCharsets.ISO_8859_1));
+                assertTrue(IPFilterUpdater.initialDelayMillis(destination, System.currentTimeMillis())
+                        > java.time.Duration.ofHours(23).toMillis());
+                // The binary cache follows the new modification time
+                IPFilter reloaded = new IPFilter();
+                reloaded.loadFromFile(destination.toString());
+                assertEquals(20, reloaded.getFilterCount());
+            }
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void firstUpdateIsDueOnceTheLocalFilterIsADayOld(@TempDir Path tempDir) throws Exception {
+        long now = System.currentTimeMillis();
+        Path destination = tempDir.resolve("ipfilter.dat");
+        assertEquals(0, IPFilterUpdater.initialDelayMillis(destination, now), "no local filter: download at once");
+
+        Files.writeString(destination, range(1));
+        Files.setLastModifiedTime(destination, java.nio.file.attribute.FileTime.fromMillis(
+                now - java.time.Duration.ofHours(10).toMillis()));
+        assertEquals(java.time.Duration.ofHours(14).toMillis(), IPFilterUpdater.initialDelayMillis(destination, now));
+
+        Files.setLastModifiedTime(destination, java.nio.file.attribute.FileTime.fromMillis(
+                now - java.time.Duration.ofHours(30).toMillis()));
+        assertEquals(0, IPFilterUpdater.initialDelayMillis(destination, now));
+    }
+
     private static IPFilterUpdater updater(IPFilter filter, Path destination, HttpServer server) {
         return new IPFilterUpdater(filter, destination,
                 List.of(URI.create("http://127.0.0.1:" + server.getAddress().getPort() + "/filter")));

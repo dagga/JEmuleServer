@@ -45,3 +45,11 @@
   required. The status is now parsed field by field according to its length, like eMule does. The check that the
   server's total file count stays below its hard file limit is removed: that limit applies to the files shared by
   one client, so it rejected nearly every real server.
+- Speed up the IP filter at startup. The updater downloaded `ipfilter.dat` again on every start, then compared the
+  downloaded ranges with the current ones through hash sets whose range hash codes collide heavily on aligned IP
+  ranges: about 22 seconds for the 172,000 ranges of the eMule Security filter, even when nothing changed. The sorted
+  range lists are now compared in a single linear pass (78 ms). An unchanged download no longer rewrites the file;
+  it only records the check in its modification time. The first update of a run waits until the local filter is a
+  day old, so a restart reuses the binary cache without any download.
+- The IP filter updater now starts once the local filter is loaded. It used to start first and compare the download
+  with an empty filter, which bypassed the 10% maximum difference check at every startup.
