@@ -316,6 +316,38 @@ class ServerGossipTest {
     }
 
     @Test
+    void keepsTheStatusOfAVerifiedServerThatNeverAnswersTheServerListRequest() throws Exception {
+        try (DatagramSocket local = bindServerUdpSocket(); DatagramSocket peer = bindServerUdpSocket()) {
+            peer.setSoTimeout(2000);
+            int localTcpPort = local.getLocalPort() - 4;
+            ServerGossip gossip = new ServerGossip("127.0.0.1:" + (peer.getLocalPort() - 4));
+            InetAddress loopback = InetAddress.getByName("127.0.0.1");
+            long now = System.currentTimeMillis();
+
+            gossip.poll(local, now);
+            DatagramPacket statusRequest = receive(peer);
+            int statusChallenge = ByteBuffer.wrap(statusRequest.getData(), 2, 4).order(ByteOrder.LITTLE_ENDIAN).getInt();
+            assertTrue(gossip.handle(local, loopback, peer.getLocalPort(),
+                    statusPacket(statusChallenge, 100, 200, 1000, 500, 0), false, loopback, localTcpPort, now));
+            DatagramPacket descriptionRequest = receive(peer);
+            int descriptionChallenge = ByteBuffer.wrap(descriptionRequest.getData(), 2, 4)
+                    .order(ByteOrder.LITTLE_ENDIAN).getInt();
+            assertTrue(gossip.handle(local, loopback, peer.getLocalPort(),
+                    descriptionPacket(descriptionChallenge, "Quiet server", "No list"), false, loopback, localTcpPort, now));
+            assertEquals((byte) 0xA0, receive(peer).getData()[1], "server list requested");
+
+            // The server list request times out, as with most real servers
+            gossip.poll(local, now + 11_000);
+
+            ServerGossip.ServerView view = gossip.serverViews().get(0);
+            assertEquals("verified", view.state());
+            assertEquals(100L, view.users(), "the status answered just before is kept");
+            assertEquals(200L, view.files());
+            assertEquals(0, view.missedStatusProbes());
+        }
+    }
+
+    @Test
     void monitoringViewsTrackSourcesAndCandidates() throws Exception {
         ServerGossip gossip = new ServerGossip("127.0.0.1:4661");
         gossip.addServerMetCandidates(List.of(new ServerGossip.Endpoint(InetAddress.getByName("192.0.2.10"), 5000)));

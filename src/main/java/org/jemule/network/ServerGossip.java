@@ -554,14 +554,14 @@ final class ServerGossip {
             if (now - entry.getValue().startedAtMillis() <= TRANSACTION_TIMEOUT_MILLIS) return false;
             Endpoint endpoint = entry.getKey();
             Pending transaction = entry.getValue();
+            // Only unanswered status probes count: most servers never answer OP_SERVER_LIST_REQ, and the status
+            // they returned just before stays valid
             if (transaction.stage() == Stage.STATUS) {
                 int misses = missedStatusProbes.merge(endpoint, 1, Integer::sum);
                 if (misses >= 3) {
                     verified.remove(endpoint);
                     serverStatuses.remove(endpoint);
                 }
-            } else {
-                serverStatuses.remove(endpoint);
             }
             return true;
         });

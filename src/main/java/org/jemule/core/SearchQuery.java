@@ -86,7 +86,12 @@ public interface SearchQuery extends Predicate<FileMetadata> {
                     }
                     yield true;
                 }
-                case ID_FILETYPE -> meta.type() != null && meta.type().equalsIgnoreCase(lowerTerm);
+                case ID_FILETYPE -> {
+                    // Many servers and clients send no FT_FILETYPE: eMule then derives the type from the extension
+                    String type = meta.type() == null || meta.type().isEmpty()
+                            ? org.jemule.protocol.FileTypes.fromFileName(meta.name()) : meta.type();
+                    yield type.equalsIgnoreCase(lowerTerm);
+                }
                 case ID_FORMAT -> meta.name() != null && meta.name().toLowerCase().endsWith("." + lowerTerm);
                 case ID_MEDIA_CODEC, ID_MEDIA_TITLE, ID_MEDIA_ALBUM, ID_MEDIA_ARTIST -> {
                     String value = stringTag(meta, id);
