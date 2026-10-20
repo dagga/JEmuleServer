@@ -39,3 +39,9 @@
   200 bytes, so search answers carrying results were silently dropped. They are now inflated, with eMule's size bound.
 - The iterative lookup now counts towards the Kad search timeout (`kadSearchTimeoutSeconds`), leaving at least one
   second for the index holders to answer, so that results reach the client within the time it waits for them.
+- Fix every eD2K server being rejected by the server gossip, which left no verified server to fan searches out to.
+  Lugdunum servers send the extended `OP_GLOBSERVSTATRES` fields only to a challenge starting with `0x55AA`, as eMule
+  sends it, and otherwise answer with 14 bytes; the extended answer is 34 or 46 bytes, never the 42 bytes the check
+  required. The status is now parsed field by field according to its length, like eMule does. The check that the
+  server's total file count stays below its hard file limit is removed: that limit applies to the files shared by
+  one client, so it rejected nearly every real server.

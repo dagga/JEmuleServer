@@ -37,6 +37,10 @@ final class ServerGossip {
     private static final long TRANSACTION_TIMEOUT_MILLIS = 10_000;
     private static final int MAX_PEERS = 512;
     private static final SecureRandom RANDOM = new SecureRandom();
+    /** OP_GLOBSERVSTATRES up to the maximum users, the first field the plausibility check needs. */
+    private static final int MIN_STATUS_LENGTH = 2 + 4 * 4;
+    /** High word of the status challenge which makes servers answer with the extended fields (eMule's). */
+    private static final int EXTENDED_STATUS_CHALLENGE = 0x55AA0000;
 
     record Endpoint(InetAddress address, int tcpPort) {
         Endpoint {
@@ -193,7 +197,7 @@ final class ServerGossip {
         for (int offset = 0; offset < attempts; offset++) {
             Endpoint endpoint = endpoints.get((first + offset) % endpoints.size());
             if (pending.containsKey(endpoint)) continue;
-            int challenge = nextChallenge();
+            int challenge = nextStatusChallenge();
             pending.put(endpoint, new Pending(Stage.STATUS, challenge, now));
             probeSentAt.put(endpoint, now);
             send(socket, endpoint, frame(OP_GLOBSERVSTATREQ, intPayload(challenge)));
@@ -372,8 +376,16 @@ final class ServerGossip {
         send(socket, endpoint, data);
     }
 
+    /**
+     * Parses OP_GLOBSERVSTATRES like eMule's CUDPSocket: {@code <challenge 4><users 4><files 4>}, then, depending on
+     * the length, {@code <maxUsers 4>}, {@code <softFiles 4><hardFiles 4>}, {@code <udpFlags 4>},
+     * {@code <lowIdUsers 4>} and {@code <udpObfuscationPort 2><tcpObfuscationPort 2><udpKey 4>}. Servers append
+     * further data (e.g. their IP), and only send the extended fields to a {@code 0x55AA} challenge.
+     * The soft and hard file limits apply to the files shared by one client, not to the server total.
+     */
     static Status validateStatus(byte[] packet, int challenge) {
-        if (packet.length != 42 || (packet[0] & 0xFF) != PROTOCOL || (packet[1] & 0xFF) != OP_GLOBSERVSTATRES)
+        if (packet.length < MIN_STATUS_LENGTH || (packet[0] & 0xFF) != PROTOCOL
+                || (packet[1] & 0xFF) != OP_GLOBSERVSTATRES)
             return null;
         ByteBuffer data = ByteBuffer.wrap(packet).order(ByteOrder.LITTLE_ENDIAN);
         data.position(2);
@@ -381,15 +393,22 @@ final class ServerGossip {
         long users = Integer.toUnsignedLong(data.getInt());
         long files = Integer.toUnsignedLong(data.getInt());
         long maxUsers = Integer.toUnsignedLong(data.getInt());
-        long softFiles = Integer.toUnsignedLong(data.getInt());
-        long hardFiles = Integer.toUnsignedLong(data.getInt());
-        data.getInt(); // UDP flags
-        long lowIdUsers = Integer.toUnsignedLong(data.getInt());
-        data.getShort(); // UDP obfuscation port
-        data.getShort(); // TCP obfuscation port
-        int udpKey = data.getInt();
-        if (maxUsers == 0 || maxUsers > 100_000_000L || users > maxUsers || lowIdUsers > users
-                || (hardFiles != 0 && files > hardFiles)) return null;
+        long softFiles = 0;
+        long hardFiles = 0;
+        long lowIdUsers = 0;
+        int udpKey = 0;
+        if (data.remaining() >= 8) {
+            softFiles = Integer.toUnsignedLong(data.getInt());
+            hardFiles = Integer.toUnsignedLong(data.getInt());
+        }
+        if (data.remaining() >= 4) data.getInt(); // UDP flags
+        if (data.remaining() >= 4) lowIdUsers = Integer.toUnsignedLong(data.getInt());
+        if (data.remaining() >= 8) {
+            data.getShort(); // UDP obfuscation port
+            data.getShort(); // TCP obfuscation port
+            udpKey = data.getInt();
+        }
+        if (maxUsers == 0 || maxUsers > 100_000_000L || users > maxUsers || lowIdUsers > users) return null;
         return new Status(udpKey, users, files, softFiles, hardFiles, maxUsers, lowIdUsers);
     }
 
@@ -554,6 +573,10 @@ final class ServerGossip {
             challenge = RANDOM.nextInt();
         } while (challenge == 0);
         return challenge;
+    }
+
+    private static int nextStatusChallenge() {
+        return EXTENDED_STATUS_CHALLENGE | (RANDOM.nextInt() & 0xFFFF);
     }
 
     private static int nextDescriptionChallenge() {

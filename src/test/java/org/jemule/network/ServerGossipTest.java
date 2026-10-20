@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.util.HexFormat;
 import java.net.InetAddress;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
@@ -128,9 +129,46 @@ class ServerGossipTest {
         assertNotNull(decoded);
         assertEquals(0x12345678, decoded.udpKey());
         assertNull(ServerGossip.validateStatus(status, CHALLENGE + 1));
-        assertNull(ServerGossip.validateStatus(java.util.Arrays.copyOf(status, status.length - 1), CHALLENGE));
+        assertNull(ServerGossip.validateStatus(java.util.Arrays.copyOf(status, 17), CHALLENGE));
         assertNull(ServerGossip.validateStatus(statusPacket(CHALLENGE, 1001, 200, 1000, 500), CHALLENGE));
-        assertNull(ServerGossip.validateStatus(statusPacket(CHALLENGE, 100, 501, 1000, 500), CHALLENGE));
+        // The hard limit is per client: a server indexes far more files in total
+        assertNotNull(ServerGossip.validateStatus(statusPacket(CHALLENGE, 100, 5_000_000, 1000, 500), CHALLENGE));
+    }
+
+    @Test
+    void acceptsRealServerStatusVariants() {
+        int challenge = 0x55AA1234;
+        // 46 bytes: obfuscation ports and UDP key, followed by the server IP
+        ServerGossip.Status withKey = ServerGossip.validateStatus(HexFormat.of().parseHex(
+                "e3973412aa55d20100009d6c050050c30000400d0300400d03003b4700007f010000961088105d657da18ff6c0c0"),
+                challenge);
+        assertNotNull(withKey);
+        assertEquals(466, withKey.users());
+        assertEquals(355485, withKey.files());
+        assertEquals(50000, withKey.maxUsers());
+        assertEquals(200000, withKey.hardFiles());
+        assertEquals(383, withKey.lowIdUsers());
+        assertEquals(0xA17D655D, withKey.udpKey());
+
+        // 34 bytes: no obfuscation support, total files far above the per-client hard limit
+        ServerGossip.Status withoutKey = ServerGossip.validateStatus(HexFormat.of().parseHex(
+                "e3973412aa55e81a00000e23260050c3000070170000e02e0000fb170000e2150000"), challenge);
+        assertNotNull(withoutKey);
+        assertEquals(2499342, withoutKey.files());
+        assertEquals(12000, withoutKey.hardFiles());
+        assertEquals(0, withoutKey.udpKey());
+    }
+
+    @Test
+    void acceptsRealServerDescriptions() {
+        int challenge = 0x1234F0FF;
+        assertEquals("eMule-Nordic", ServerGossip.validateDescription(HexFormat.of().parseHex(
+                "e3a3fff0341203000000020100010c00654d756c652d4e6f726469630201000b1200214e464f2d53657276657220762e"
+                        + "31382e3102010091040031382e31"), challenge));
+        assertEquals("Mazinga Server", ServerGossip.validateDescription(HexFormat.of().parseHex(
+                "e3a3fff0341204000000020100010e004d617a696e6761205365727665720201000b27004d617a696e676120486967"
+                        + "682d706572666f726d616e63652065446f6e6b657920736572766572020100930e00343233332c343233342c3432"
+                        + "3335030100910f001100"), challenge));
     }
 
     @Test
@@ -211,6 +249,7 @@ class ServerGossipTest {
             assertEquals((byte) 0x96, statusRequest.getData()[1]);
             int statusChallenge = ByteBuffer.wrap(statusRequest.getData(), 2, 4)
                     .order(ByteOrder.LITTLE_ENDIAN).getInt();
+            assertEquals(0x55AA0000, statusChallenge & 0xFFFF0000, "servers send the extended status only to 0x55AA");
             byte[] status = statusPacket(statusChallenge, 100, 200, 1000, 500,
                     UdpObfuscation.serverKeyFor(loopback));
             peer.send(new DatagramPacket(status, status.length, statusRequest.getSocketAddress()));
