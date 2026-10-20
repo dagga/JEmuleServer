@@ -23,6 +23,7 @@ import org.jemule.config.ConfigApplyResult;
 import org.jemule.config.ConfigParameter;
 import org.jemule.core.ClientRegistry;
 import org.jemule.core.FileIndex;
+import org.jemule.core.FileSource;
 import org.jemule.kad.KadBootstrapManager;
 import org.jemule.kad.KadContact;
 import org.jemule.kad.KadHashBanService;
@@ -102,11 +103,14 @@ public class AdminInterface implements Runnable {
             case "clients" -> showClients(parts.length > 2 ? parts[1] + " " + parts[2]
                     : parts.length > 1 ? parts[1] : "");
             case "files" -> showFiles();
+            case "ingestion" -> showIngestion();
+            case "searches" -> showSearches();
             case "ban" -> handleBan(parts);
             case "unban" -> handleUnban(parts);
             case "events" -> showEvents();
             case "kad" -> handleKad(parts);
             case "peers" -> showPeers();
+            case "servers" -> showServers();
             case "filters" -> handleFilters(parts);
             case "bots" -> showBots();
             case "blocks" -> showBlocks();
@@ -200,6 +204,42 @@ public class AdminInterface implements Runnable {
         out().println("------------------------");
     }
 
+    private void showIngestion() {
+        out().println("--- New files inserted into the database (since start) ---");
+        out().printf("%-16s %12s %10s%n", "Channel", "New files", "Share");
+        long total = fileIndex.totalNewFiles();
+        for (Map.Entry<FileSource, Long> entry : fileIndex.newFileCounts().entrySet()) {
+            long count = entry.getValue();
+            out().printf("%-16s %12d %9.1f%%%n", entry.getKey().label(), count,
+                    total == 0 ? 0.0 : count * 100.0 / total);
+        }
+        out().printf("%-16s %12d %9.1f%%%n", "total", total, total == 0 ? 0.0 : 100.0);
+        out().println("Current files indexed: " + fileIndex.fileCount());
+        out().println("--------------------------------------------------------");
+    }
+
+    private void showSearches() {
+        out().println("--- Search queries sent and results returned (since start) ---");
+        out().printf("%-14s %10s %10s %10s %10s %8s%n",
+                "Channel", "Queries", "Requests", "Results", "Ingested", "Active");
+        KadNode node = server != null ? server.getKadNode() : null;
+        KadSearchBridge kad = node != null ? node.getSearchBridge() : null;
+        out().printf("%-14s %10d %10d %10d %10d %8d%n", "Kad",
+                kad == null ? 0 : kad.getSearchesForked(),
+                kad == null ? 0 : kad.getRequestsSent(),
+                kad == null ? 0 : kad.getResultsReceived(),
+                kad == null ? 0 : kad.getFilesIngested(),
+                kad == null ? 0 : kad.getActiveSessionCount());
+        ServerSearchBridge servers = server != null ? server.getServerSearchBridge() : null;
+        out().printf("%-14s %10d %10d %10d %10d %8d%n", "eD2K servers",
+                servers == null ? 0 : servers.getSearchesForked(),
+                servers == null ? 0 : servers.getRequestsSent(),
+                servers == null ? 0 : servers.getResultsReceived(),
+                servers == null ? 0 : servers.getFilesIngested(),
+                servers == null ? 0 : servers.getActiveSessionCount());
+        out().println("-------------------------------------------------------------");
+    }
+
     private void handleBan(String[] parts) {
         if (parts.length < 2) {
             out().println("Usage: ban <hash> [reason]");
@@ -284,6 +324,24 @@ public class AdminInterface implements Runnable {
         }
     }
 
+    private void showServers() {
+        List<ServerGossip.ServerView> servers = server != null ? server.getServerViews() : List.of();
+        out().println("--- eD2K Servers (" + servers.size() + ") ---");
+        out().printf("%-24s %-6s %-16s %-21s %8s %10s %8s %8s%n",
+                "Name", "State", "Source", "Address", "Users", "Files", "Latency", "Missed");
+        for (ServerGossip.ServerView view : servers) {
+            out().printf("%-24s %-6s %-16s %-21s %8s %10s %7sms %8d%n",
+                    view.name().isBlank() ? "-" : view.name(),
+                    view.state(),
+                    view.source().name().toLowerCase(Locale.ROOT),
+                    view.endpoint().address().getHostAddress() + ":" + view.endpoint().tcpPort(),
+                    view.users() == null ? "-" : view.users(),
+                    view.files() == null ? "-" : view.files(),
+                    view.latencyMillis() == null ? "-" : view.latencyMillis(),
+                    view.missedStatusProbes());
+        }
+    }
+
     private void handleFilters(String[] parts) {
         if (parts.length > 1 && parts[1].equalsIgnoreCase("reload")) {
             if (server == null) {
@@ -334,8 +392,8 @@ public class AdminInterface implements Runnable {
             out().println("Persistent hash blocks are unavailable.");
             return;
         }
-        List<String> hashes = database.loadBannedHashes();
-        out().println("--- Blocked Hashes (" + hashes.size() + ") ---");
+        List<String> hashes = database.loadRecentBannedHashes(3);
+        out().println("--- Last 3 Blocked Hashes ---");
         hashes.forEach(out()::println);
     }
 
@@ -543,15 +601,18 @@ public class AdminInterface implements Runnable {
         out().println("  clients         - Show connected clients count");
         out().println("  clients <text>  - Search clients by nickname, IP, or client ID");
         out().println("  files           - Show file indexing stats");
+        out().println("  ingestion       - New files inserted into the database by channel (client push, Kad, servers)");
+        out().println("  searches        - Kad and eD2K server search queries and results returned");
         out().println("  ban <hash> [R]  - Ban a file hash (32 hex chars)");
         out().println("  unban <hash>    - Remove a hash from the blacklist");
         out().println("  kick <target>   - Disconnect a client by ID, nickname or IP");
         out().println("  events          - Show event counts (total and last minute)");
         out().println("  peers           - List verified server peers and Kad contacts");
+        out().println("  servers         - Monitor known eD2K servers and their state");
         out().println("  filters         - Show active IP and fake-file filters");
         out().println("  filters reload  - Reload the IP filter and the child abuse keywords");
         out().println("  bots            - List potential bots by nickname heuristic");
-        out().println("  blocks          - List persistently blocked file hashes");
+        out().println("  blocks          - List the 3 most recently blocked file hashes");
         out().println("  settings        - Show runtime settings");
         out().println("  settings <key> <value> - Change a configuration parameter");
         out().println("  settings reload - Reload the configuration file without restarting");

@@ -1,6 +1,7 @@
 package org.jemule.network.handler;
 
 import org.jemule.core.FileMetadata;
+import org.jemule.core.FileSource;
 import org.jemule.protocol.OpCode;
 import org.jemule.protocol.Tag;
 import org.slf4j.Logger;
@@ -142,7 +143,7 @@ public class PublishHandler {
         }
         FileMetadata meta = new FileMetadata(hash, name, size, type, tags);
         meta.sources().put(org.jemule.core.FileIndex.sourceKey(context.getState()), context.getState());
-        context.getFileIndex().addFile(meta);
+        context.getFileIndex().addFile(meta, FileSource.CLIENT_PUSH);
         context.getState().publishedHashes().add(hash);
         context.getState().publishedFilesCount().incrementAndGet();
         return true;

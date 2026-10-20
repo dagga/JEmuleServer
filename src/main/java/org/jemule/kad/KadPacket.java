@@ -19,10 +19,12 @@
 package org.jemule.kad;
 
 import org.jemule.core.FileMetadata;
+import org.jemule.network.Packet;
 import org.jemule.network.handler.HandlerUtils;
 import org.jemule.protocol.FileTypes;
 import org.jemule.protocol.Tag;
 
+import java.io.IOException;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.nio.ByteBuffer;
@@ -38,6 +40,8 @@ import java.util.Objects;
 public final class KadPacket {
     public static final byte PROTOCOL_KAD1 = (byte) 0x39;
     public static final byte PROTOCOL_KAD2 = KadOpCode.KAD2_HEADER;
+    /** {@code OP_KADEMLIAPACKEDPROT}: Kad2 packet whose payload is zlib-compressed. */
+    public static final byte PROTOCOL_KAD2_PACKED = (byte) 0xE5;
 
     private final byte protocol;
     private final byte opCode;
@@ -81,7 +85,8 @@ public final class KadPacket {
     }
 
     /**
-     * Deserializes a UDP packet from raw bytes.
+     * Deserializes a UDP packet from raw bytes. A packed packet ({@code OP_KADEMLIAPACKEDPROT}, 0xE5: eMule packs
+     * every Kad packet larger than 200 bytes) is inflated into a plain Kad2 packet.
      */
     public static KadPacket decode(byte[] raw, int offset, int length) {
         if (raw == null || length < 2) {
@@ -93,6 +98,15 @@ public final class KadPacket {
         byte[] payload = new byte[dataLen];
         if (dataLen > 0) {
             System.arraycopy(raw, offset + 2, payload, 0, dataLen);
+        }
+        if (proto == PROTOCOL_KAD2_PACKED) {
+            try {
+                // Same bound as eMule's CClientUDPSocket::OnReceive
+                payload = Packet.decompress(payload, dataLen * 10 + 300);
+            } catch (IOException e) {
+                throw new IllegalArgumentException("Invalid packed Kad packet: " + e.getMessage(), e);
+            }
+            proto = PROTOCOL_KAD2;
         }
         return new KadPacket(proto, op, payload);
     }
@@ -121,7 +135,7 @@ public final class KadPacket {
         Objects.requireNonNull(localId, "localId cannot be null");
         Objects.requireNonNull(contacts, "contacts cannot be null");
         ByteBuffer buf = ByteBuffer.allocate(16 + 2 + 1 + 2 + contacts.size() * 25).order(ByteOrder.LITTLE_ENDIAN);
-        buf.put(localId.getBytes());
+        buf.put(localId.toWire());
         buf.putShort((short) localTcpPort);
         buf.put(kadVersion);
         buf.putShort((short) contacts.size());
@@ -157,7 +171,7 @@ public final class KadPacket {
                 result.add(contact);
             }
         }
-        return new BootstrapRes(new KadId(idBytes), tcpPort, kadVersion, result);
+        return new BootstrapRes(KadId.fromWire(idBytes), tcpPort, kadVersion, result);
     }
 
     /**
@@ -165,7 +179,7 @@ public final class KadPacket {
      */
     public static KadPacket createHelloReq(KadId senderId, int senderTcpPort, byte kadVersion) {
         ByteBuffer buf = ByteBuffer.allocate(32).order(ByteOrder.LITTLE_ENDIAN);
-        buf.put(senderId.getBytes());
+        buf.put(senderId.toWire());
         buf.putShort((short) senderTcpPort);
         buf.put(kadVersion);
         buf.put((byte) 0); // 0 tags
@@ -179,7 +193,7 @@ public final class KadPacket {
      */
     public static KadPacket createHelloRes(KadId senderId, int senderTcpPort, byte kadVersion) {
         ByteBuffer buf = ByteBuffer.allocate(32).order(ByteOrder.LITTLE_ENDIAN);
-        buf.put(senderId.getBytes());
+        buf.put(senderId.toWire());
         buf.putShort((short) senderTcpPort);
         buf.put(kadVersion);
         buf.put((byte) 0); // 0 tags
@@ -202,19 +216,23 @@ public final class KadPacket {
         buf.get(idBytes);
         int tcpPort = Short.toUnsignedInt(buf.getShort());
         byte kadVersion = buf.get();
-        return new HelloPayload(new KadId(idBytes), tcpPort, kadVersion);
+        return new HelloPayload(KadId.fromWire(idBytes), tcpPort, kadVersion);
     }
 
     /**
      * Creates a KADEMLIA2_REQ (Find Node) packet.
+     *
+     * @param checkId the ID of the contacted node, used by the receiver to discard reflected/forged requests
+     * @param targetType the lookup type ({@code 0x02} find value, {@code 0x0B} find node)
+     * @param targetId the key whose closest contacts are requested
      */
-    public static KadPacket createFindNodeReq(KadId localId, byte targetType, KadId targetId) {
-        Objects.requireNonNull(localId, "localId cannot be null");
+    public static KadPacket createFindNodeReq(KadId checkId, byte targetType, KadId targetId) {
+        Objects.requireNonNull(checkId, "checkId cannot be null");
         Objects.requireNonNull(targetId, "targetId cannot be null");
         ByteBuffer buf = ByteBuffer.allocate(33).order(ByteOrder.LITTLE_ENDIAN);
         buf.put(targetType);
-        buf.put(targetId.getBytes());
-        buf.put(localId.getBytes()); // sanity check on the responder side
+        buf.put(targetId.toWire());
+        buf.put(checkId.toWire()); // must equal the receiver's Kad ID
         return new KadPacket(KadOpCode.REQ, buf.array());
     }
 
@@ -227,7 +245,7 @@ public final class KadPacket {
         Objects.requireNonNull(targetId, "targetId cannot be null");
         Objects.requireNonNull(contacts, "contacts cannot be null");
         ByteBuffer buf = ByteBuffer.allocate(17 + contacts.size() * 25).order(ByteOrder.LITTLE_ENDIAN);
-        buf.put(targetId.getBytes());
+        buf.put(targetId.toWire());
         buf.put((byte) contacts.size());
         for (KadContact c : contacts) {
             writeContact(buf, c);
@@ -255,7 +273,7 @@ public final class KadPacket {
                 contacts.add(contact);
             }
         }
-        return new FindNodeResult(new KadId(targetBytes), contacts);
+        return new FindNodeResult(KadId.fromWire(targetBytes), contacts);
     }
 
     public record SearchKeyReq(KadId keywordHash, int startPosition) {}
@@ -266,7 +284,7 @@ public final class KadPacket {
     public static KadPacket createSearchKeyReq(KadId keywordHash, int startPosition) {
         Objects.requireNonNull(keywordHash, "keywordHash cannot be null");
         ByteBuffer buf = ByteBuffer.allocate(18).order(ByteOrder.LITTLE_ENDIAN);
-        buf.put(keywordHash.getBytes());
+        buf.put(keywordHash.toWire());
         buf.putShort((short) startPosition);
         return new KadPacket(KadOpCode.SEARCH_KEY_REQ, buf.array());
     }
@@ -282,7 +300,7 @@ public final class KadPacket {
         byte[] hash = new byte[16];
         buf.get(hash);
         int startPos = buf.remaining() >= 2 ? Short.toUnsignedInt(buf.getShort()) : 0;
-        return new SearchKeyReq(new KadId(hash), startPos);
+        return new SearchKeyReq(KadId.fromWire(hash), startPos);
     }
 
     public record SearchRes(KadId targetId, List<FileMetadata> files) {}
@@ -291,14 +309,24 @@ public final class KadPacket {
      * Creates a KADEMLIA2_SEARCH_RES packet containing discovered files for the given target.
      */
     public static KadPacket createSearchRes(KadId targetId, List<FileMetadata> files) {
+        return createSearchRes(KadId.zero(), targetId, files);
+    }
+
+    /**
+     * Creates a KADEMLIA2_SEARCH_RES packet. The Kad2 payload starts with the sender ID, then the search target,
+     * then the number of results.
+     */
+    public static KadPacket createSearchRes(KadId sourceId, KadId targetId, List<FileMetadata> files) {
+        Objects.requireNonNull(sourceId, "sourceId cannot be null");
         Objects.requireNonNull(targetId, "targetId cannot be null");
         Objects.requireNonNull(files, "files cannot be null");
         ByteBuffer buf = ByteBuffer.allocate(65536).order(ByteOrder.LITTLE_ENDIAN);
-        buf.put(targetId.getBytes());
+        buf.put(sourceId.toWire());
+        buf.put(targetId.toWire());
         buf.putShort((short) files.size());
 
         for (FileMetadata f : files) {
-            buf.put(HandlerUtils.hashToBytes(f.hash()));
+            buf.put(new KadId(HandlerUtils.hashToBytes(f.hash())).toWire()); // file hash sent as a CUInt128
             List<Tag> tags = new ArrayList<>();
             tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_FILENAME, f.name()));
             tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_FILESIZE, (int) (f.size() & 0xFFFFFFFFL)));
@@ -309,7 +337,7 @@ public final class KadPacket {
                 tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_FILETYPE, f.type()));
             }
             tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, f.sourceCount()));
-            Tag.writeList(buf, tags);
+            writeKadTagList(buf, tags);
         }
 
         byte[] data = new byte[buf.position()];
@@ -321,10 +349,11 @@ public final class KadPacket {
      * Parses a KADEMLIA2_SEARCH_RES payload into FileMetadata objects.
      */
     public static SearchRes parseSearchRes(byte[] data) {
-        if (data == null || data.length < 18) {
+        if (data == null || data.length < 34) {
             return null;
         }
         ByteBuffer buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN);
+        buf.position(16); // Kad2 search responses carry the responder ID first
         byte[] targetBytes = new byte[16];
         buf.get(targetBytes);
         int count = Short.toUnsignedInt(buf.getShort());
@@ -333,11 +362,11 @@ public final class KadPacket {
         for (int i = 0; i < count && buf.remaining() >= 16; i++) {
             byte[] fileHash = new byte[16];
             buf.get(fileHash);
-            String hashHex = HandlerUtils.bytesToHashString(fileHash);
+            String hashHex = HandlerUtils.bytesToHashString(KadId.fromWire(fileHash).getBytes());
 
             List<Tag> tags;
             try {
-                tags = Tag.readList(buf);
+                tags = readKadTagList(buf);
             } catch (Exception e) {
                 break;
             }
@@ -367,7 +396,28 @@ public final class KadPacket {
             files.add(meta);
         }
 
-        return new SearchRes(new KadId(targetBytes), files);
+        return new SearchRes(KadId.fromWire(targetBytes), files);
+    }
+
+    /** Writes a Kad tag list: the count is a single byte, then the tags (unlike the 4-byte eD2K count). */
+    private static void writeKadTagList(ByteBuffer buf, List<Tag> tags) {
+        buf.put((byte) tags.size());
+        for (Tag tag : tags) {
+            tag.writeKad(buf);
+        }
+    }
+
+    /** Reads a Kad tag list whose count is a single byte. */
+    private static List<Tag> readKadTagList(ByteBuffer buf) {
+        if (buf.remaining() < 1) {
+            return List.of();
+        }
+        int count = Byte.toUnsignedInt(buf.get());
+        List<Tag> tags = new ArrayList<>(count);
+        for (int i = 0; i < count; i++) {
+            tags.add(Tag.read(buf));
+        }
+        return tags;
     }
 
     // =========================================================================
@@ -375,7 +425,7 @@ public final class KadPacket {
     // =========================================================================
 
     private static void writeContact(ByteBuffer buf, KadContact c) {
-        buf.put(c.id().getBytes());
+        buf.put(c.id().toWire());
         byte[] addrBytes = c.address().getAddress();
         if (addrBytes.length == 4) {
             // The IPv4 address is serialized least-significant byte first, like in nodes.dat.
@@ -400,7 +450,7 @@ public final class KadPacket {
         try {
             byte[] address = {ipBytes[3], ipBytes[2], ipBytes[1], ipBytes[0]};
             InetAddress addr = InetAddress.getByAddress(address);
-            return new KadContact(new KadId(idBytes), addr, udpPort, tcpPort, version);
+            return new KadContact(KadId.fromWire(idBytes), addr, udpPort, tcpPort, version);
         } catch (UnknownHostException e) {
             return null;
         }

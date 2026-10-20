@@ -26,8 +26,11 @@ import org.jemule.config.ConfigParameter;
 import org.jemule.config.ServerConfig;
 import org.jemule.core.ClientState;
 import org.jemule.core.DatabaseManager;
+import org.jemule.core.FileIndex;
+import org.jemule.core.FileSource;
 import org.jemule.kad.KadContact;
 import org.jemule.kad.KadNode;
+import org.jemule.kad.KadSearchBridge;
 import org.jemule.security.FakeFileDetector;
 import org.jemule.security.IPFilter;
 import org.slf4j.Logger;
@@ -66,7 +69,9 @@ final class AdminWebPanel implements AutoCloseable {
             </style><body><h1>JEmuleServer admin</h1>
             <p>Administration only. Potential bots are identified by nickname heuristic, not verified.</p>
             <nav><button data-view="status">Status</button><button data-view="clients">Clients</button>
-            <button data-view="peers">Peers</button><button data-view="filters">Filters</button>
+            <button data-view="peers">Peers</button><button data-view="servers">Servers</button>
+            <button data-view="ingestion">Ingestion</button><button data-view="searches">Searches</button>
+            <button data-view="filters">Filters</button>
             <button data-view="bots">Bots</button><button data-view="blocks">Blocks</button>
             <button data-view="settings">Settings</button></nav>
             <section><div id="controls"></div><p id="notice"></p><div id="content">Loading…</div></section>
@@ -191,6 +196,9 @@ final class AdminWebPanel implements AutoCloseable {
                 case "/api/status" -> json(exchange, 200, status());
                 case "/api/clients" -> clients(exchange);
                 case "/api/peers" -> json(exchange, 200, peers());
+                case "/api/servers" -> json(exchange, 200, servers());
+                case "/api/ingestion" -> json(exchange, 200, ingestion());
+                case "/api/searches" -> json(exchange, 200, searches());
                 case "/api/filters" -> json(exchange, 200, filters());
                 case "/api/bots" -> json(exchange, 200, bots());
                 case "/api/blocks" -> json(exchange, 200, blocks());
@@ -328,6 +336,83 @@ final class AdminWebPanel implements AutoCloseable {
         return result;
     }
 
+    private List<Map<String, Object>> servers() {
+        long now = System.currentTimeMillis();
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (ServerGossip.ServerView view : server.getServerViews()) {
+            Map<String, Object> row = new java.util.LinkedHashMap<>();
+            row.put("name", view.name());
+            row.put("state", view.state());
+            row.put("source", view.source().name().toLowerCase(Locale.ROOT));
+            row.put("address", view.endpoint().address().getHostAddress());
+            row.put("tcpPort", view.endpoint().tcpPort());
+            row.put("udpPort", view.endpoint().udpPort());
+            row.put("users", view.users());
+            row.put("files", view.files());
+            row.put("maxUsers", view.maxUsers());
+            row.put("lowIdUsers", view.lowIdUsers());
+            row.put("udpKey", view.hasUdpKey());
+            row.put("latencyMs", view.latencyMillis());
+            row.put("lastStatusSecondsAgo", view.lastStatusAtMillis() == null ? null
+                    : Math.max(0, (now - view.lastStatusAtMillis()) / 1000));
+            row.put("verifiedSecondsAgo", view.verifiedAtMillis() == null ? null
+                    : Math.max(0, (now - view.verifiedAtMillis()) / 1000));
+            row.put("missedProbes", view.missedStatusProbes());
+            result.add(row);
+        }
+        return result;
+    }
+
+    private List<Map<String, Object>> ingestion() {
+        FileIndex index = server.getFileIndex();
+        Map<FileSource, Long> counts = index.newFileCounts();
+        long total = index.totalNewFiles();
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (Map.Entry<FileSource, Long> entry : counts.entrySet()) {
+            Map<String, Object> row = new java.util.LinkedHashMap<>();
+            row.put("source", entry.getKey().label());
+            row.put("newFiles", entry.getValue());
+            row.put("percent", percent(entry.getValue(), total));
+            rows.add(row);
+        }
+        Map<String, Object> totalRow = new java.util.LinkedHashMap<>();
+        totalRow.put("source", "total");
+        totalRow.put("newFiles", total);
+        totalRow.put("percent", total == 0 ? 0.0 : 100.0);
+        rows.add(totalRow);
+        return rows;
+    }
+
+    private static double percent(long value, long total) {
+        return total == 0 ? 0.0 : Math.round(value * 1000.0 / total) / 10.0;
+    }
+
+    private List<Map<String, Object>> searches() {
+        List<Map<String, Object>> rows = new ArrayList<>();
+        KadSearchBridge kad = server.getKadSearchBridge();
+        Map<String, Object> kadRow = new java.util.LinkedHashMap<>();
+        kadRow.put("channel", "Kad");
+        kadRow.put("queries", kad == null ? 0L : kad.getSearchesForked());
+        kadRow.put("requests", kad == null ? 0L : kad.getRequestsSent());
+        kadRow.put("results", kad == null ? 0L : kad.getResultsReceived());
+        kadRow.put("ingested", kad == null ? 0L : kad.getFilesIngested());
+        kadRow.put("active", kad == null ? 0 : kad.getActiveSessionCount());
+        kadRow.put("blocked", kad == null ? 0L : kad.getIllicitFilesBlocked());
+        rows.add(kadRow);
+
+        ServerSearchBridge servers = server.getServerSearchBridge();
+        Map<String, Object> serverRow = new java.util.LinkedHashMap<>();
+        serverRow.put("channel", "eD2K servers");
+        serverRow.put("queries", servers == null ? 0L : servers.getSearchesForked());
+        serverRow.put("requests", servers == null ? 0L : servers.getRequestsSent());
+        serverRow.put("results", servers == null ? 0L : servers.getResultsReceived());
+        serverRow.put("ingested", servers == null ? 0L : servers.getFilesIngested());
+        serverRow.put("active", servers == null ? 0 : servers.getActiveSessionCount());
+        serverRow.put("blocked", 0L);
+        rows.add(serverRow);
+        return rows;
+    }
+
     private Map<String, Object> filters() {
         IPFilter ipFilter = server.getIPFilter();
         FakeFileDetector detector = server.getFakeFileDetector();
@@ -355,7 +440,7 @@ final class AdminWebPanel implements AutoCloseable {
 
     private List<String> blocks() {
         DatabaseManager database = server.getDatabaseManager();
-        return database == null ? List.of() : database.loadBannedHashes();
+        return database == null ? List.of() : database.loadRecentBannedHashes(3);
     }
 
     private List<Map<String, Object>> settings() {

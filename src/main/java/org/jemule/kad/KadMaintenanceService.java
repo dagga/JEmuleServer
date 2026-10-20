@@ -132,9 +132,10 @@ public class KadMaintenanceService implements AutoCloseable {
         List<KadContact> closest = routingTable.findClosest(randomTarget, 3);
         if (closest.isEmpty()) return;
 
-        KadPacket findNode = KadPacket.createFindNodeReq(routingTable.localId(), (byte) 8, randomTarget);
+        // KADEMLIA_FIND_NODE (0x0B); the sanity check must be the contacted node's own ID.
         for (KadContact node : closest) {
             try {
+                KadPacket findNode = KadPacket.createFindNodeReq(node.id(), (byte) 0x0B, randomTarget);
                 udpService.send(findNode, node.address(), node.udpPort());
             } catch (IOException e) {
                 log.debug("Failed to send bucket refresh findNode to {}: {}", node, e.getMessage());

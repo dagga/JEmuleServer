@@ -29,6 +29,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -44,11 +45,13 @@ public final class IPFilterUpdater implements AutoCloseable {
     private static final Logger log = LoggerFactory.getLogger(IPFilterUpdater.class);
     private static final int MAX_DOWNLOAD_BYTES = 32 * 1024 * 1024;
     private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(45);
+    static final Duration UPDATE_INTERVAL = Duration.ofDays(1);
 
     private final IPFilter filter;
     private final Path destination;
     private final List<URI> sources;
     private final HttpClient httpClient;
+    private boolean started;
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(runnable -> {
         Thread thread = new Thread(runnable, "ipfilter-updater");
         thread.setDaemon(true);
@@ -69,13 +72,34 @@ public final class IPFilterUpdater implements AutoCloseable {
         this.httpClient = httpClient;
     }
 
-    /** Starts an immediate refresh followed by daily updates. */
-    public void start() {
+    /**
+     * Schedules daily updates. The first one runs once the local filter is a day old: a restart does not download
+     * a filter that was refreshed or checked less than a day ago.
+     */
+    public synchronized void start() {
+        if (started) return;
+        started = true;
         if (sources.isEmpty()) {
             log.warn("IP filter updates are enabled for {}, but no update sources are configured", destination);
             return;
         }
-        scheduler.scheduleWithFixedDelay(this::refreshSafely, 0, 1, TimeUnit.DAYS);
+        long initialDelay = initialDelayMillis(destination, System.currentTimeMillis());
+        if (initialDelay > 0) {
+            log.info("IP filter {} is up to date, next update check in {} min", destination,
+                    TimeUnit.MILLISECONDS.toMinutes(initialDelay));
+        }
+        scheduler.scheduleWithFixedDelay(this::refreshSafely, initialDelay, UPDATE_INTERVAL.toMillis(),
+                TimeUnit.MILLISECONDS);
+    }
+
+    /** Time left before the local filter, last written or checked at its modification time, is due for an update. */
+    static long initialDelayMillis(Path destination, long now) {
+        try {
+            long age = now - Files.getLastModifiedTime(destination).toMillis();
+            return age < 0 ? 0 : Math.max(0, UPDATE_INTERVAL.toMillis() - age);
+        } catch (IOException e) {
+            return 0; // no local filter yet
+        }
     }
 
     boolean refreshNow() {

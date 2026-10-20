@@ -49,6 +49,15 @@ class KadIdTest {
     }
 
     @Test
+    void wireFormReversesEachThirtyTwoBitWord() {
+        // CUInt128 is written as four little-endian uint32, most significant word first
+        KadId id = KadId.fromHex("000102030405060708090a0b0c0d0e0f");
+        assertEquals("03020100070605040b0a09080f0e0d0c", HexFormat.of().formatHex(id.toWire()));
+        assertEquals(id, KadId.fromWire(id.toWire()));
+        assertThrows(IllegalArgumentException.class, () -> KadId.fromWire(new byte[15]));
+    }
+
+    @Test
     void testXorDistance() {
         KadId id1 = KadId.fromHex("00000000000000000000000000000001");
         KadId id2 = KadId.fromHex("00000000000000000000000000000003");

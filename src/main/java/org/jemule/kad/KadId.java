@@ -95,7 +95,36 @@ public final class KadId implements Comparable<KadId>, Serializable {
     }
 
     /**
-     * Creates a KadId for a keyword search target by computing its MD4 hash in lower case.
+     * Creates a KadId from its wire form. eMule/aMule serialize a {@code CUInt128} as four 32-bit words, most
+     * significant word first, each word little-endian: the bytes of every word are reversed compared to the
+     * big-endian value held by this class.
+     */
+    public static KadId fromWire(byte[] wire) {
+        Objects.requireNonNull(wire, "wire cannot be null");
+        if (wire.length != ID_BYTES) {
+            throw new IllegalArgumentException("KadId must be exactly " + ID_BYTES + " bytes, got " + wire.length);
+        }
+        return new KadId(swapWords(wire));
+    }
+
+    /**
+     * Returns the 16 bytes to put in a Kad packet or in nodes.dat (see {@link #fromWire(byte[])}).
+     */
+    public byte[] toWire() {
+        return swapWords(data);
+    }
+
+    private static byte[] swapWords(byte[] in) {
+        byte[] out = new byte[ID_BYTES];
+        for (int i = 0; i < ID_BYTES; i++) {
+            out[i] = in[(i & ~3) + 3 - (i & 3)];
+        }
+        return out;
+    }
+
+    /**
+     * Creates a KadId for a keyword search target by computing its MD4 hash in lower case. Like a file hash, the
+     * MD4 digest is the big-endian value of the ID ({@code CUInt128::SetValueBE}).
      */
     public static KadId fromKeyword(String keyword) {
         if (keyword == null) {

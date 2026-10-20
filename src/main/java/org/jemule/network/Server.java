@@ -242,10 +242,8 @@ public class Server {
     private IPFilterUpdater createIpFilterUpdater(String filterPath) {
         if (filterPath == null || filterPath.isBlank()) return null;
         try {
-            IPFilterUpdater updater = new IPFilterUpdater(ipFilter, Path.of(filterPath),
-                    IPFilterUpdater.bundledSources());
-            updater.start();
-            return updater;
+            // Started once the local filter is loaded (startIpFilterLoading): an update is checked against it
+            return new IPFilterUpdater(ipFilter, Path.of(filterPath), IPFilterUpdater.bundledSources());
         } catch (IOException | IllegalArgumentException e) {
             log.error("Could not start IP filter updates for {}: {}", filterPath, e.getMessage());
             return null;
@@ -353,6 +351,10 @@ public class Server {
 
     List<ServerGossip.VerifiedPeer> getVerifiedServerPeers() {
         return List.copyOf(serverGossip.verifiedPeers());
+    }
+
+    List<ServerGossip.ServerView> getServerViews() {
+        return serverGossip.serverViews();
     }
 
     int getAdminWebPort() {
@@ -775,6 +777,7 @@ public class Server {
             } catch (Exception e) {
                 log.error("Could not load IP filter from {}: {}", config.ipFilterPath(), e.getMessage());
             }
+            if (ipFilterUpdater != null) ipFilterUpdater.start();
         });
     }
 

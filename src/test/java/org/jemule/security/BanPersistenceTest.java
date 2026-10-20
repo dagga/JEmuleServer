@@ -43,4 +43,19 @@ class BanPersistenceTest {
             assertFalse(detector.isFake("ffffffffffffffffffffffffffffffff", "movie.mp4.exe", 1000));
         }
     }
+
+    @Test
+    void recentBansReturnsOnlyTheNewestRows() throws Exception {
+        String dbPath = tempDir.resolve("db").toString();
+        try (DatabaseManager db = new DatabaseManager(dbPath)) {
+            for (int i = 1; i <= 5; i++) {
+                db.addBannedHash(String.format("%032d", i), "test");
+            }
+            var recent = db.loadRecentBannedHashes(3);
+            assertEquals(3, recent.size());
+            assertTrue(recent.contains(String.format("%032d", 3)));
+            assertTrue(recent.contains(String.format("%032d", 4)));
+            assertTrue(recent.contains(String.format("%032d", 5)));
+        }
+    }
 }

@@ -23,6 +23,9 @@ import org.jemule.protocol.Tag;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetAddress;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.util.Arrays;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -147,5 +150,84 @@ class KadPacketTest {
         assertEquals("ubuntu-24.04.iso", decodedMeta.name());
         assertEquals(4500000000L, decodedMeta.size());
         assertEquals("Archive", decodedMeta.type());
+    }
+
+    @Test
+    void parsesEmuleKad2SearchResponseWithSourceIdAndSingleByteTagCount() {
+        KadId source = KadId.fromKeyword("source-node");
+        KadId target = KadId.fromKeyword("linux");
+        byte[] hash = new byte[16];
+        Arrays.fill(hash, (byte) 0x42);
+        String hashHex = org.jemule.network.handler.HandlerUtils.bytesToHashString(hash);
+
+        ByteBuffer buf = ByteBuffer.allocate(1024).order(ByteOrder.LITTLE_ENDIAN);
+        buf.put(source.toWire());
+        buf.put(target.toWire());
+        buf.putShort((short) 1);
+        buf.put(hash); // 0x42 repeated: identical in wire and big-endian forms
+        buf.put((byte) 3);
+        new Tag(Tag.TYPE_STRING, Tag.NAME_FILENAME, "ubuntu-24.04.iso").writeKad(buf);
+        new Tag(Tag.TYPE_INTEGER, Tag.NAME_FILESIZE, 4500).writeKad(buf);
+        new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, 7).writeKad(buf);
+
+        KadPacket packet = new KadPacket(KadOpCode.SEARCH_RES, Arrays.copyOf(buf.array(), buf.position()));
+        KadPacket.SearchRes parsed = KadPacket.parseSearchRes(packet.data());
+        assertNotNull(parsed);
+        assertEquals(target, parsed.targetId());
+        assertEquals(1, parsed.files().size());
+        assertEquals(hashHex, parsed.files().get(0).hash());
+        assertEquals("ubuntu-24.04.iso", parsed.files().get(0).name());
+        assertEquals(4500L, parsed.files().get(0).size());
+    }
+
+    @Test
+    void keywordTargetIsSentAsCUInt128() {
+        // eMule hashes the keyword with MD4, reads the digest big-endian (SetValueBE) and writes it as 4 LE words
+        byte[] md4 = MD4.digest("linux");
+        byte[] expected = new byte[16];
+        for (int i = 0; i < 16; i++) {
+            expected[i] = md4[(i & ~3) + 3 - (i & 3)];
+        }
+        KadPacket req = KadPacket.createSearchKeyReq(KadId.fromKeyword("Linux"), 0);
+        assertArrayEquals(expected, Arrays.copyOf(req.data(), 16));
+        assertEquals(KadId.fromKeyword("linux"), KadPacket.parseSearchKeyReq(req.data()).keywordHash());
+    }
+
+    @Test
+    void searchResultFileHashIsSentAsCUInt128() {
+        FileMetadata meta = FileMetadata.withoutSources("000102030405060708090A0B0C0D0E0F", "a.iso", 10L, "", List.of());
+        byte[] data = KadPacket.createSearchRes(KadId.zero(), KadId.fromKeyword("iso"), List.of(meta)).data();
+        assertArrayEquals(KadId.fromHex("000102030405060708090a0b0c0d0e0f").toWire(), Arrays.copyOfRange(data, 34, 50));
+        assertEquals("000102030405060708090a0b0c0d0e0f",
+                KadPacket.parseSearchRes(data).files().get(0).hash().toLowerCase(java.util.Locale.ROOT));
+    }
+
+    @Test
+    void decodesPackedKadPacket() {
+        KadId target = KadId.fromKeyword("ubuntu");
+        FileMetadata meta = FileMetadata.withoutSources("0123456789ABCDEF0123456789ABCDEF", "ubuntu-24.04.iso",
+                4_500_000_000L, "Archive", List.of());
+        byte[] payload = KadPacket.createSearchRes(KadId.random(), target, List.of(meta)).data();
+
+        java.util.zip.Deflater deflater = new java.util.zip.Deflater();
+        deflater.setInput(payload);
+        deflater.finish();
+        byte[] compressed = new byte[payload.length + 64];
+        int len = deflater.deflate(compressed);
+        deflater.end();
+        byte[] raw = new byte[2 + len];
+        raw[0] = KadPacket.PROTOCOL_KAD2_PACKED;
+        raw[1] = KadOpCode.SEARCH_RES.value;
+        System.arraycopy(compressed, 0, raw, 2, len);
+
+        KadPacket decoded = KadPacket.decode(raw);
+        assertEquals(KadOpCode.SEARCH_RES, decoded.getOpCode());
+        KadPacket.SearchRes parsed = KadPacket.parseSearchRes(decoded.data());
+        assertNotNull(parsed);
+        assertEquals(target, parsed.targetId());
+        assertEquals("ubuntu-24.04.iso", parsed.files().get(0).name());
+
+        byte[] corrupted = {KadPacket.PROTOCOL_KAD2_PACKED, KadOpCode.SEARCH_RES.value, 1, 2, 3};
+        assertThrows(IllegalArgumentException.class, () -> KadPacket.decode(corrupted));
     }
 }
