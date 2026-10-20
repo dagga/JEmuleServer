@@ -207,10 +207,9 @@ class KadSearchBridgeTest {
             bridge.start();
             serverUdp.close();
 
-            // Every send fails: the search ends immediately instead of hanging the client
+            // Every send fails: the search ends quickly instead of hanging the client
             CompletableFuture<List<FileMetadata>> future = bridge.forkSearch("closed");
-            assertTrue(future.isDone(), "a search whose requests all failed must not wait for the 10 s timeout");
-            assertTrue(future.get().isEmpty());
+            assertTrue(future.get(2, TimeUnit.SECONDS).isEmpty(), "a search whose requests all failed must not wait for the 10 s timeout");
             assertEquals(0, bridge.getActiveSessionCount());
         }
     }
@@ -712,6 +711,75 @@ class KadSearchBridgeTest {
                 assertTrue(db.loadFiles().isEmpty());
                 assertEquals(0, bridge.getFilesIngested());
             }
+        }
+    }
+
+    @Test
+    void testKeywordSearchWalksTheDhtBeforeQueryingIndexHolders() throws Exception {
+        KadRoutingTable table = new KadRoutingTable(KadId.random());
+        String keyword = "dhtlookup";
+        KadId keywordHash = KadId.fromKeyword(keyword);
+
+        try (KadUdpService serverUdp = new KadUdpService(0);
+             KadUdpService farPeer = new KadUdpService(0);
+             KadUdpService closePeer = new KadUdpService(0);
+             KadSearchBridge bridge = new KadSearchBridge(table, serverUdp, 3, 1_500)) {
+            serverUdp.start();
+            farPeer.start();
+            closePeer.start();
+            bridge.start();
+
+            // A single contact, deliberately far from the keyword hash
+            KadContact farContact = new KadContact(keywordHash.xor(KadId.max()),
+                    InetAddress.getLoopbackAddress(), farPeer.getPort());
+            table.addOrUpdate(farContact);
+
+            // It answers the lookup with the node actually responsible for the keyword
+            KadContact closeContact = new KadContact(keywordHash,
+                    InetAddress.getLoopbackAddress(), closePeer.getPort());
+            CountDownLatch lookupAnswered = new CountDownLatch(1);
+            farPeer.registerListener(KadOpCode.REQ, (packet, addr, port) -> {
+                try {
+                    byte[] data = packet.data();
+                    assertEquals(0x02, data[0] & 0x1F, "keyword lookup must use KADEMLIA_FIND_VALUE");
+                    KadId target = KadId.fromWire(java.util.Arrays.copyOfRange(data, 1, 17));
+                    KadId check = KadId.fromWire(java.util.Arrays.copyOfRange(data, 17, 33));
+                    assertEquals(farContact.id(), check, "KADEMLIA2_REQ sanity check must be the contacted node ID");
+                    farPeer.send(KadPacket.createFindNodeRes(target, List.of(closeContact)), addr, port);
+                    lookupAnswered.countDown();
+                } catch (Exception e) {
+                    fail(e);
+                }
+            });
+
+            FileMetadata file = new FileMetadata("cccccccccccccccccccccccccccccccc", "dhtlookup result.bin",
+                    1_000L, "Archive", List.of(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, 3)));
+            CountDownLatch searchSentToResponsibleNode = new CountDownLatch(1);
+            closePeer.registerListener(KadOpCode.REQ, (packet, addr, port) -> {
+                try {
+                    KadId target = KadId.fromWire(java.util.Arrays.copyOfRange(packet.data(), 1, 17));
+                    closePeer.send(KadPacket.createFindNodeRes(target, List.of()), addr, port);
+                } catch (Exception e) {
+                    fail(e);
+                }
+            });
+            closePeer.registerListener(KadOpCode.SEARCH_KEY_REQ, (packet, addr, port) -> {
+                try {
+                    assertEquals(keywordHash, KadId.fromWire(java.util.Arrays.copyOfRange(packet.data(), 0, 16)));
+                    closePeer.send(KadPacket.createSearchRes(keywordHash, List.of(file)), addr, port);
+                    searchSentToResponsibleNode.countDown();
+                } catch (Exception e) {
+                    fail(e);
+                }
+            });
+
+            List<FileMetadata> results = bridge.forkSearch(keyword).get(5, TimeUnit.SECONDS);
+
+            assertTrue(lookupAnswered.await(1, TimeUnit.SECONDS), "the lookup must be sent to the bootstrap contact");
+            assertTrue(searchSentToResponsibleNode.await(1, TimeUnit.SECONDS),
+                    "SEARCH_KEY_REQ must be sent to the node discovered during the lookup");
+            assertEquals(List.of(file.hash()), results.stream().map(FileMetadata::hash).toList());
+            assertNotNull(table.get(closeContact.id()), "discovered contacts must be added to the routing table");
         }
     }
 }

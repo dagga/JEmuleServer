@@ -28,6 +28,7 @@ import org.slf4j.LoggerFactory;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListMap;
+import java.util.concurrent.atomic.LongAdder;
 
 /**
  * Manages the global file index for the server.
@@ -46,6 +47,8 @@ public class FileIndex {
     private final ChildAbuseFilter abuseFilter;
     /** Hashes banned by the child abuse filter (upper case), loaded from the database and completed at runtime. */
     private final Set<String> abuseBannedHashes = ConcurrentHashMap.newKeySet();
+    /** Count of files whose hash was not indexed yet, per ingestion channel (since server start). */
+    private final Map<FileSource, LongAdder> newFilesBySource = new ConcurrentHashMap<>();
 
     // LRU Cache for searches (Thread-safe via Collections.synchronizedMap)
     private final Map<String, List<FileMetadata>> searchCache = Collections.synchronizedMap(new LinkedHashMap<>(128, 0.75f, true) {
@@ -129,8 +132,15 @@ public class FileIndex {
      * @return the metadata instance now stored in the index for this hash
      */
     public FileMetadata addFile(FileMetadata meta) {
+        return addFile(meta, FileSource.UNKNOWN);
+    }
+
+    /**
+     * Registers a published file, recording its ingestion channel for the monitoring counters.
+     */
+    public FileMetadata addFile(FileMetadata meta, FileSource source) {
         List<FileMetadata> toPersist = new ArrayList<>(1);
-        FileMetadata stored = addFileInternal(meta, toPersist);
+        FileMetadata stored = addFileInternal(meta, toPersist, source);
         if (db != null && !toPersist.isEmpty()) db.saveFiles(toPersist);
         return stored;
     }
@@ -139,19 +149,27 @@ public class FileIndex {
      * Adds a group of files to the in-memory index and persists changed entries in one database transaction.
      */
     public List<FileMetadata> addFiles(Collection<FileMetadata> files) {
+        return addFiles(files, FileSource.UNKNOWN);
+    }
+
+    /**
+     * Adds a group of files to the in-memory index, recording their ingestion channel for the monitoring counters.
+     */
+    public List<FileMetadata> addFiles(Collection<FileMetadata> files, FileSource source) {
         if (files == null || files.isEmpty()) return List.of();
         List<FileMetadata> toPersist = new ArrayList<>(files.size());
         List<FileMetadata> stored = new ArrayList<>(files.size());
         for (FileMetadata file : files) {
-            if (file != null && file.hash() != null) stored.add(addFileInternal(file, toPersist));
+            if (file != null && file.hash() != null) stored.add(addFileInternal(file, toPersist, source));
         }
         if (db != null && !toPersist.isEmpty()) db.saveFiles(toPersist);
         return List.copyOf(stored);
     }
 
-    private FileMetadata addFileInternal(FileMetadata meta, List<FileMetadata> toPersist) {
+    private FileMetadata addFileInternal(FileMetadata meta, List<FileMetadata> toPersist, FileSource source) {
         FileMetadata incoming = meta;
         boolean[] isNew = {false};
+        boolean[] isNewHash = {false};
         boolean[] sourceCountChanged = {false};
         FileMetadata[] replaced = {null};
         FileMetadata stored = byHash.compute(meta.hash(), (h, existing) -> {
@@ -164,6 +182,7 @@ public class FileIndex {
                     selected = selected.withSourceCount(knownSources);
                 }
                 isNew[0] = true;
+                isNewHash[0] = existing == null;
                 replaced[0] = existing;
                 return selected;
             }
@@ -176,6 +195,9 @@ public class FileIndex {
             return existing;
         });
         if (isNew[0]) {
+            if (isNewHash[0]) {
+                newFilesBySource.computeIfAbsent(source, k -> new LongAdder()).increment();
+            }
             // A file published again under the same name keeps its words; under another name, it is reindexed
             if (replaced[0] == null || !Objects.equals(replaced[0].name(), stored.name())) {
                 if (replaced[0] != null) unindexTokens(replaced[0]);
@@ -486,5 +508,25 @@ public class FileIndex {
      */
     public int fileCount() {
         return byHash.size();
+    }
+
+    /** Number of new files (a hash not indexed before) inserted since server start, for one ingestion channel. */
+    public long newFileCount(FileSource source) {
+        LongAdder adder = newFilesBySource.get(source);
+        return adder == null ? 0 : adder.sum();
+    }
+
+    /** Number of new files inserted since server start, per ingestion channel (in enum order). */
+    public Map<FileSource, Long> newFileCounts() {
+        Map<FileSource, Long> counts = new LinkedHashMap<>();
+        for (FileSource source : FileSource.values()) {
+            counts.put(source, newFileCount(source));
+        }
+        return counts;
+    }
+
+    /** Total number of new files inserted since server start. */
+    public long totalNewFiles() {
+        return newFilesBySource.values().stream().mapToLong(LongAdder::sum).sum();
     }
 }

@@ -2,6 +2,7 @@ package org.jemule.network;
 
 import org.jemule.core.FileIndex;
 import org.jemule.core.FileMetadata;
+import org.jemule.core.FileSource;
 import org.jemule.core.SearchQuery;
 import org.jemule.protocol.Tag;
 import org.jemule.security.FakeFileDetector;
@@ -57,6 +58,10 @@ public final class ServerSearchBridge implements AutoCloseable {
     private final long searchTimeoutMillis;
     private final Map<String, SearchSession> sessions = new ConcurrentHashMap<>();
     private final AtomicInteger peerCursor = new AtomicInteger();
+    private final java.util.concurrent.atomic.AtomicLong searchesForked = new java.util.concurrent.atomic.AtomicLong();
+    private final java.util.concurrent.atomic.AtomicLong requestsSent = new java.util.concurrent.atomic.AtomicLong();
+    private final java.util.concurrent.atomic.AtomicLong resultsReceived = new java.util.concurrent.atomic.AtomicLong();
+    private final java.util.concurrent.atomic.AtomicLong filesIngested = new java.util.concurrent.atomic.AtomicLong();
     private volatile boolean running = true;
 
     ServerSearchBridge(Supplier<Collection<ServerGossip.VerifiedPeer>> peers,
@@ -88,6 +93,7 @@ public final class ServerSearchBridge implements AutoCloseable {
         SearchSession session = new SearchSession(query);
         SearchSession existing = sessions.putIfAbsent(key, session);
         if (existing != null) return existing.future;
+        searchesForked.incrementAndGet();
         if (sessions.size() > 128) {
             sessions.remove(key, session);
             return CompletableFuture.completedFuture(List.of());
@@ -104,6 +110,7 @@ public final class ServerSearchBridge implements AutoCloseable {
                     ServerGossip.Endpoint endpoint = peer.endpoint();
                     udpSocket.send(new DatagramPacket(request, request.length, endpoint.address(), endpoint.udpPort()));
                     session.peers.add(endpoint);
+                    requestsSent.incrementAndGet();
                 } catch (java.io.IOException e) {
                     log.debug("Could not send server search to {}: {}", peer.endpoint(), e.getMessage());
                 }
@@ -125,6 +132,26 @@ public final class ServerSearchBridge implements AutoCloseable {
         return searchTimeoutMillis;
     }
 
+    public long getSearchesForked() {
+        return searchesForked.get();
+    }
+
+    public long getRequestsSent() {
+        return requestsSent.get();
+    }
+
+    public long getResultsReceived() {
+        return resultsReceived.get();
+    }
+
+    public long getFilesIngested() {
+        return filesIngested.get();
+    }
+
+    public int getActiveSessionCount() {
+        return sessions.size();
+    }
+
     boolean handle(InetAddress source, int sourcePort, byte[] packet) {
         ServerGossip.Endpoint endpoint = endpointForSource(source, sourcePort);
         if (endpoint == null || packet == null || packet.length < 2
@@ -139,6 +166,7 @@ public final class ServerSearchBridge implements AutoCloseable {
         if (expectedSessions.isEmpty()) return false;
         List<FileMetadata> decoded = decodeResults(packet);
         if (decoded == null) return true;
+        resultsReceived.addAndGet(decoded.size());
         Map<String, FileMetadata> matchingFiles = new java.util.LinkedHashMap<>();
         for (FileMetadata file : decoded) {
             if (expectedSessions.stream().anyMatch(session -> session.query.test(file))) {
@@ -146,6 +174,7 @@ public final class ServerSearchBridge implements AutoCloseable {
             }
         }
         List<FileMetadata> ingested = ingestAll(matchingFiles.values());
+        filesIngested.addAndGet(ingested.size());
         for (SearchSession session : expectedSessions) {
             for (FileMetadata file : ingested) {
                 if (session.query.test(file)) {
@@ -216,7 +245,7 @@ public final class ServerSearchBridge implements AutoCloseable {
                 .filter(file -> file.hash() != null && !fileIndex.isChildAbuse(file.hash(), file.name()))
                 .filter(file -> fakeFileDetector == null || !fakeFileDetector.isFake(file.hash(), file.name(), file.size()))
                 .toList();
-        return fileIndex.addFiles(accepted);
+        return fileIndex.addFiles(accepted, FileSource.SERVER_SEARCH);
     }
 
     private static ServerGossip.Endpoint endpointForSource(InetAddress source, int sourcePort) {

@@ -355,6 +355,10 @@ public class Server {
         return List.copyOf(serverGossip.verifiedPeers());
     }
 
+    List<ServerGossip.ServerView> getServerViews() {
+        return serverGossip.serverViews();
+    }
+
     int getAdminWebPort() {
         AdminWebPanel panel = adminWebPanel;
         return panel == null ? 0 : panel.port();

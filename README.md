@@ -1,9 +1,9 @@
 # JEmuleServer
 
-JEmuleServer is an eMule server written in Java (version 1.2.8).
+JEmuleServer is an eMule server written in Java (version 1.2.9).
 
 Downloads (installers and JAR) are on the [releases page](https://github.com/dagga/JEmuleServer/releases); the changes
-of each version are described in `doc/release-notes-v<version>.md` (latest: [1.2.8](doc/release-notes-v1.2.8.md)).
+of each version are described in `doc/release-notes-v<version>.md` (latest: [1.2.9](doc/release-notes-v1.2.9.md)).
 
 ## Why this project?
 
@@ -27,7 +27,7 @@ Building requires a JDK 21 (Gradle toolchain). To compile the project and genera
 ./gradlew build
 ```
 
-The JAR file will be generated in `build/libs/JEmuleServer-1.2.8.jar`.
+The JAR file will be generated in `build/libs/JEmuleServer-1.2.9.jar`.
 
 ## Installation from the release packages
 
@@ -176,7 +176,9 @@ and aMule Kad nodes has not been validated yet.
 
 JEmuleServer includes a built-in web panel and a command-line interface (CLI). The web panel is enabled by default at
 `http://127.0.0.1:8080/` and is bound to loopback only. It shows server status, searchable clients, verified named
-server peers, active filters, potential bot-name matches, persistent hash blocks, and runtime settings. The bot list is
+server peers, a monitoring view of every known eD2K server and its state, active filters, potential bot-name matches,
+persistent hash blocks, an ingestion breakdown of new database files by channel, Kad and eD2K server search counters
+(queries sent and results returned), and runtime settings. The bot list is
 only a nickname heuristic; it does not verify or automatically block clients. From the panel you can disconnect a
 client, ban or unban a hash, reload the IP filter, and edit any `server.properties` parameter. Settings whose scope is
 `hot` (limits, timeouts, flood protection, fake-file detection) take effect immediately; `admin` settings rebuild the
@@ -211,10 +213,16 @@ Available commands:
 - `unban <hash>`: Removes a hash from the persistent blacklist.
 - `kick <client ID | nickname | ip>`: Disconnects one client, or every client using that IP, without stopping the server.
 - `peers`: Lists verified server peers and their names.
+- `servers`: Monitors every known eD2K server (configured, server.met, client-reported or gossip-discovered) with its
+  state (candidate, probing, verified, rejected), source, reported users/files/limits, probe latency and missed probes.
+- `ingestion`: Shows the number and share of new database files by ingestion channel (client push, Kad search,
+  eD2K server search) since the server started.
+- `searches`: Shows, for Kad and eD2K servers, the search queries forked, requests sent, results returned, files
+  ingested and active searches since startup.
 - `filters`: Shows active IP and fake-file filters.
 - `filters reload`: Reloads the IP filter from the configured `ipFilterPath` and the child abuse keywords.
 - `bots`: Lists potential bot matches based on nicknames only.
-- `blocks`: Lists persistently blocked file hashes.
+- `blocks`: Lists the 3 most recently blocked file hashes (only those rows are read from the database).
 - `settings`: Shows runtime settings.
 - `settings <key> <value>`: Changes a configuration parameter while the server keeps running. Hot values take effect
   immediately, admin values rebuild the admin interfaces, and restart values are written to the file and listed as

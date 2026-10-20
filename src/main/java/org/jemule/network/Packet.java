@@ -155,7 +155,7 @@ public record Packet(byte protocol, byte opcode, byte[] data) {
      * Inflates a 0xD4 payload. A truncated or corrupted stream, or one inflating beyond {@code maxSize}
      * (zip bomb), is rejected instead of looping forever.
      */
-    static byte[] decompress(byte[] input, int maxSize) throws IOException {
+    public static byte[] decompress(byte[] input, int maxSize) throws IOException {
         Inflater i = new Inflater();
         i.setInput(input);
         ByteArrayOutputStream bos = new ByteArrayOutputStream(Math.min(input.length * 4, maxSize));

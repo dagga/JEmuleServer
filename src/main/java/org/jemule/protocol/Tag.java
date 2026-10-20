@@ -140,7 +140,22 @@ public record Tag(byte type, String name, Object value) {
             buf.putShort((short) nameBytes.length);
             buf.put(nameBytes);
         }
+        writeValue(buf);
+    }
 
+    /**
+     * Writes this tag in the Kademlia wire format: the name is always length-prefixed with a uint16,
+     * even when it is one byte long (no compact ID form).
+     */
+    public void writeKad(ByteBuffer buf) {
+        buf.put(type);
+        byte[] nameBytes = name.getBytes(StandardCharsets.UTF_8);
+        buf.putShort((short) nameBytes.length);
+        buf.put(nameBytes);
+        writeValue(buf);
+    }
+
+    private void writeValue(ByteBuffer buf) {
         switch (type) {
             case TYPE_STRING -> {
                 byte[] valBytes = ((String) value).getBytes(StandardCharsets.UTF_8);

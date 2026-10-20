@@ -53,12 +53,32 @@ final class ServerGossip {
     record VerifiedPeer(Endpoint endpoint, String name, int udpKey, long verifiedAtMillis) {
     }
 
+    /** Where a monitored server was discovered. */
+    enum ServerSource { CONFIGURED, SERVER_MET, CLIENT_REPORTED, GOSSIP }
+
+    /** Last successful metadata observed for a server (from OP_GLOBSERVSTATRES). */
+    private record ServerStatus(int udpKey, long users, long files, long softFiles, long hardFiles,
+                                long maxUsers, long lowIdUsers, long observedAtMillis, long latencyMillis) {
+    }
+
+    /**
+     * Read-only monitoring view of one known eD2K server and its state.
+     *
+     * @param state one of {@code candidate}, {@code probing}, {@code verified}, {@code rejected}
+     */
+    public record ServerView(String name, String state, ServerSource source, Endpoint endpoint,
+                             Long users, Long files, Long softFiles, Long hardFiles, Long maxUsers,
+                             Long lowIdUsers, boolean hasUdpKey, Long latencyMillis, Long lastStatusAtMillis,
+                             Long verifiedAtMillis, int missedStatusProbes) {
+    }
+
     private enum Stage {STATUS, DESCRIPTION, LIST}
 
     private record Pending(Stage stage, int challenge, long startedAtMillis) {
     }
 
-    record Status(int udpKey) {
+    record Status(int udpKey, long users, long files, long softFiles, long hardFiles, long maxUsers,
+                  long lowIdUsers) {
     }
 
     private final IPFilter ipFilter;
@@ -67,6 +87,9 @@ final class ServerGossip {
     private final Map<Endpoint, Boolean> candidates = new ConcurrentHashMap<>();
     private final Map<Endpoint, Boolean> rejected = new ConcurrentHashMap<>();
     private final Map<Endpoint, Integer> missedStatusProbes = new ConcurrentHashMap<>();
+    private final Map<Endpoint, ServerSource> sources = new ConcurrentHashMap<>();
+    private final Map<Endpoint, ServerStatus> serverStatuses = new ConcurrentHashMap<>();
+    private final Map<Endpoint, Long> probeSentAt = new ConcurrentHashMap<>();
     private final AtomicInteger candidateCursor = new AtomicInteger();
     private volatile long lastProbeAtMillis;
 
@@ -76,7 +99,10 @@ final class ServerGossip {
 
     ServerGossip(String configuredPeers, IPFilter ipFilter) {
         this.ipFilter = ipFilter != null ? ipFilter : new IPFilter();
-        parseEndpoints(configuredPeers, this.ipFilter).forEach(endpoint -> candidates.put(endpoint, Boolean.TRUE));
+        parseEndpoints(configuredPeers, this.ipFilter).forEach(endpoint -> {
+            candidates.put(endpoint, Boolean.TRUE);
+            sources.put(endpoint, ServerSource.CONFIGURED);
+        });
     }
 
     Collection<VerifiedPeer> verifiedPeers() {
@@ -93,10 +119,60 @@ final class ServerGossip {
         return List.copyOf(candidates.keySet());
     }
 
+    /**
+     * Snapshot of every known eD2K server (candidate, probing, verified or rejected) with its last known state.
+     */
+    public List<ServerView> serverViews() {
+        if (ipFilter != null) {
+            candidates.keySet().removeIf(endpoint -> ipFilter.isBlocked(endpoint.address()));
+            verified.keySet().removeIf(endpoint -> ipFilter.isBlocked(endpoint.address()));
+        }
+        java.util.Set<Endpoint> endpoints = new java.util.TreeSet<>(
+                Comparator.comparing((Endpoint endpoint) -> endpoint.address().getHostAddress())
+                        .thenComparingInt(Endpoint::tcpPort));
+        endpoints.addAll(candidates.keySet());
+        endpoints.addAll(verified.keySet());
+        endpoints.addAll(rejected.keySet());
+        List<ServerView> views = new ArrayList<>(endpoints.size());
+        for (Endpoint endpoint : endpoints) {
+            String name = "";
+            String state;
+            if (rejected.containsKey(endpoint)) {
+                state = "rejected";
+            } else if (verified.containsKey(endpoint)) {
+                state = "verified";
+                name = verified.get(endpoint).name();
+            } else if (pending.containsKey(endpoint)) {
+                state = "probing";
+            } else {
+                state = "candidate";
+            }
+            VerifiedPeer peer = verified.get(endpoint);
+            ServerStatus status = serverStatuses.get(endpoint);
+            views.add(new ServerView(
+                    name,
+                    state,
+                    sources.getOrDefault(endpoint, ServerSource.GOSSIP),
+                    endpoint,
+                    status == null ? null : status.users(),
+                    status == null ? null : status.files(),
+                    status == null ? null : status.softFiles(),
+                    status == null ? null : status.hardFiles(),
+                    status == null ? null : status.maxUsers(),
+                    status == null ? null : status.lowIdUsers(),
+                    status != null && status.udpKey() != 0,
+                    status == null ? null : status.latencyMillis(),
+                    status == null ? null : status.observedAtMillis(),
+                    peer == null ? null : peer.verifiedAtMillis(),
+                    missedStatusProbes.getOrDefault(endpoint, 0)));
+        }
+        return views;
+    }
+
     int addServerMetCandidates(Collection<Endpoint> endpoints) {
         int added = 0;
         for (Endpoint endpoint : endpoints) {
-            if (addCandidate(endpoint)) added++;
+            if (addCandidate(endpoint, ServerSource.SERVER_MET)) added++;
         }
         if (added > 0) lastProbeAtMillis = 0;
         return added;
@@ -119,6 +195,7 @@ final class ServerGossip {
             if (pending.containsKey(endpoint)) continue;
             int challenge = nextChallenge();
             pending.put(endpoint, new Pending(Stage.STATUS, challenge, now));
+            probeSentAt.put(endpoint, now);
             send(socket, endpoint, frame(OP_GLOBSERVSTATREQ, intPayload(challenge)));
         }
     }
@@ -137,7 +214,7 @@ final class ServerGossip {
                 InetAddress address = InetAddress.getByAddress(ip);
                 if (port > 0 && port <= 65531 && !address.isAnyLocalAddress()
                         && !address.isMulticastAddress() && !address.isLoopbackAddress()) {
-                    addCandidate(new Endpoint(address, port));
+                    addCandidate(new Endpoint(address, port), ServerSource.CLIENT_REPORTED);
                 }
             } catch (UnknownHostException | IllegalArgumentException ignored) {
                 // Invalid endpoints are not candidates; valid entries in the same list remain usable.
@@ -205,7 +282,10 @@ final class ServerGossip {
                 reject(endpoint, "invalid or mismatched server status");
                 return true;
             }
-            statusKeys.put(endpoint, status.udpKey());
+            long sentAt = probeSentAt.remove(endpoint);
+            serverStatuses.put(endpoint, new ServerStatus(status.udpKey(), status.users(), status.files(),
+                    status.softFiles(), status.hardFiles(), status.maxUsers(), status.lowIdUsers(), now,
+                    sentAt <= 0 ? 0 : Math.max(0, now - sentAt)));
             missedStatusProbes.remove(endpoint);
             int challenge = nextDescriptionChallenge();
             pending.put(endpoint, new Pending(Stage.DESCRIPTION, challenge, now));
@@ -221,7 +301,6 @@ final class ServerGossip {
             }
             int remoteKey = extractStatusKey(endpoint);
             verified.put(endpoint, new VerifiedPeer(endpoint, name, remoteKey, now));
-            statusKeys.remove(endpoint);
             pending.remove(endpoint);
             int challenge = nextChallenge();
             pending.put(endpoint, new Pending(Stage.LIST, challenge, now));
@@ -238,7 +317,7 @@ final class ServerGossip {
             }
             for (Endpoint discoveredEndpoint : discovered) {
                 if (!discoveredEndpoint.equals(endpoint) && candidates.size() < MAX_PEERS) {
-                    addCandidate(discoveredEndpoint);
+                    addCandidate(discoveredEndpoint, ServerSource.GOSSIP);
                 }
             }
             pending.remove(endpoint);
@@ -247,16 +326,16 @@ final class ServerGossip {
         return false;
     }
 
-    private final Map<Endpoint, Integer> statusKeys = new ConcurrentHashMap<>();
-
     private int extractStatusKey(Endpoint endpoint) {
-        return statusKeys.getOrDefault(endpoint, 0);
+        ServerStatus status = serverStatuses.get(endpoint);
+        return status == null ? 0 : status.udpKey();
     }
 
     private void reject(Endpoint endpoint, String reason) {
         pending.remove(endpoint);
         verified.remove(endpoint);
-        statusKeys.remove(endpoint);
+        serverStatuses.remove(endpoint);
+        probeSentAt.remove(endpoint);
         candidates.remove(endpoint);
         if (rejected.size() >= MAX_PEERS) rejected.clear();
         rejected.put(endpoint, Boolean.TRUE);
@@ -302,7 +381,7 @@ final class ServerGossip {
         long users = Integer.toUnsignedLong(data.getInt());
         long files = Integer.toUnsignedLong(data.getInt());
         long maxUsers = Integer.toUnsignedLong(data.getInt());
-        data.getInt(); // soft files
+        long softFiles = Integer.toUnsignedLong(data.getInt());
         long hardFiles = Integer.toUnsignedLong(data.getInt());
         data.getInt(); // UDP flags
         long lowIdUsers = Integer.toUnsignedLong(data.getInt());
@@ -311,7 +390,7 @@ final class ServerGossip {
         int udpKey = data.getInt();
         if (maxUsers == 0 || maxUsers > 100_000_000L || users > maxUsers || lowIdUsers > users
                 || (hardFiles != 0 && files > hardFiles)) return null;
-        return new Status(udpKey);
+        return new Status(udpKey, users, files, softFiles, hardFiles, maxUsers, lowIdUsers);
     }
 
     static String validateDescription(byte[] packet, int challenge) {
@@ -440,9 +519,15 @@ final class ServerGossip {
     }
 
     private synchronized boolean addCandidate(Endpoint endpoint) {
+        return addCandidate(endpoint, ServerSource.GOSSIP);
+    }
+
+    private synchronized boolean addCandidate(Endpoint endpoint, ServerSource source) {
         if (endpoint == null || rejected.containsKey(endpoint) || candidates.size() >= MAX_PEERS) return false;
         if (ipFilter != null && ipFilter.isBlocked(endpoint.address())) return false;
-        return candidates.putIfAbsent(endpoint, Boolean.TRUE) == null;
+        if (candidates.putIfAbsent(endpoint, Boolean.TRUE) != null) return false;
+        sources.put(endpoint, source);
+        return true;
     }
 
     private void expirePending(long now) {
@@ -454,10 +539,10 @@ final class ServerGossip {
                 int misses = missedStatusProbes.merge(endpoint, 1, Integer::sum);
                 if (misses >= 3) {
                     verified.remove(endpoint);
-                    statusKeys.remove(endpoint);
+                    serverStatuses.remove(endpoint);
                 }
             } else {
-                statusKeys.remove(endpoint);
+                serverStatuses.remove(endpoint);
             }
             return true;
         });

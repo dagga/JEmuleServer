@@ -3,6 +3,8 @@ package org.jemule.network;
 import org.jemule.core.ClientRegistry;
 import org.jemule.core.ClientState;
 import org.jemule.core.FileIndex;
+import org.jemule.core.FileMetadata;
+import org.jemule.core.FileSource;
 import org.jemule.config.ServerConfig;
 import org.jemule.kad.KadContact;
 import org.jemule.kad.KadId;
@@ -85,6 +87,84 @@ class AdminWebPanelTest {
             assertEquals(200, response.statusCode());
             assertTrue(response.body().contains("\"type\":\"Kad contact\""), response.body());
             assertTrue(response.body().contains("\"udpPort\":4672"), response.body());
+        }
+    }
+
+    @Test
+    void serversViewExposesKnownServersAndState() throws Exception {
+        Server server = mock(Server.class);
+        ServerGossip.ServerView view = new ServerGossip.ServerView("Verified eD2K", "verified",
+                ServerGossip.ServerSource.SERVER_MET,
+                new ServerGossip.Endpoint(InetAddress.getLoopbackAddress(), 4661),
+                120L, 340L, 500L, 4000L, 6000L, 7L, true, 12L,
+                System.currentTimeMillis(), System.currentTimeMillis(), 0);
+        when(server.getServerViews()).thenReturn(List.of(view));
+
+        try (AdminWebPanel panel = new AdminWebPanel(server)) {
+            panel.start(0);
+            URI uri = URI.create("http://127.0.0.1:" + panel.port() + "/api/servers");
+            HttpResponse<String> response = HttpClient.newHttpClient().send(
+                    HttpRequest.newBuilder(uri).GET().build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, response.statusCode());
+            assertTrue(response.body().contains("\"state\":\"verified\""), response.body());
+            assertTrue(response.body().contains("\"source\":\"server_met\""), response.body());
+            assertTrue(response.body().contains("\"users\":120"), response.body());
+            assertTrue(response.body().contains("\"latencyMs\":12"), response.body());
+        }
+    }
+
+    @Test
+    void ingestionViewReportsNewFilesByChannel() throws Exception {
+        FileIndex index = new FileIndex(null);
+        index.addFile(new FileMetadata("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "client.avi", 100, "Video"),
+                FileSource.CLIENT_PUSH);
+        index.addFile(new FileMetadata("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "kad.avi", 100, "Video"),
+                FileSource.KAD_SEARCH);
+        Server server = mock(Server.class);
+        when(server.getFileIndex()).thenReturn(index);
+
+        try (AdminWebPanel panel = new AdminWebPanel(server)) {
+            panel.start(0);
+            URI uri = URI.create("http://127.0.0.1:" + panel.port() + "/api/ingestion");
+            HttpResponse<String> response = HttpClient.newHttpClient().send(
+                    HttpRequest.newBuilder(uri).GET().build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, response.statusCode());
+            assertTrue(response.body().contains("\"source\":\"client push\""), response.body());
+            assertTrue(response.body().contains("\"source\":\"Kad search\""), response.body());
+            assertTrue(response.body().contains("\"newFiles\":2"), response.body());
+            assertTrue(response.body().contains("\"source\":\"total\""), response.body());
+        }
+    }
+
+    @Test
+    void searchesViewReportsKadAndServerQueriesAndResults() throws Exception {
+        Server server = mock(Server.class);
+        org.jemule.kad.KadSearchBridge kad = mock(org.jemule.kad.KadSearchBridge.class);
+        when(kad.getSearchesForked()).thenReturn(12L);
+        when(kad.getRequestsSent()).thenReturn(36L);
+        when(kad.getResultsReceived()).thenReturn(48L);
+        when(kad.getFilesIngested()).thenReturn(20L);
+        when(kad.getActiveSessionCount()).thenReturn(2);
+        when(kad.getIllicitFilesBlocked()).thenReturn(1L);
+        when(server.getKadSearchBridge()).thenReturn(kad);
+        ServerSearchBridge servers = mock(ServerSearchBridge.class);
+        when(servers.getSearchesForked()).thenReturn(5L);
+        when(servers.getRequestsSent()).thenReturn(15L);
+        when(servers.getResultsReceived()).thenReturn(30L);
+        when(servers.getFilesIngested()).thenReturn(9L);
+        when(servers.getActiveSessionCount()).thenReturn(1);
+        when(server.getServerSearchBridge()).thenReturn(servers);
+
+        try (AdminWebPanel panel = new AdminWebPanel(server)) {
+            panel.start(0);
+            URI uri = URI.create("http://127.0.0.1:" + panel.port() + "/api/searches");
+            HttpResponse<String> response = HttpClient.newHttpClient().send(
+                    HttpRequest.newBuilder(uri).GET().build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, response.statusCode());
+            assertTrue(response.body().contains("\"channel\":\"Kad\""), response.body());
+            assertTrue(response.body().contains("\"channel\":\"eD2K servers\""), response.body());
+            assertTrue(response.body().contains("\"queries\":12"), response.body());
+            assertTrue(response.body().contains("\"results\":48"), response.body());
         }
     }
 

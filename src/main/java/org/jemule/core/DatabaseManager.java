@@ -173,6 +173,29 @@ public class DatabaseManager implements AutoCloseable {
         return hashes;
     }
 
+    /** Most recently added banned hashes, newest first; never loads the whole table. */
+    public List<String> loadRecentBannedHashes(int limit) {
+        if (limit < 1) return new ArrayList<>();
+        try {
+            return locked(() -> {
+                List<String> hashes = new ArrayList<>(limit);
+                try (PreparedStatement ps = connection.prepareStatement(
+                        "SELECT hash FROM banned_hashes ORDER BY added_at DESC, _ROWID_ DESC LIMIT ?")) {
+                    ps.setInt(1, limit);
+                    try (ResultSet rs = ps.executeQuery()) {
+                        while (rs.next()) {
+                            hashes.add(rs.getString("hash"));
+                        }
+                    }
+                }
+                return hashes;
+            });
+        } catch (Throwable e) {
+            logger.error("Circuit breaker prevented or caught error during loadRecentBannedHashes: {}", e.getMessage());
+            return new ArrayList<>();
+        }
+    }
+
     /** Banned hashes whose reason starts with the given prefix. */
     public List<String> loadBannedHashes(String reasonPrefix) {
         try {

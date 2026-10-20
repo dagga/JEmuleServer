@@ -257,7 +257,46 @@ class ServerGossipTest {
             assertEquals(1, gossip.clientServerList(loopback, localTcpPort)[0] & 0xFF);
             assertTrue(gossip.candidateEndpoints().stream().anyMatch(endpoint ->
                     endpoint.address().equals(discoveredAddress) && endpoint.tcpPort() == 4665));
+
+            ServerGossip.ServerView verifiedView = gossip.serverViews().stream()
+                    .filter(view -> view.endpoint().tcpPort() == peerTcpPort).findFirst().orElseThrow();
+            assertEquals("verified", verifiedView.state());
+            assertEquals(ServerGossip.ServerSource.CONFIGURED, verifiedView.source());
+            assertEquals("Verified server", verifiedView.name());
+            assertEquals(100L, verifiedView.users());
+            assertEquals(200L, verifiedView.files());
+            assertEquals(1000L, verifiedView.maxUsers());
+            assertEquals(5L, verifiedView.lowIdUsers());
+            assertTrue(verifiedView.hasUdpKey());
+            assertNotNull(verifiedView.latencyMillis());
+            ServerGossip.ServerView discoveredView = gossip.serverViews().stream()
+                    .filter(view -> view.endpoint().tcpPort() == 4665).findFirst().orElseThrow();
+            assertEquals("candidate", discoveredView.state());
+            assertEquals(ServerGossip.ServerSource.GOSSIP, discoveredView.source());
         }
+    }
+
+    @Test
+    void monitoringViewsTrackSourcesAndCandidates() throws Exception {
+        ServerGossip gossip = new ServerGossip("127.0.0.1:4661");
+        gossip.addServerMetCandidates(List.of(new ServerGossip.Endpoint(InetAddress.getByName("192.0.2.10"), 5000)));
+        byte[] reported = ByteBuffer.allocate(7).order(ByteOrder.LITTLE_ENDIAN)
+                .put((byte) 1).put(new byte[]{(byte) 192, 0, 2, 20}).putShort((short) 4662).array();
+        assertEquals(1, gossip.addClientReportedServerList(reported));
+
+        List<ServerGossip.ServerView> views = gossip.serverViews();
+        assertEquals(3, views.size());
+        assertEquals(ServerGossip.ServerSource.CONFIGURED, viewFor(views, 4661).source());
+        assertEquals(ServerGossip.ServerSource.SERVER_MET, viewFor(views, 5000).source());
+        ServerGossip.ServerView clientReported = viewFor(views, 4662);
+        assertEquals(ServerGossip.ServerSource.CLIENT_REPORTED, clientReported.source());
+        assertEquals("candidate", clientReported.state());
+        assertNull(clientReported.users());
+        assertEquals(0, clientReported.missedStatusProbes());
+    }
+
+    private static ServerGossip.ServerView viewFor(List<ServerGossip.ServerView> views, int tcpPort) {
+        return views.stream().filter(view -> view.endpoint().tcpPort() == tcpPort).findFirst().orElseThrow();
     }
 
     @Test

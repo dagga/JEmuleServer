@@ -127,7 +127,7 @@ public final class KadNodesFile {
         if (version <= 1 || !isPublic(address) || udpPort == 0) return null;
         try {
             InetAddress addr = InetAddress.getByAddress(address);
-            return new KadContact(new KadId(idBytes), addr, udpPort, tcpPort, (byte) version);
+            return new KadContact(KadId.fromWire(idBytes), addr, udpPort, tcpPort, (byte) version);
         } catch (UnknownHostException e) {
             return null;
         }
