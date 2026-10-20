@@ -21,6 +21,8 @@ package org.jemule.kad;
 import org.jemule.core.DatabaseManager;
 import org.jemule.core.FileIndex;
 import org.jemule.core.FileSource;
+import org.jemule.core.IngestionExecutor;
+import org.jemule.core.ServerThreads;
 import org.jemule.core.FileMetadata;
 import org.jemule.core.SearchQuery;
 import org.slf4j.Logger;
@@ -106,6 +108,9 @@ public class KadSearchBridge implements AutoCloseable {
     private final AtomicLong resultsReceived = new AtomicLong(0);
     private final AtomicLong illicitFilesBlocked = new AtomicLong(0);
     private final AtomicLong filesIngested = new AtomicLong(0);
+
+    /** Indexes and stores the files found, after the searches and client connections (ingestion tier). */
+    private volatile IngestionExecutor ingestion = IngestionExecutor.direct();
 
     private volatile boolean running = false;
 
@@ -264,6 +269,11 @@ public class KadSearchBridge implements AutoCloseable {
         this(routingTable, udpService, DEFAULT_ALPHA_NODES, DEFAULT_SEARCH_TIMEOUT_MS);
     }
 
+    /** Runs the ingestion of the files found on {@code executor} instead of the thread receiving them. */
+    public void setIngestionExecutor(IngestionExecutor executor) {
+        this.ingestion = executor == null ? IngestionExecutor.direct() : executor;
+    }
+
     public synchronized void start() {
         if (running) return;
         running = true;
@@ -318,7 +328,7 @@ public class KadSearchBridge implements AutoCloseable {
             } else {
                 // Keyword searches must first walk the DHT towards the keyword hash: the nodes responsible for the
                 // keyword index are the K closest to it, which are almost never already in our routing table.
-                Thread.ofVirtual().name("KadSearch-" + keywordHash.toHexString()).start(() -> {
+                ServerThreads.start(ServerThreads.Tier.SEARCH, "KadSearch-" + keywordHash.toHexString(), () -> {
                     try {
                         // The lookup is part of the search timeout, which bounds how long the client waits
                         long deadline = System.currentTimeMillis() + searchTimeoutMs;
@@ -551,16 +561,19 @@ public class KadSearchBridge implements AutoCloseable {
             }
         }
         if (!filesToIngest.isEmpty()) {
-            if (fileIndex != null) {
-                fileIndex.addFiles(filesToIngest, FileSource.KAD_SEARCH);
-            } else if (databaseManager != null) {
-                databaseManager.saveFiles(filesToIngest);
-            }
-            filesIngested.addAndGet(filesToIngest.size());
-            for (FileMetadata file : filesToIngest) {
-                log.debug("Ingested Kad file into FileIndex & H2: {} ({}, sources={})",
-                        file.name(), file.hash(), file.sourceCount());
-            }
+            // The search gets its results now; indexing and storing them waits for the ingestion thread
+            ingestion.offer(() -> {
+                if (fileIndex != null) {
+                    fileIndex.addFiles(filesToIngest, FileSource.KAD_SEARCH);
+                } else if (databaseManager != null) {
+                    databaseManager.saveFiles(filesToIngest);
+                }
+                filesIngested.addAndGet(filesToIngest.size());
+                for (FileMetadata file : filesToIngest) {
+                    log.debug("Ingested Kad file into FileIndex & H2: {} ({}, sources={})",
+                            file.name(), file.hash(), file.sourceCount());
+                }
+            });
         }
         for (KadSearchSession session : sessions) {
             acceptedFiles.forEach(session::addResult);

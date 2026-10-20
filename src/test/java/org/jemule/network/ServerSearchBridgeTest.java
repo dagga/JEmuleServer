@@ -153,6 +153,40 @@ class ServerSearchBridgeTest {
         assertTrue(videoQuery.test(ServerSearchBridge.decodeResults(noType).get(0)));
     }
 
+    @Test
+    void searchGetsItsResultsBeforeTheirIngestion() throws Exception {
+        InetAddress loopback = InetAddress.getByName("127.0.0.1");
+        try (DatagramSocket local = bind(loopback); DatagramSocket peerSocket = bind(loopback);
+             DatabaseManager database = new DatabaseManager("mem:server_search_ingestion_" + System.nanoTime())) {
+            ServerGossip.VerifiedPeer peer = new ServerGossip.VerifiedPeer(
+                    new ServerGossip.Endpoint(loopback, peerSocket.getLocalPort() - 4), "verified", 0, System.currentTimeMillis());
+            FileIndex index = new FileIndex(database);
+            org.jemule.core.IngestionExecutor ingestion = org.jemule.core.IngestionExecutor.create();
+            java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+            ingestion.execute(() -> { // the ingestion thread is busy
+                try {
+                    release.await(5, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            });
+            try (ServerSearchBridge bridge = new ServerSearchBridge(() -> List.of(peer), () -> local, index,
+                    new FakeFileDetector(), 300)) {
+                bridge.setIngestionExecutor(ingestion);
+                var future = bridge.forkSearch(new SearchQuery.TermQuery("linux", SearchQuery.ID_FILENAME), keywordTree("linux"));
+                assertTrue(bridge.handle(loopback, peerSocket.getLocalPort(),
+                        searchResult("0123456789ABCDEF0123456789ABCDEF", "Linux.iso", 1024, 4)));
+
+                assertEquals(1, future.get(2, TimeUnit.SECONDS).size(), "delivered while the ingestion waits");
+                assertFalse(index.contains("0123456789abcdef0123456789abcdef"));
+                release.countDown();
+                ingestion.close();
+                assertTrue(index.contains("0123456789abcdef0123456789abcdef"), "then ingested");
+                assertEquals(1, bridge.getFilesIngested());
+            }
+        }
+    }
+
     private static byte[] keywordTree(String keyword) {
         return ByteBuffer.allocate(3 + keyword.length()).order(ByteOrder.LITTLE_ENDIAN)
                 .put((byte) 0x01).putShort((short) keyword.length()).put(keyword.getBytes()).array();

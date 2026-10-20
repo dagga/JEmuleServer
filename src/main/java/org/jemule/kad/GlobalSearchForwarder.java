@@ -63,6 +63,7 @@ public final class GlobalSearchForwarder {
 
     private final AtomicLong received = new AtomicLong();
     private final AtomicLong forwarded = new AtomicLong();
+    private final AtomicLong results = new AtomicLong();
     private final AtomicLong skipped = new AtomicLong();
     private final AtomicLong refused = new AtomicLong();
 
@@ -107,7 +108,11 @@ public final class GlobalSearchForwarder {
                 recentQueries.remove(recentQueries.keySet().iterator().next());
             }
         }
-        kad.forkSearch(query); // the files found are ingested by the bridge
+        var found = kad.forkSearch(query); // the files found are ingested by the bridge
+        if (found != null) {
+            found.thenAccept(files -> results.addAndGet(files.stream().map(f -> f.hash().toUpperCase(Locale.ROOT))
+                    .distinct().count()));
+        }
         return count(Outcome.FORWARDED);
     }
 
@@ -155,6 +160,11 @@ public final class GlobalSearchForwarder {
     /** Global searches started on Kad. */
     public long getForwarded() {
         return forwarded.get();
+    }
+
+    /** Distinct clean files found on Kad by the forwarded searches, all handed over to ingestion. */
+    public long getResults() {
+        return results.get();
     }
 
     /** Global searches not searched: Kad disabled, no indexable keyword, or searched within the last 30 minutes. */

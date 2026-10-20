@@ -127,7 +127,14 @@ could send them back, and the two servers would loop. As a UDP request costs not
 Each global search is logged with its outcome, e.g.
 `UDP global search from 203.0.113.5: Name:linux (12 local results, Kad: forwarded)`; the outcomes are `forwarded`,
 `duplicate`, `rate limited`, `child abuse`, `no keyword` and `disabled`. The `searches` admin command and the
-Searches view of the web panel count them.
+Searches view of the web panel count them, with the distinct clean files their Kad searches found; their Kad traffic
+is also part of the Kad row.
+
+### 3.6 Threads
+
+Kad searches run on threads of the search tier, the Kad UDP receiver too, and the maintenance on the lowest tier
+(see `ServerThreads`). The files found are delivered to the search at once and indexed and stored afterwards by the
+ingestion thread, so that ingestion never holds back a search or a client connection.
 
 ## 4. UDP messages
 

@@ -33,7 +33,6 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.time.Duration;
 import java.util.List;
-import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.zip.GZIPInputStream;
@@ -58,11 +57,8 @@ public final class KadNodesUpdater implements AutoCloseable {
     private final Path cache;
     private final List<URI> sources;
     private final HttpClient httpClient;
-    private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(runnable -> {
-        Thread thread = new Thread(runnable, "kad-nodes-updater");
-        thread.setDaemon(true);
-        return thread;
-    });
+    private final ScheduledExecutorService scheduler =
+            org.jemule.core.ServerThreads.maintenanceScheduler("kad-nodes-updater");
 
     private volatile long lastRefresh;
     private volatile int lastContactCount;

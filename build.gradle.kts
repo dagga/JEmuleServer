@@ -7,7 +7,7 @@ plugins {
 }
 
 group = "org.jemule"
-version = "1.2.12"
+version = "1.2.13"
 
 configure<JavaPluginExtension> {
     toolchain {
@@ -106,5 +106,5 @@ tasks.register<JavaExec>("run") {
     val sourceSets = project.extensions.getByType<SourceSetContainer>()
     val mainSourceSet = sourceSets.getByName("main")
     classpath = mainSourceSet.runtimeClasspath
-    jvmArgs("-Djava.net.preferIPv4Stack=true", "--add-modules=jdk.httpserver")
+    jvmArgs("-Djava.net.preferIPv4Stack=true", "--add-modules=jdk.httpserver", "-XX:ThreadPriorityPolicy=1")
 }

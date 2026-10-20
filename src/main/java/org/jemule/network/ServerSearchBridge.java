@@ -3,6 +3,7 @@ package org.jemule.network;
 import org.jemule.core.FileIndex;
 import org.jemule.core.FileMetadata;
 import org.jemule.core.FileSource;
+import org.jemule.core.IngestionExecutor;
 import org.jemule.core.SearchQuery;
 import org.jemule.protocol.FileTypes;
 import org.jemule.protocol.Tag;
@@ -92,6 +93,8 @@ public final class ServerSearchBridge implements AutoCloseable {
     private final java.util.concurrent.atomic.AtomicLong requestsSent = new java.util.concurrent.atomic.AtomicLong();
     private final java.util.concurrent.atomic.AtomicLong resultsReceived = new java.util.concurrent.atomic.AtomicLong();
     private final java.util.concurrent.atomic.AtomicLong filesIngested = new java.util.concurrent.atomic.AtomicLong();
+    /** Indexes and stores the files found, after the searches and client connections (ingestion tier). */
+    private volatile IngestionExecutor ingestion = IngestionExecutor.direct();
     private volatile boolean running = true;
 
     ServerSearchBridge(Supplier<Collection<ServerGossip.VerifiedPeer>> peers,
@@ -208,16 +211,24 @@ public final class ServerSearchBridge implements AutoCloseable {
                 matchingFiles.putIfAbsent(file.hash().toUpperCase(Locale.ROOT), file);
             }
         }
-        List<FileMetadata> ingested = ingestAll(matchingFiles.values());
-        filesIngested.addAndGet(ingested.size());
+        List<FileMetadata> accepted = accepted(matchingFiles.values());
         for (SearchSession session : expectedSessions) {
-            for (FileMetadata file : ingested) {
+            for (FileMetadata file : accepted) {
                 if (session.query.test(file)) {
                     session.results.putIfAbsent(file.hash().toUpperCase(Locale.ROOT), file);
                 }
             }
         }
+        // The searches get their results now; indexing and storing them waits for the ingestion thread
+        if (!accepted.isEmpty()) {
+            ingestion.offer(() -> filesIngested.addAndGet(fileIndex.addFiles(accepted, FileSource.SERVER_SEARCH).size()));
+        }
         return true;
+    }
+
+    /** Runs the ingestion of the files found on {@code executor} instead of the UDP thread receiving them. */
+    void setIngestionExecutor(IngestionExecutor executor) {
+        this.ingestion = executor == null ? IngestionExecutor.direct() : executor;
     }
 
     /**
@@ -327,12 +338,12 @@ public final class ServerSearchBridge implements AutoCloseable {
         return FileMetadata.withoutSources(hash, name, size, type, List.copyOf(tags));
     }
 
-    private List<FileMetadata> ingestAll(Collection<FileMetadata> files) {
-        List<FileMetadata> accepted = files.stream()
+    /** Files clean of child abuse and fakes: the only ones a client may see. */
+    private List<FileMetadata> accepted(Collection<FileMetadata> files) {
+        return files.stream()
                 .filter(file -> file.hash() != null && !fileIndex.isChildAbuse(file.hash(), file.name()))
                 .filter(file -> fakeFileDetector == null || !fakeFileDetector.isFake(file.hash(), file.name(), file.size()))
                 .toList();
-        return fileIndex.addFiles(accepted, FileSource.SERVER_SEARCH);
     }
 
     private static ServerGossip.Endpoint endpointForSource(InetAddress source, int sourcePort) {

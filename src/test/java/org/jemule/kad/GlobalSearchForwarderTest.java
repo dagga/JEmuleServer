@@ -59,6 +59,16 @@ class GlobalSearchForwarderTest {
     }
 
     @Test
+    void countsTheFilesFoundOnKad() throws Exception {
+        org.jemule.core.FileMetadata a = new org.jemule.core.FileMetadata("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "linux a.iso", 1, "");
+        org.jemule.core.FileMetadata b = new org.jemule.core.FileMetadata("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "linux b.iso", 1, "");
+        when(kad.forkSearch(any(SearchQuery.class)))
+                .thenReturn(java.util.concurrent.CompletableFuture.completedFuture(java.util.List.of(a, b, a)));
+        forwarder.forward(query("linux"), ip(1), 0);
+        assertEquals(2, forwarder.getResults(), "distinct files, as answered by several nodes");
+    }
+
+    @Test
     void limitsTheSearchesPerSourceAndPerMinute() throws Exception {
         long t = 1_000_000;
         for (int i = 0; i < GlobalSearchForwarder.MAX_PER_SOURCE_PER_MINUTE; i++) {
