@@ -43,6 +43,8 @@ public class FileIndex {
     /** Words of {@link #invertedIndex}, searched by substring. */
     private final WordDictionary dictionary = new WordDictionary();
     private final DatabaseManager db;
+    /** Runs the database writes: the caller's thread by default, the ingestion thread on a running server. */
+    private volatile java.util.concurrent.Executor persistence = Runnable::run;
     private final EventManager eventManager;
     private final ChildAbuseFilter abuseFilter;
     /** Hashes banned by the child abuse filter (upper case), loaded from the database and completed at runtime. */
@@ -141,7 +143,7 @@ public class FileIndex {
     public FileMetadata addFile(FileMetadata meta, FileSource source) {
         List<FileMetadata> toPersist = new ArrayList<>(1);
         FileMetadata stored = addFileInternal(meta, toPersist, source);
-        if (db != null && !toPersist.isEmpty()) db.saveFiles(toPersist);
+        persist(toPersist);
         return stored;
     }
 
@@ -162,7 +164,7 @@ public class FileIndex {
         for (FileMetadata file : files) {
             if (file != null && file.hash() != null) stored.add(addFileInternal(file, toPersist, source));
         }
-        if (db != null && !toPersist.isEmpty()) db.saveFiles(toPersist);
+        persist(toPersist);
         return List.copyOf(stored);
     }
 
@@ -243,9 +245,22 @@ public class FileIndex {
         unindexTokens(meta);
         searchCache.clear();
         if (db != null) {
-            db.deleteFile(meta.hash());
+            String hashToDelete = meta.hash();
+            persistence.execute(() -> db.deleteFile(hashToDelete)); // after any queued write of this file
         }
         return true;
+    }
+
+    /**
+     * Runs the database writes on {@code executor}, one at a time and in order, instead of the caller's thread: a
+     * client publishing files or a search delivering results then never waits for the database.
+     */
+    public void setPersistenceExecutor(java.util.concurrent.Executor executor) {
+        this.persistence = executor == null ? Runnable::run : executor;
+    }
+
+    private void persist(List<FileMetadata> files) {
+        if (db != null && !files.isEmpty()) persistence.execute(() -> db.saveFiles(files));
     }
 
     private void unindexTokens(FileMetadata meta) {

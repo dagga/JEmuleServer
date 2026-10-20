@@ -182,7 +182,8 @@ final class ServerGossip {
         return added;
     }
 
-    void poll(DatagramSocket socket, long now) {
+    // poll (maintenance thread) and handle (UDP thread) share the probing state
+    synchronized void poll(DatagramSocket socket, long now) {
         expirePending(now);
         if (ipFilter != null) {
             candidates.keySet().removeIf(endpoint -> ipFilter.isBlocked(endpoint.address()));
@@ -249,7 +250,7 @@ final class ServerGossip {
         return result.array();
     }
 
-    boolean handle(DatagramSocket socket, InetAddress source, int sourcePort, byte[] packet, boolean wasObfuscated,
+    synchronized boolean handle(DatagramSocket socket, InetAddress source, int sourcePort, byte[] packet, boolean wasObfuscated,
                    InetAddress publicIp, int localTcpPort, long now) {
         if (ipFilter != null && ipFilter.isBlocked(source)) return false;
         if (packet.length < 2 || (packet[0] & 0xFF) != PROTOCOL) return false;

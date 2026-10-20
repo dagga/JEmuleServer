@@ -21,6 +21,9 @@ ExecStart=/opt/jemuleserver/bin/JEmuleServer /etc/jemuleserver/server.properties
 # The JVM takes at most 1/4 of the RAM by default: too little on a small dedicated server (about 500 MB of heap
 # for 1,000,000 files). MaxRAMPercentage is a ceiling, the heap only grows as needed.
 Environment=JAVA_TOOL_OPTIONS=-XX:MaxRAMPercentage=75
+# The launcher passes -XX:ThreadPriorityPolicy=1: searches, ingestion and regular operations run below the client
+# connections. Raising the admin interfaces above the clients also needs this capability:
+#AmbientCapabilities=CAP_SYS_NICE
 # SIGTERM runs the shutdown hook, which closes the H2 database cleanly
 KillSignal=SIGTERM
 TimeoutStopSec=30

@@ -82,7 +82,8 @@ public class KadMaintenanceService implements AutoCloseable {
         // Register listener for HELLO_RES to mark contacts alive upon ping response
         udpService.registerListener(KadOpCode.HELLO_RES, this::handleHelloRes);
 
-        maintenanceThread = Thread.ofVirtual().name("KadMaintenance").start(this::runLoop);
+        maintenanceThread = org.jemule.core.ServerThreads.start(org.jemule.core.ServerThreads.Tier.MAINTENANCE,
+                "KadMaintenance", this::runLoop);
         log.info("KadMaintenanceService started (interval: {}s, bucketIdle: {}s)",
                 checkIntervalMs / 1000, bucketMaxIdleMs / 1000);
     }

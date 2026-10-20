@@ -48,7 +48,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.regex.Pattern;
 
 /**
@@ -145,7 +144,7 @@ final class AdminWebPanel implements AutoCloseable {
             bindAddr = InetAddress.getByName("127.0.0.1");
         }
         http = HttpServer.create(new InetSocketAddress(bindAddr, port), 32);
-        if (executor == null) executor = Executors.newVirtualThreadPerTaskExecutor();
+        if (executor == null) executor = org.jemule.core.ServerThreads.adminExecutor("admin-web");
         http.setExecutor(executor);
         http.createContext("/", this::handle);
         http.start();
@@ -415,14 +414,15 @@ final class AdminWebPanel implements AutoCloseable {
         rows.add(serverRow);
 
         // UDP global searches of other servers' clients: queries received, requests = searches started on Kad,
-        // blocked = refused (rate limits, child abuse filter), skipped = duplicates, no keyword or Kad off
+        // results = clean files found (all handed over to ingestion), blocked = refused (rate limits, child abuse
+        // filter), skipped = duplicates, no keyword or Kad off. Their Kad traffic is also counted in the Kad row.
         GlobalSearchForwarder global = server.getGlobalSearchForwarder();
         Map<String, Object> globalRow = new java.util.LinkedHashMap<>();
         globalRow.put("channel", "UDP global searches (Kad)");
         globalRow.put("queries", global == null ? 0L : global.getReceived());
         globalRow.put("requests", global == null ? 0L : global.getForwarded());
-        globalRow.put("results", null);
-        globalRow.put("ingested", null);
+        globalRow.put("results", global == null ? 0L : global.getResults());
+        globalRow.put("ingested", global == null ? 0L : global.getResults());
         globalRow.put("active", null);
         globalRow.put("blocked", global == null ? 0L : global.getRefused());
         globalRow.put("skipped", global == null ? 0L : global.getSkipped());

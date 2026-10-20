@@ -8,6 +8,7 @@ import java.nio.file.Path;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PersistenceTest {
 
@@ -61,6 +62,29 @@ class PersistenceTest {
             assertEquals(100, db.getStat("total_files", 0));
             assertEquals(50, db.getStat("total_users", 0));
             assertEquals(0, db.getStat("unknown", 0));
+        }
+    }
+
+    @Test
+    void databaseWritesRunOnThePersistenceExecutorInOrder() throws Exception {
+        String dbPath = tempDir.resolve("asyncdb").toString();
+        FileMetadata file = new FileMetadata("ABCDEF1234567890ABCDEF1234567890", "queued file.avi", 2048, "Video");
+        java.util.List<Runnable> queued = new java.util.ArrayList<>();
+        try (DatabaseManager db = new DatabaseManager(dbPath)) {
+            FileIndex index = new FileIndex(db);
+            index.setPersistenceExecutor(queued::add);
+
+            index.addFile(file);
+            assertEquals(1, index.search("queued", 10).size(), "indexed in memory at once");
+            assertTrue(db.loadFiles().isEmpty(), "the caller did not write to the database");
+            index.removeFile(file.hash());
+            assertEquals(2, queued.size(), "the deletion is queued after the write");
+
+            queued.forEach(Runnable::run);
+            assertTrue(db.loadFiles().isEmpty(), "write then delete, in order");
+            index.addFile(file);
+            queued.get(2).run();
+            assertEquals(1, db.loadFiles().size());
         }
     }
 }

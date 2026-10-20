@@ -98,6 +98,11 @@ public class KadNode implements AutoCloseable {
                 : null;
     }
 
+    /** Runs the ingestion of the files found by Kad searches on the server's ingestion thread. */
+    public void setIngestionExecutor(org.jemule.core.IngestionExecutor executor) {
+        searchBridge.setIngestionExecutor(executor);
+    }
+
     /**
      * Reads the persisted node ID, or generates and persists a new random one on the first start.
      */

@@ -108,7 +108,9 @@ public class KadUdpService implements AutoCloseable {
         this.socket.setSoTimeout(SOCKET_TIMEOUT_MS);
         this.running = true;
 
-        this.receiverThread = Thread.ofVirtual().name("KadUdpReceiver-" + socket.getLocalPort()).start(this::receiveLoop);
+        // Receives search answers above all: search tier, below the client connections
+        this.receiverThread = org.jemule.core.ServerThreads.start(org.jemule.core.ServerThreads.Tier.SEARCH,
+                "KadUdpReceiver-" + socket.getLocalPort(), this::receiveLoop);
         log.info("Kad UDP service started on port {}", socket.getLocalPort());
     }
 

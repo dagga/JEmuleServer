@@ -25,6 +25,7 @@ import org.jemule.config.ConfigFile;
 import org.jemule.config.ConfigParameter;
 import org.jemule.config.ServerConfig;
 import org.jemule.core.*;
+import org.jemule.core.ServerThreads.Tier;
 import org.jemule.protocol.Tag;
 import org.jemule.core.event.ClientEvent;
 import org.jemule.core.event.EventManager;
@@ -57,7 +58,6 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.Arrays;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -119,6 +119,10 @@ public class Server {
     private final KadNode kadNode;
     private volatile KadSearchBridge kadSearchBridge;
     private final GlobalSearchForwarder globalSearchForwarder;
+    /** Indexing and database writes, below the clients and the searches (ingestion tier). */
+    private final IngestionExecutor ingestion = IngestionExecutor.create();
+    /** Regular operations of the maintenance tier (server gossip polling). */
+    private final java.util.concurrent.ScheduledExecutorService maintenance = ServerThreads.maintenanceScheduler("maintenance");
     private volatile boolean running = true;
 
     public byte[] getServerHash() {
@@ -192,7 +196,8 @@ public class Server {
         this.serverGossip = new ServerGossip(config.serverPeers(), this.ipFilter);
         this.fakeFileDetector = new FakeFileDetector();
         this.fakeFileDetector.setEnabled(config.fakeFileDetectionEnabled());
-        this.executor = Executors.newVirtualThreadPerTaskExecutor();
+        // TCP and UDP access of the clients; admin, searches, ingestion and maintenance have their own threads
+        this.executor = ServerThreads.clientExecutor();
 
         DatabaseManager dbMgr = null;
         try {
@@ -214,14 +219,17 @@ public class Server {
         this.db = dbMgr;
         this.abuseFilter = ChildAbuseFilter.load(config.childAbuseKeywordsPath());
         this.fileIndex = new FileIndex(db, eventManager, abuseFilter);
+        this.fileIndex.setPersistenceExecutor(ingestion);
         this.globalSearchForwarder = new GlobalSearchForwarder(() -> kadSearchBridge, abuseFilter,
                 config.kad().enabled() && config.kad().forkSearchEnabled() && config.kad().forkGlobalSearches());
         this.serverSearchBridge = new ServerSearchBridge(serverGossip::verifiedPeers,
                 () -> boundUdpSockets.get(config.port() + 4), fileIndex, fakeFileDetector);
+        this.serverSearchBridge.setIngestionExecutor(ingestion);
         this.kadNode = config.kad().enabled()
                 ? new KadNode(config.kad(), config.port(), db, fileIndex, abuseFilter, fakeFileDetector,
                         kadNodesCachePath(config))
                 : null;
+        if (kadNode != null) kadNode.setIngestionExecutor(ingestion);
         this.adminAccessFilter = new AdminAccessFilter(config.adminAllowedIps(), config.adminAllowedMacs());
         this.admin = new AdminInterface(this, registry, fileIndex, ipFilter, fakeFileDetector);
         this.adminWebPanel = new AdminWebPanel(this);
@@ -575,7 +583,7 @@ public class Server {
      * answer must be sent before its listener is stopped.
      */
     private static void afterAdminResponse(Runnable action) {
-        Thread.ofVirtual().name("AdminWebRestart").start(() -> {
+        ServerThreads.start(Tier.ADMIN, "AdminWebRestart", () -> {
             try {
                 Thread.sleep(500);
             } catch (InterruptedException e) {
@@ -597,13 +605,13 @@ public class Server {
             }
         }
         if (newPort > 0) {
-            Thread.ofVirtual().name("AdminPort").start(this::serveAdminPort);
+            ServerThreads.start(Tier.ADMIN, "AdminPort", this::serveAdminPort);
         }
     }
 
     private void startWebPanel(AdminWebPanel panel, int port) {
         stopAdminWeb = false;
-        Thread.ofVirtual().name("AdminWebSupervisor").start(() -> {
+        ServerThreads.start(Tier.ADMIN, "AdminWebSupervisor", () -> {
             while (running && !stopAdminWeb) {
                 try {
                     panel.start(port);
@@ -629,7 +637,7 @@ public class Server {
             log.info("IP filter disabled (empty ipFilterPath)");
             return;
         }
-        executor.submit(() -> {
+        ServerThreads.start(Tier.MAINTENANCE, "IpFilterReload", () -> {
             try {
                 ipFilter.loadFromFile(path);
             } catch (RuntimeException e) {
@@ -720,6 +728,15 @@ public class Server {
      * @throws IOException If the server cannot bind to the configured port.
      */
     public void start() throws IOException {
+        if (ServerThreads.prioritiesApplied()) {
+            boolean linuxUser = System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("linux")
+                    && !"root".equals(System.getProperty("user.name"));
+            log.info("Thread priorities applied: admin > clients > searches > ingestion > maintenance{}", linuxUser
+                    ? " (the admin tier stays at the clients' level unless the process has CAP_SYS_NICE)" : "");
+        } else {
+            log.warn("Thread priorities are ignored by Linux: start the JVM with -XX:ThreadPriorityPolicy=1 so that the "
+                    + "admin interfaces and the clients come before searches, ingestion and maintenance");
+        }
         // Bind server socket preferring IPv6 wildcard, fall back to IPv4 if not available
         ServerSocket ss = null;
         try {
@@ -782,7 +799,7 @@ public class Server {
 
     private void startIpFilterLoading() {
         if (config.ipFilterPath() == null || config.ipFilterPath().isBlank()) return;
-        executor.submit(() -> {
+        ServerThreads.start(Tier.MAINTENANCE, "IpFilterLoad", () -> {
             try {
                 ipFilter.loadFromFile(config.ipFilterPath());
             } catch (Exception e) {
@@ -794,7 +811,7 @@ public class Server {
 
     private void startServerMetLoading() {
         if (config.serverMetUrl().isBlank()) return;
-        executor.submit(() -> {
+        ServerThreads.start(Tier.MAINTENANCE, "ServerMetLoad", () -> {
             try {
                 int added = ServerMetLoader.load(config.serverMetUrl(), serverGossip);
                 log.info("Loaded {} new server candidates from server.met; existing candidates were retained", added);
@@ -813,6 +830,16 @@ public class Server {
         ports.add(config.port());
         if (config.port() <= 0xFFFF - 4) ports.add(config.port() + 4);
         if (config.port() <= 0xFFFF - 12) ports.add(config.port() + 12);
+
+        // Server gossip polling is a regular operation: maintenance tier, through the port + 4 socket
+        maintenance.scheduleWithFixedDelay(() -> {
+            try {
+                java.net.DatagramSocket gossipSocket = boundUdpSockets.get(config.port() + 4);
+                if (running && gossipSocket != null) serverGossip.poll(gossipSocket, System.currentTimeMillis());
+            } catch (RuntimeException e) {
+                log.warn("Server gossip polling failed: {}", e.getMessage());
+            }
+        }, 1, 1, TimeUnit.SECONDS);
 
         for (int port : ports) {
             final int bindPort = port;
@@ -846,9 +873,6 @@ public class Server {
                             } catch (java.net.SocketTimeoutException e) {
                                 // Timeout, check 'running'
                             }
-                            if (bindPort == config.port() + 4) {
-                                serverGossip.poll(ds, System.currentTimeMillis());
-                            }
                         }
                     } catch (IOException e) {
                         if (running) {
@@ -880,7 +904,7 @@ public class Server {
             log.info("Kademlia node disabled (kadEnabled=false)");
             return;
         }
-        executor.submit(() -> {
+        ServerThreads.start(Tier.MAINTENANCE, "KadStart", () -> {
             try {
                 kadNode.start();
                 if (kadNode.getConfig().forkSearchEnabled() && kadSearchBridge == null) {
@@ -893,11 +917,9 @@ public class Server {
     }
 
     private void startAdminInterface() {
-        Thread adminThread = new Thread(admin, "AdminInterface");
-        adminThread.setDaemon(true);
-        adminThread.start();
+        ServerThreads.start(Tier.ADMIN, "AdminInterface", admin);
         if (config.adminPort() > 0) {
-            Thread.ofVirtual().name("AdminPort").start(this::serveAdminPort);
+            ServerThreads.start(Tier.ADMIN, "AdminPort", this::serveAdminPort);
         }
         if (config.adminWebPort() > 0) {
             startWebPanel(adminWebPanel, config.adminWebPort());
@@ -939,7 +961,7 @@ public class Server {
                     }
                     continue;
                 }
-                Thread.ofVirtual().name("AdminSession").start(() -> {
+                ServerThreads.start(Tier.ADMIN, "AdminSession", () -> {
                     try (s; var out = new java.io.PrintStream(s.getOutputStream(), true, java.nio.charset.StandardCharsets.UTF_8)) {
                         log.info("Admin session opened from {}", s.getRemoteSocketAddress());
                         new AdminInterface(admin, out).session(new java.io.BufferedReader(
@@ -1246,6 +1268,7 @@ public class Server {
         }
         AdminWebPanel panel = adminWebPanel;
         if (panel != null) panel.close();
+        maintenance.shutdownNow();
         serverSearchBridge.close();
         if (ipFilterUpdater != null) ipFilterUpdater.close();
         kadSearchBridge = null;
@@ -1272,6 +1295,8 @@ public class Server {
             executor.shutdownNow();
             Thread.currentThread().interrupt();
         }
+        // The files still waiting for ingestion are written before the database closes
+        ingestion.close();
         if (db != null) {
             try {
                 db.close();

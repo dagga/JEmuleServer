@@ -1,6 +1,6 @@
 # JEmuleServer
 
-JEmuleServer is an eMule server written in Java (version 1.2.12).
+JEmuleServer is an eMule server written in Java (version 1.2.13).
 
 Downloads (installers and JAR) are on the [releases page](https://github.com/dagga/JEmuleServer/releases); the changes
 of each version are described in `doc/release-notes-v<version>.md` (latest: [1.2.9](doc/release-notes-v1.2.9.md)).
@@ -27,7 +27,7 @@ Building requires a JDK 21 (Gradle toolchain). To compile the project and genera
 ./gradlew build
 ```
 
-The JAR file will be generated in `build/libs/JEmuleServer-1.2.12.jar`.
+The JAR file will be generated in `build/libs/JEmuleServer-1.2.13.jar`.
 
 ## Installation from the release packages
 
@@ -60,15 +60,22 @@ You can start the server directly via Gradle:
 ./gradlew run
 ```
 
-This task starts the JVM with `-Djava.net.preferIPv4Stack=true` (IPv4 only); use the JAR for IPv6.
+This task starts the JVM with `-Djava.net.preferIPv4Stack=true` (IPv4 only) and `-XX:ThreadPriorityPolicy=1`; use
+the JAR for IPv6.
 
 ### Manual JAR Launch
 
 Once the project is compiled, you can start the server with the following command:
 
 ```bash
-java --add-modules=jdk.httpserver -jar build/libs/JEmuleServer-1.2.6.jar [config_file] [port]
+java -XX:ThreadPriorityPolicy=1 --add-modules=jdk.httpserver -jar build/libs/JEmuleServer-1.2.13.jar [config_file] [port]
 ```
+
+- `-XX:ThreadPriorityPolicy=1`: on Linux, the JVM ignores thread priorities without it. The server runs its threads
+  in five tiers, highest first: admin interfaces, client connections, searches, ingestion (indexing and database
+  writes), regular operations; ingestion and regular operations never hold back a client or a search. Lowering a
+  priority works for any user; raising the admin tier above the clients needs root or `CAP_SYS_NICE`. The startup log
+  says whether the priorities are applied. The .deb and .rpm launchers already pass the option.
 
 - Note: The server binds to the IPv6 wildcard when available, so IPv6 clients can connect. Avoid forcing the JVM to
   prefer IPv4 (i.e. do not use `-Djava.net.preferIPv4Stack=true`) if you expect IPv6 connectivity. The ed2k protocol

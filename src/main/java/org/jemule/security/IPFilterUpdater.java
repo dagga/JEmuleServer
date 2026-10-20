@@ -34,7 +34,6 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.zip.ZipEntry;
@@ -52,11 +51,8 @@ public final class IPFilterUpdater implements AutoCloseable {
     private final List<URI> sources;
     private final HttpClient httpClient;
     private boolean started;
-    private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(runnable -> {
-        Thread thread = new Thread(runnable, "ipfilter-updater");
-        thread.setDaemon(true);
-        return thread;
-    });
+    private final ScheduledExecutorService scheduler =
+            org.jemule.core.ServerThreads.maintenanceScheduler("ipfilter-updater");
 
     public IPFilterUpdater(IPFilter filter, Path destination, List<URI> sources) {
         this(filter, destination, sources, HttpClient.newBuilder()
