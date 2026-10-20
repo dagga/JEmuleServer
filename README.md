@@ -1,6 +1,6 @@
 # JEmuleServer
 
-JEmuleServer is an eMule server written in Java (version 1.2.11).
+JEmuleServer is an eMule server written in Java (version 1.2.12).
 
 Downloads (installers and JAR) are on the [releases page](https://github.com/dagga/JEmuleServer/releases); the changes
 of each version are described in `doc/release-notes-v<version>.md` (latest: [1.2.9](doc/release-notes-v1.2.9.md)).
@@ -27,7 +27,7 @@ Building requires a JDK 21 (Gradle toolchain). To compile the project and genera
 ./gradlew build
 ```
 
-The JAR file will be generated in `build/libs/JEmuleServer-1.2.11.jar`.
+The JAR file will be generated in `build/libs/JEmuleServer-1.2.12.jar`.
 
 ## Installation from the release packages
 
@@ -150,6 +150,10 @@ that brings this content to its clients without exposing them to illicit files:
   and the fake file detector. An illicit file is never sent to a client and its hash is banned for good.
 - **Cache warming**: clean Kad files with at least one source are stored in the H2 database and indexed. The next
   searches on the same terms find them locally, in the first batch of results.
+- **Global searches**: the UDP global searches that clients of other servers send to this server are answered from the
+  local index and, with `kadForkGlobalSearches=true`, also searched on Kad in the background to populate the
+  database: once per query per 30 minutes, at most 20 per minute (3 per source IP), never for queries matching the
+  child abuse filter, and never forwarded to other eD2K servers, which could send them back.
 
 The client waits for Kad only when nothing matches locally (cold search), at most `kadSearchTimeoutSeconds`; the files
 found are then paginated by 300 with the "More" button (`OP_QUERY_MORE_RESULT`), up to the 1,800 files an eMule
@@ -172,6 +176,7 @@ kadSearchTimeoutSeconds=4
 kadAutoIngestToH2=true
 kadMinSourcesForIngest=1
 kadNodesUrls=https://upd.emule-security.org/nodes.dat,http://www.alldivx.de/nodes/nodes.dat
+kadForkGlobalSearches=true
 ```
 
 The bridge stays compatible with the historical eMule clients: the ed2k client-server protocol is unchanged and the
@@ -226,7 +231,8 @@ Available commands:
 - `ingestion`: Shows the number and share of new database files by ingestion channel (client push, Kad search,
   eD2K server search) since the server started.
 - `searches`: Shows, for Kad and eD2K servers, the search queries forked, requests sent, results returned, files
-  ingested and active searches since startup.
+  ingested and active searches since startup, and the UDP global searches received, searched on Kad, skipped and
+  refused.
 - `filters`: Shows active IP and fake-file filters.
 - `filters reload`: Reloads the IP filter from the configured `ipFilterPath` and the child abuse keywords.
 - `bots`: Lists potential bot matches based on nicknames only.

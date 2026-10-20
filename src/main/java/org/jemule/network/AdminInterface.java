@@ -24,6 +24,7 @@ import org.jemule.config.ConfigParameter;
 import org.jemule.core.ClientRegistry;
 import org.jemule.core.FileIndex;
 import org.jemule.core.FileSource;
+import org.jemule.kad.GlobalSearchForwarder;
 import org.jemule.kad.KadBootstrapManager;
 import org.jemule.kad.KadContact;
 import org.jemule.kad.KadHashBanService;
@@ -237,6 +238,13 @@ public class AdminInterface implements Runnable {
                 servers == null ? 0 : servers.getResultsReceived(),
                 servers == null ? 0 : servers.getFilesIngested(),
                 servers == null ? 0 : servers.getActiveSessionCount());
+        GlobalSearchForwarder global = server != null ? server.getGlobalSearchForwarder() : null;
+        if (global != null) {
+            out().printf("UDP global searches of other servers' clients: %d received, %d searched on Kad%s,%n"
+                            + "  %d skipped (duplicate within 30 min, no keyword, Kad off), %d refused (rate limit, child abuse filter)%n",
+                    global.getReceived(), global.getForwarded(), global.isEnabled() ? "" : " (kadForkGlobalSearches=false)",
+                    global.getSkipped(), global.getRefused());
+        }
         out().println("-------------------------------------------------------------");
     }
 

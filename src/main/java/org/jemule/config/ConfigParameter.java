@@ -84,7 +84,9 @@ public enum ConfigParameter {
     KAD_MIN_SOURCES_FOR_INGEST("kadMinSourcesForIngest", Type.INTEGER, Scope.RESTART, 0, 10_000,
             "Minimum sources required to ingest a Kad file"),
     KAD_NODES_URLS("kadNodesUrls", Type.STRING, Scope.RESTART, 0, 0,
-            "nodes.dat sources used to bootstrap Kad (comma-separated, empty = disabled)");
+            "nodes.dat sources used to bootstrap Kad (comma-separated, empty = disabled)"),
+    KAD_FORK_GLOBAL_SEARCHES("kadForkGlobalSearches", Type.BOOLEAN, Scope.RESTART, 0, 0,
+            "Search the UDP global searches of other servers' clients on Kad to populate the database");
 
     /** Value type of a parameter, with its parsing and formatting rules. */
     public enum Type {

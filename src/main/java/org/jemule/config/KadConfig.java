@@ -35,6 +35,8 @@ import java.util.Properties;
  * @param autoIngestToH2        Whether clean Kad files are persisted in the H2 database and indexed in memory.
  * @param minSourcesForIngest   Minimum number of sources a Kad file needs to be delivered and persisted.
  * @param nodesUrls             Comma-separated nodes.dat URLs used to bootstrap the routing table (empty disables it).
+ * @param forkGlobalSearches    Whether the UDP global searches of other servers' clients are also searched on Kad,
+ *                              in the background, to populate the database.
  */
 public record KadConfig(
         boolean enabled,
@@ -45,7 +47,8 @@ public record KadConfig(
         int searchTimeoutSeconds,
         boolean autoIngestToH2,
         int minSourcesForIngest,
-        String nodesUrls
+        String nodesUrls,
+        boolean forkGlobalSearches
 ) {
     /** Offset of the default Kad UDP port from the server TCP port (4661 + 11 = 4672). */
     public static final int PORT_OFFSET = 11;
@@ -58,7 +61,7 @@ public record KadConfig(
             "https://upd.emule-security.org/nodes.dat,http://www.alldivx.de/nodes/nodes.dat";
 
     /** Default configuration: every Kad feature enabled, as documented in server.properties. */
-    public static final KadConfig DEFAULT = new KadConfig(true, 0, true, 500, true, 4, true, 1, DEFAULT_NODES_URLS);
+    public static final KadConfig DEFAULT = new KadConfig(true, 0, true, 500, true, 4, true, 1, DEFAULT_NODES_URLS, true);
 
     /** Configuration with the embedded Kademlia node turned off. */
     public static final KadConfig DISABLED = new KadConfig(false, 0, false, 500, false, 4, false, 1);
@@ -69,6 +72,14 @@ public record KadConfig(
                      int minSourcesForIngest) {
         this(enabled, port, bootstrapFromClients, maxRoutingContacts, forkSearchEnabled, searchTimeoutSeconds,
                 autoIngestToH2, minSourcesForIngest, DEFAULT_NODES_URLS);
+    }
+
+    /** Keeps source compatibility for callers that do not choose whether global searches are forked. */
+    public KadConfig(boolean enabled, int port, boolean bootstrapFromClients, int maxRoutingContacts,
+                     boolean forkSearchEnabled, int searchTimeoutSeconds, boolean autoIngestToH2,
+                     int minSourcesForIngest, String nodesUrls) {
+        this(enabled, port, bootstrapFromClients, maxRoutingContacts, forkSearchEnabled, searchTimeoutSeconds,
+                autoIngestToH2, minSourcesForIngest, nodesUrls, true);
     }
 
     public KadConfig {
@@ -131,7 +142,8 @@ public record KadConfig(
                 Integer.parseInt(props.getProperty("kadSearchTimeoutSeconds", String.valueOf(DEFAULT.searchTimeoutSeconds())).trim()),
                 Boolean.parseBoolean(props.getProperty("kadAutoIngestToH2", String.valueOf(DEFAULT.autoIngestToH2()))),
                 Integer.parseInt(props.getProperty("kadMinSourcesForIngest", String.valueOf(DEFAULT.minSourcesForIngest())).trim()),
-                props.getProperty("kadNodesUrls", DEFAULT.nodesUrls())
+                props.getProperty("kadNodesUrls", DEFAULT.nodesUrls()),
+                Boolean.parseBoolean(props.getProperty("kadForkGlobalSearches", String.valueOf(DEFAULT.forkGlobalSearches())))
         );
     }
 }

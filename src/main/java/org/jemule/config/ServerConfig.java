@@ -405,6 +405,7 @@ public record ServerConfig(
         props.put("kadAutoIngestToH2", String.valueOf(kad.autoIngestToH2()));
         props.put("kadMinSourcesForIngest", String.valueOf(kad.minSourcesForIngest()));
         props.put("kadNodesUrls", kad.nodesUrls() == null ? "" : kad.nodesUrls());
+        props.put("kadForkGlobalSearches", String.valueOf(kad.forkGlobalSearches()));
         return props;
     }
 

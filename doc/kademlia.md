@@ -107,8 +107,27 @@ drop (`FloodLimitException`): the search goes to the next closest node instead, 
 A node forgets one request every 60/limit seconds; the server waits 10% longer. Answers are not limited.
 
 A search that cannot send any request (empty routing table, closed socket) ends at once: a server isolated from Kad
-answers as fast as without Kad. Only TCP searches are forked; global UDP searches (`OP_GLOBSEARCHREQ`) are answered
-from the local index.
+answers as fast as without Kad.
+
+### 3.5 Global UDP searches
+
+Clients of other servers send their global searches (`OP_GLOBSEARCHREQ`, `OP_GLOBSEARCHREQ2`, `OP_GLOBSEARCHREQ3`)
+to every server of their list. They are answered from the local index only, and with `kadForkGlobalSearches=true`
+(the default) they are also searched on Kad in the background, so that the files they look for are ingested. The
+requester gets no late answer: a UDP source address can be forged.
+
+These searches go to Kad only, never to the eD2K servers: another server forwarding global searches the same way
+could send them back, and the two servers would loop. As a UDP request costs nothing to forge, each one is limited:
+
+- an identical query is searched once per 30 minutes;
+- at most 20 searches per minute in all, and 3 per minute per source IP;
+- a query matching the child abuse filter is never searched;
+- the Kad flood limits of section 3.4 apply as for any search.
+
+Each global search is logged with its outcome, e.g.
+`UDP global search from 203.0.113.5: Name:linux (12 local results, Kad: forwarded)`; the outcomes are `forwarded`,
+`duplicate`, `rate limited`, `child abuse`, `no keyword` and `disabled`. The `searches` admin command and the
+Searches view of the web panel count them.
 
 ## 4. UDP messages
 
@@ -148,6 +167,7 @@ The keys live in [`server.properties`](../server.properties):
 | `kadAutoIngestToH2` | `true` | Stores and indexes the clean Kad files. |
 | `kadMinSourcesForIngest` | `1` | Minimum number of sources for a Kad file to be delivered and stored. |
 | `kadNodesUrls` | eMule Security + alldivx | Comma-separated `nodes.dat` URLs; downloaded at startup, refreshed daily and cached next to the database (empty = disabled). |
+| `kadForkGlobalSearches` | `true` | Also searches on Kad, in the background, the UDP global searches of other servers' clients (section 3.5). |
 
 Open the Kad UDP port in the firewall (`4672/udp` by default) so that the answers of the Kad nodes reach the server.
 
