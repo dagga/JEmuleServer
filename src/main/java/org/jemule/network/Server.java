@@ -30,6 +30,7 @@ import org.jemule.core.event.ClientEvent;
 import org.jemule.core.event.EventManager;
 import org.jemule.core.event.FileEvent;
 import org.jemule.core.event.EventStatistics;
+import org.jemule.kad.GlobalSearchForwarder;
 import org.jemule.kad.KadNode;
 import org.jemule.kad.KadSearchBridge;
 import org.jemule.security.AdminAccessFilter;
@@ -117,6 +118,7 @@ public class Server {
     private final InetAddress publicIp;
     private final KadNode kadNode;
     private volatile KadSearchBridge kadSearchBridge;
+    private final GlobalSearchForwarder globalSearchForwarder;
     private volatile boolean running = true;
 
     public byte[] getServerHash() {
@@ -129,6 +131,13 @@ public class Server {
 
     public void setKadSearchBridge(KadSearchBridge kadSearchBridge) {
         this.kadSearchBridge = kadSearchBridge;
+    }
+
+    /**
+     * Background Kad searches of the UDP global searches received from clients of other servers.
+     */
+    public GlobalSearchForwarder getGlobalSearchForwarder() {
+        return globalSearchForwarder;
     }
 
     /**
@@ -205,6 +214,8 @@ public class Server {
         this.db = dbMgr;
         this.abuseFilter = ChildAbuseFilter.load(config.childAbuseKeywordsPath());
         this.fileIndex = new FileIndex(db, eventManager, abuseFilter);
+        this.globalSearchForwarder = new GlobalSearchForwarder(() -> kadSearchBridge, abuseFilter,
+                config.kad().enabled() && config.kad().forkSearchEnabled() && config.kad().forkGlobalSearches());
         this.serverSearchBridge = new ServerSearchBridge(serverGossip::verifiedPeers,
                 () -> boundUdpSockets.get(config.port() + 4), fileIndex, fakeFileDetector);
         this.kadNode = config.kad().enabled()
@@ -1091,6 +1102,7 @@ public class Server {
         ByteBuffer buf = ByteBuffer.wrap(recv, 2, recv.length - 2).slice().order(ByteOrder.LITTLE_ENDIAN);
         boolean largeFiles = false;
         List<FileMetadata> results;
+        SearchQuery query;
         try {
             if (opcode == (byte) 0x90) {
                 for (Tag t : Tag.readList(buf)) {
@@ -1099,7 +1111,7 @@ public class Server {
                     }
                 }
             }
-            SearchQuery query = SearchQuery.parse(buf.slice());
+            query = SearchQuery.parse(buf.slice());
             results = fileIndex.searchComplex(query, Math.min(config.maxSearchResults(), MAX_GLOBAL_SEARCH_RESULTS));
         } catch (RuntimeException e) {
             log.debug("Malformed UDP search request from {}: {}", reply.address(), e.getMessage());
@@ -1121,6 +1133,12 @@ public class Server {
         if (datagram.size() > 0) {
             sendUdp(reply, datagram.toByteArray(), "SEARCH");
         }
+
+        // Only searched on Kad: forwarding it to other eD2K servers could make it loop between servers
+        GlobalSearchForwarder.Outcome outcome = globalSearchForwarder.forward(query, reply.address());
+        log.info("UDP global search from {}: {} ({} local results, Kad: {})", reply.address().getHostAddress(),
+                org.jemule.network.handler.HandlerUtils.sanitize(query.toString()), results.size(),
+                outcome.name().toLowerCase(java.util.Locale.ROOT).replace('_', ' '));
     }
 
     /**

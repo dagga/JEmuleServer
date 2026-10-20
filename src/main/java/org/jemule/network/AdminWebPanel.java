@@ -28,6 +28,7 @@ import org.jemule.core.ClientState;
 import org.jemule.core.DatabaseManager;
 import org.jemule.core.FileIndex;
 import org.jemule.core.FileSource;
+import org.jemule.kad.GlobalSearchForwarder;
 import org.jemule.kad.KadContact;
 import org.jemule.kad.KadNode;
 import org.jemule.kad.KadSearchBridge;
@@ -398,6 +399,7 @@ final class AdminWebPanel implements AutoCloseable {
         kadRow.put("ingested", kad == null ? 0L : kad.getFilesIngested());
         kadRow.put("active", kad == null ? 0 : kad.getActiveSessionCount());
         kadRow.put("blocked", kad == null ? 0L : kad.getIllicitFilesBlocked());
+        kadRow.put("skipped", 0L);
         rows.add(kadRow);
 
         ServerSearchBridge servers = server.getServerSearchBridge();
@@ -409,7 +411,22 @@ final class AdminWebPanel implements AutoCloseable {
         serverRow.put("ingested", servers == null ? 0L : servers.getFilesIngested());
         serverRow.put("active", servers == null ? 0 : servers.getActiveSessionCount());
         serverRow.put("blocked", 0L);
+        serverRow.put("skipped", 0L);
         rows.add(serverRow);
+
+        // UDP global searches of other servers' clients: queries received, requests = searches started on Kad,
+        // blocked = refused (rate limits, child abuse filter), skipped = duplicates, no keyword or Kad off
+        GlobalSearchForwarder global = server.getGlobalSearchForwarder();
+        Map<String, Object> globalRow = new java.util.LinkedHashMap<>();
+        globalRow.put("channel", "UDP global searches (Kad)");
+        globalRow.put("queries", global == null ? 0L : global.getReceived());
+        globalRow.put("requests", global == null ? 0L : global.getForwarded());
+        globalRow.put("results", null);
+        globalRow.put("ingested", null);
+        globalRow.put("active", null);
+        globalRow.put("blocked", global == null ? 0L : global.getRefused());
+        globalRow.put("skipped", global == null ? 0L : global.getSkipped());
+        rows.add(globalRow);
         return rows;
     }
 

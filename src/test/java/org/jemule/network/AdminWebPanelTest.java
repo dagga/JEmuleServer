@@ -165,6 +165,7 @@ class AdminWebPanelTest {
             assertTrue(response.body().contains("\"channel\":\"eD2K servers\""), response.body());
             assertTrue(response.body().contains("\"queries\":12"), response.body());
             assertTrue(response.body().contains("\"results\":48"), response.body());
+            assertTrue(response.body().contains("\"channel\":\"UDP global searches (Kad)\""), response.body());
         }
     }
 

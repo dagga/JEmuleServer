@@ -19,6 +19,8 @@ import java.util.List;
 
 import static org.jemule.network.EmuleTestSupport.*;
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.*;
 
 /** Global UDP searches as sent by CSearchResultsWnd (eMule 0.50a) and decoded like CUDPSocket::ProcessPacket. */
 class GlobalSearchCompatibilityTest {
@@ -80,6 +82,23 @@ class GlobalSearchCompatibilityTest {
         assertEquals(1, res.size());
         assertEquals("linux distribution.iso", res.getFirst().tag(Tag.NAME_FILENAME));
         assertEquals(1, ((Number) res.getFirst().tag(Tag.NAME_SOURCES)).intValue());
+    }
+
+    @Test
+    void globalSearchIsAlsoSearchedOnKadButNeverForwardedToOtherServers() throws Exception {
+        org.jemule.kad.KadSearchBridge kad = mock(org.jemule.kad.KadSearchBridge.class);
+        server.setKadSearchBridge(kad);
+
+        byte[] request = withHeader(0x98, new SearchTree().keyword("linux").toBytes());
+        assertEquals(1, udpSearch(request).size(), "the requester still gets the local answer");
+        verify(kad).forkSearch(new org.jemule.core.SearchQuery.TermQuery("linux", org.jemule.core.SearchQuery.ID_FILENAME));
+        assertEquals(0, server.getServerSearchBridge().getSearchesForked(),
+                "another server forwarding global searches could send it back: no loop");
+
+        udpSearch(request);
+        verify(kad, times(1)).forkSearch(any(org.jemule.core.SearchQuery.class));
+        assertEquals(2, server.getGlobalSearchForwarder().getReceived());
+        assertEquals(1, server.getGlobalSearchForwarder().getForwarded());
     }
 
     @Test
