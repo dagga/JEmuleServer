@@ -135,6 +135,24 @@ class ServerSearchBridgeTest {
         }
     }
 
+    @Test
+    void typedClientQueriesMatchServerResultsWithAnIntegerTypeOrNoTypeAtAll() {
+        SearchQuery videoQuery = new SearchQuery.AndQuery(new SearchQuery.TermQuery("matrix", SearchQuery.ID_FILENAME),
+                new SearchQuery.TermQuery("Video", SearchQuery.ID_FILETYPE));
+        // Captured from live servers: FT_FILETYPE as an ED2KFT_* integer (2 = video), or no type tag at all
+        byte[] integerType = searchResult("0123456789ABCDEF0123456789ABCDEF", List.of(
+                new Tag(Tag.TYPE_STRING, Tag.NAME_FILENAME, "The Matrix Reloaded.avi"),
+                new Tag(Tag.TYPE_INTEGER, Tag.NAME_FILESIZE, 1_489_940_480),
+                new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, 6),
+                new Tag(Tag.TYPE_INTEGER, Tag.NAME_FILETYPE, 2)));
+        byte[] noType = searchResult("FEDCBA9876543210FEDCBA9876543210", "Matrix.1999.1080p.mkv", 1_870_003_012L, 4);
+
+        var decoded = ServerSearchBridge.decodeResults(integerType);
+        assertEquals("Video", decoded.get(0).type());
+        assertTrue(videoQuery.test(decoded.get(0)));
+        assertTrue(videoQuery.test(ServerSearchBridge.decodeResults(noType).get(0)));
+    }
+
     private static byte[] keywordTree(String keyword) {
         return ByteBuffer.allocate(3 + keyword.length()).order(ByteOrder.LITTLE_ENDIAN)
                 .put((byte) 0x01).putShort((short) keyword.length()).put(keyword.getBytes()).array();
@@ -168,16 +186,20 @@ class ServerSearchBridgeTest {
     }
 
     private static byte[] searchResult(String hash, String name, long size, int sources) {
+        return searchResult(hash, List.of(
+                new Tag(Tag.TYPE_STRING, Tag.NAME_FILENAME, name),
+                new Tag(Tag.TYPE_INTEGER, Tag.NAME_FILESIZE, (int) size),
+                new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, sources)));
+    }
+
+    private static byte[] searchResult(String hash, List<Tag> tags) {
         ByteBuffer packet = ByteBuffer.allocate(2048).order(ByteOrder.LITTLE_ENDIAN);
         packet.put((byte) 0xE3).put((byte) 0x99);
         for (int i = 0; i < hash.length(); i += 2) {
             packet.put((byte) Integer.parseInt(hash.substring(i, i + 2), 16));
         }
         packet.putInt(0).putShort((short) 0);
-        Tag.writeList(packet, List.of(
-                new Tag(Tag.TYPE_STRING, Tag.NAME_FILENAME, name),
-                new Tag(Tag.TYPE_INTEGER, Tag.NAME_FILESIZE, (int) size),
-                new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, sources)));
+        Tag.writeList(packet, tags);
         return java.util.Arrays.copyOf(packet.array(), packet.position());
     }
 }

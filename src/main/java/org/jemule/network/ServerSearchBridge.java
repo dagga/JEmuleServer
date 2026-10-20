@@ -315,7 +315,8 @@ public final class ServerSearchBridge implements AutoCloseable {
         long sources = 0;
         for (Tag tag : tags) {
             if (tag.name().equals(Tag.NAME_FILENAME) && tag.value() instanceof String value) name = value;
-            else if (tag.name().equals(Tag.NAME_FILETYPE) && tag.value() instanceof String value) type = value;
+            // Servers send the type as an ED2KFT_* integer, which client queries compare with "Video", "Pro"...
+            else if (tag.name().equals(Tag.NAME_FILETYPE)) type = FileTypes.fromTag(tag);
             else if (tag.name().equals(Tag.NAME_FILESIZE) && tag.isInt()) size = tag.unsignedValue();
             else if (tag.name().equals(Tag.NAME_FILESIZE_HI) && tag.isInt()) sizeHigh = tag.unsignedValue();
             else if (tag.name().equals(Tag.NAME_SOURCES) && tag.isInt()) sources = tag.unsignedValue();

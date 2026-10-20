@@ -29,6 +29,22 @@ public class SearchTest {
     }
 
     @Test
+    public void fileTypeFilterUsesTheExtensionOfFilesWithoutType() {
+        SearchQuery video = new SearchQuery.TermQuery("Video", SearchQuery.ID_FILETYPE);
+        SearchQuery program = new SearchQuery.TermQuery("Pro", SearchQuery.ID_FILETYPE);
+
+        // Many servers send no FT_FILETYPE in their search results: eMule derives it from the extension
+        assertTrue(video.test(new FileMetadata("HASH1", "The Matrix (1999).MKV", 2_000_000_000L, null)));
+        assertTrue(video.test(new FileMetadata("HASH2", "matrix.avi", 700_000_000L, "")));
+        // Archives and CD images are searched as "Pro"
+        assertTrue(program.test(new FileMetadata("HASH3", "ubuntu.iso", 4_000_000_000L, "")));
+        assertTrue(program.test(new FileMetadata("HASH4", "sources.tar.gz", 1_000L, "")));
+        assertFalse(video.test(new FileMetadata("HASH5", "matrix", 700_000_000L, "")), "no extension, no type");
+        // An announced type wins over the extension
+        assertFalse(video.test(new FileMetadata("HASH6", "matrix.avi", 700_000_000L, "Audio")));
+    }
+
+    @Test
     public void testAndSearch() {
         FileMetadata meta = new FileMetadata("HASH1", "Test File.txt", 1000, "Text");
 
