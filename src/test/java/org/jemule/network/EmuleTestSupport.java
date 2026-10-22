@@ -55,6 +55,7 @@ public final class EmuleTestSupport {
         private final EventManager eventManager = new EventManager();
         private final ClientFactory clientFactory = new ClientFactory();
         private org.jemule.kad.KadSearchBridge kadSearchBridge;
+        private ServerSearchBridge serverSearchBridge;
         private ClientState state;
         private OutputStream wrappedOut;
 
@@ -70,6 +71,12 @@ public final class EmuleTestSupport {
         }
 
         @Override public org.jemule.kad.KadSearchBridge getKadSearchBridge() { return kadSearchBridge; }
+
+        public void setServerSearchBridge(ServerSearchBridge bridge) {
+            this.serverSearchBridge = bridge;
+        }
+
+        @Override public ServerSearchBridge getServerSearchBridge() { return serverSearchBridge; }
 
         @Override public Socket getSocket() { return socket; }
         @Override public ServerConfig getConfig() { return config; }

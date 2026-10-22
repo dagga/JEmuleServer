@@ -67,6 +67,11 @@ public record FileMetadata(
         this(hash, name, size, type, List.of(), new ConcurrentHashMap<>());
     }
 
+    /** False for a file known without any online source, which shares {@code NO_SOURCES}. */
+    boolean hasOwnSources() {
+        return sources != NO_SOURCES;
+    }
+
     /** A file known without any online source: no source map of its own. */
     public static FileMetadata withoutSources(String hash, String name, long size, String type, List<Tag> tags) {
         if (tags == null) return new FileMetadata(hash, name, size, type, null, NO_SOURCES);
