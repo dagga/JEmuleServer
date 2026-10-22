@@ -19,74 +19,47 @@
 package org.jemule.core;
 
 import java.util.Arrays;
-import java.util.Iterator;
-import java.util.NoSuchElementException;
+import java.util.function.IntConsumer;
 
 /**
- * Hashes of the files whose name contains one word of the inverted index: an array of references to the hash
- * strings, 4 to 8 bytes per file instead of about 45 for a concurrent set. Readers iterate an immutable state (array,
- * size) without locking: an append writes past the size they see then publishes a new state, a removal copies the
- * array. The caller must not add a hash twice.
+ * Numbers ({@link FileTable}) of the files whose name contains one word of the inverted index: 4 bytes per file.
+ * Written under the write lock of {@link FileIndex} and read under its read lock. The caller must not add a number
+ * twice.
  */
-final class Postings implements Iterable<String> {
-    private record State(String[] hashes, int size) {}
+final class Postings {
+    private int[] ids;
+    private int size;
 
-    private volatile State state;
-
-    Postings(String first) {
-        state = new State(new String[]{first}, 1);
+    Postings(int first) {
+        ids = new int[]{first};
+        size = 1;
     }
 
-    synchronized void add(String hash) {
-        State s = state;
-        String[] hashes = s.hashes();
-        if (s.size() == hashes.length) {
-            hashes = Arrays.copyOf(hashes, hashes.length + Math.max(1, hashes.length >> 1));
-        }
-        hashes[s.size()] = hash;
-        state = new State(hashes, s.size() + 1);
+    void add(int id) {
+        if (size == ids.length) ids = Arrays.copyOf(ids, ids.length + Math.max(1, ids.length >> 1));
+        ids[size++] = id;
     }
 
-    /** Removes a hash; the array is copied, so that readers keep iterating a consistent state. */
-    synchronized void remove(String hash) {
-        State s = state;
-        for (int i = 0; i < s.size(); i++) {
-            if (s.hashes()[i].equals(hash)) {
-                String[] copy = new String[Math.max(1, s.size() - 1)];
-                System.arraycopy(s.hashes(), 0, copy, 0, i);
-                System.arraycopy(s.hashes(), i + 1, copy, i, s.size() - i - 1);
-                state = new State(copy, s.size() - 1);
+    void remove(int id) {
+        for (int i = 0; i < size; i++) {
+            if (ids[i] == id) {
+                System.arraycopy(ids, i + 1, ids, i, size - i - 1);
+                size--;
                 return;
             }
         }
     }
 
     /** Drops the free slots left by the growth of the array (up to a third of it), once the files are loaded. */
-    synchronized void trim() {
-        State s = state;
-        if (s.hashes().length > s.size()) state = new State(Arrays.copyOf(s.hashes(), s.size()), s.size());
+    void trim() {
+        if (ids.length > size) ids = Arrays.copyOf(ids, size);
     }
 
     int size() {
-        return state.size();
+        return size;
     }
 
-    @Override
-    public Iterator<String> iterator() {
-        State s = state;
-        return new Iterator<>() {
-            private int next;
-
-            @Override
-            public boolean hasNext() {
-                return next < s.size();
-            }
-
-            @Override
-            public String next() {
-                if (next >= s.size()) throw new NoSuchElementException();
-                return s.hashes()[next++];
-            }
-        };
+    void forEach(IntConsumer action) {
+        for (int i = 0; i < size; i++) action.accept(ids[i]);
     }
 }

@@ -29,16 +29,23 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.atomic.LongAdder;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /**
  * Manages the global file index for the server.
  * Provides fast full-text and complex search capabilities using an inverted index.
+ * <p>
+ * The files are stored by number in a {@link FileTable}; the {@link FileMetadata} returned are built from it on
+ * demand, their source map being the live one. The searches read under a read lock, so that they run in parallel;
+ * adding or removing a file takes the write lock for that file only.
  */
 public class FileIndex {
     private static final Logger log = LoggerFactory.getLogger(FileIndex.class);
     private static final Comparator<FileMetadata> SOURCE_COUNT_ORDER =
             Comparator.comparingInt(FileMetadata::sourceCount).reversed();
-    private final ConcurrentHashMap<String, FileMetadata> byHash = new ConcurrentHashMap<>();
+    private final FileTable table = new FileTable();
+    /** Guards {@link #table} and the postings of {@link #invertedIndex}. */
+    private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
     private final ConcurrentSkipListMap<String, Postings> invertedIndex = new ConcurrentSkipListMap<>();
     /** Words of {@link #invertedIndex}, searched by substring. */
     private final WordDictionary dictionary = new WordDictionary();
@@ -92,8 +99,14 @@ public class FileIndex {
                 if (!rejected.isEmpty()) {
                     log.warn("Deleted {} child abuse file(s) from the database", rejected.size());
                 }
-                // The arrays of the inverted index grew by half at a time while loading: their free slots go
-                invertedIndex.values().forEach(Postings::trim);
+                // The arrays grew by half at a time while loading: their free slots go
+                lock.writeLock().lock();
+                try {
+                    invertedIndex.values().forEach(Postings::trim);
+                    table.trim();
+                } finally {
+                    lock.writeLock().unlock();
+                }
             } catch (Exception e) {
                 // If DB fails during load, we continue with empty memory index
                 // DatabaseManager with CircuitBreaker should handle specific errors
@@ -133,7 +146,7 @@ public class FileIndex {
      * <b>added</b> to the existing entry: every client sharing a file must be returned as a source.
      *
      * @param meta The file metadata to add, carrying the publishing client(s) in {@link FileMetadata#sources()}.
-     * @return the metadata instance now stored in the index for this hash
+     * @return the file as now stored in the index for this hash
      */
     public FileMetadata addFile(FileMetadata meta) {
         return addFile(meta, FileSource.UNKNOWN);
@@ -179,57 +192,77 @@ public class FileIndex {
 
     private FileMetadata addFileInternal(FileMetadata meta, Writes writes, FileSource source) {
         FileMetadata incoming = meta.indexed();
-        boolean[] isNew = {false};
-        boolean[] isNewHash = {false};
-        boolean[] sourceCountChanged = {false};
-        FileMetadata[] replaced = {null};
-        FileMetadata stored = byHash.compute(meta.hash(), (h, existing) -> {
+        boolean isNew = false;
+        boolean isNewHash = false;
+        boolean sourceCountChanged = false;
+        FileMetadata replaced = null;
+        FileMetadata stored;
+        lock.writeLock().lock();
+        try {
+            int id = table.find(incoming.hash());
+            FileMetadata existing = id < 0 ? null : table.view(id);
             if (existing == null || (existing.sources().isEmpty() && !incoming.sources().isEmpty())) {
                 // unknown file, or a file without online source (e.g. loaded from the database) published by a
-                // client: take the new metadata. A search result of a known hash keeps the entry below.
-                FileMetadata selected = incoming;
+                // client: take the new metadata, under the hash the database knows. A search result of a known hash
+                // keeps the entry below.
+                FileMetadata selected = existing == null ? incoming : withHash(incoming, existing.hash());
                 int knownSources = existing == null ? 0 : existing.sourceCount();
                 if (selected.sourceCount() < knownSources) {
                     selected = selected.withSourceCount(knownSources);
                 }
-                isNew[0] = true;
-                isNewHash[0] = existing == null;
-                replaced[0] = existing;
-                return selected;
+                isNew = true;
+                isNewHash = existing == null;
+                replaced = existing;
+                stored = selected;
+                if (existing == null) {
+                    id = table.add(stored);
+                } else {
+                    table.set(id, stored);
+                }
+                // A file published again under the same name keeps its words; under another name, it is reindexed
+                if (replaced == null || !Objects.equals(replaced.name(), stored.name())) {
+                    if (replaced != null) unindexTokens(id, replaced.name());
+                    indexTokens(id, stored.name());
+                }
+            } else {
+                existing.sources().putAll(incoming.sources());
+                int mergedSourceCount = Math.max(existing.sourceCount(), incoming.sourceCount());
+                if (mergedSourceCount > existing.sourceCount()) {
+                    sourceCountChanged = true;
+                    stored = existing.withSourceCount(mergedSourceCount);
+                    table.set(id, stored);
+                } else {
+                    stored = existing;
+                }
             }
-            existing.sources().putAll(incoming.sources());
-            int mergedSourceCount = Math.max(existing.sourceCount(), incoming.sourceCount());
-            if (mergedSourceCount > existing.sourceCount()) {
-                sourceCountChanged[0] = true;
-                return existing.withSourceCount(mergedSourceCount);
-            }
-            return existing;
-        });
-        if (isNew[0]) {
-            if (isNewHash[0]) {
+        } finally {
+            lock.writeLock().unlock();
+        }
+        if (isNew) {
+            if (isNewHash) {
                 newFilesBySource.computeIfAbsent(source, k -> new LongAdder()).increment();
-            }
-            // A file published again under the same name keeps its words; under another name, it is reindexed
-            if (replaced[0] == null || !Objects.equals(replaced[0].name(), stored.name())) {
-                if (replaced[0] != null) unindexTokens(replaced[0]);
-                indexTokens(stored);
             }
             searchCache.clear(); // Invalidate cache when adding a new file
             // The index holds every hash of the database: an unknown hash is written whole, a known one only when
             // its source count rose
-            if (isNewHash[0]) {
+            if (isNewHash) {
                 writes.files().add(stored);
-            } else if (stored.sourceCount() > replaced[0].sourceCount()) {
+            } else if (stored.sourceCount() > replaced.sourceCount()) {
                 writes.sourceCounts().add(stored);
             }
             if (eventManager != null) {
                 eventManager.broadcast(new FileEvent(FileEvent.PUBLISHED, stored.name(), stored.hash(), "File published: " + stored.name()));
             }
-        } else if (sourceCountChanged[0]) {
+        } else if (sourceCountChanged) {
             searchCache.clear();
             writes.sourceCounts().add(stored); // the hash is already stored: only its count is written
         }
         return stored;
+    }
+
+    private static FileMetadata withHash(FileMetadata meta, String hash) {
+        return hash.equals(meta.hash()) ? meta
+                : new FileMetadata(hash, meta.name(), meta.size(), meta.type(), meta.tags(), meta.sources());
     }
 
     /**
@@ -238,11 +271,17 @@ public class FileIndex {
      */
     public void removeSource(ClientState client) {
         String key = sourceKey(client);
-        for (String hash : client.publishedHashes()) {
-            FileMetadata meta = byHash.get(hash);
-            if (meta != null) {
-                meta.sources().remove(key);
+        lock.readLock().lock();
+        try {
+            for (String hash : client.publishedHashes()) {
+                int id = table.find(hash);
+                ConcurrentHashMap<String, ClientState> sources = id < 0 ? null : table.sources(id);
+                if (sources != null) {
+                    sources.remove(key);
+                }
             }
+        } finally {
+            lock.readLock().unlock();
         }
         client.publishedHashes().clear();
     }
@@ -254,13 +293,19 @@ public class FileIndex {
      * @return true if the file was indexed
      */
     public boolean removeFile(String hash) {
-        FileMetadata meta = byHash.remove(hash.toLowerCase(Locale.ROOT));
-        if (meta == null) meta = byHash.remove(hash.toUpperCase(Locale.ROOT));
-        if (meta == null) return false;
-        unindexTokens(meta);
+        String hashToDelete;
+        lock.writeLock().lock();
+        try {
+            int id = table.find(hash);
+            if (id < 0) return false;
+            hashToDelete = table.hash(id);
+            unindexTokens(id, table.name(id));
+            table.remove(id);
+        } finally {
+            lock.writeLock().unlock();
+        }
         searchCache.clear();
         if (db != null) {
-            String hashToDelete = meta.hash();
             persistence.execute(() -> db.deleteFile(hashToDelete)); // after any queued write of this file
         }
         return true;
@@ -280,11 +325,12 @@ public class FileIndex {
         if (!writes.sourceCounts().isEmpty()) persistence.execute(() -> db.saveSourceCounts(writes.sourceCounts()));
     }
 
-    private void unindexTokens(FileMetadata meta) {
-        for (String t : words(meta.name())) {
-            invertedIndex.computeIfPresent(t, (k, hashes) -> {
-                hashes.remove(meta.hash());
-                return hashes.size() == 0 ? null : hashes;
+    /** Called with the write lock held. */
+    private void unindexTokens(int id, String name) {
+        for (String t : words(name)) {
+            invertedIndex.computeIfPresent(t, (k, ids) -> {
+                ids.remove(id);
+                return ids.size() == 0 ? null : ids;
             });
         }
     }
@@ -302,22 +348,25 @@ public class FileIndex {
 
     private void indexInMemory(FileMetadata meta) {
         FileMetadata indexed = meta.indexed();
-        byHash.put(indexed.hash(), indexed);
-        indexTokens(indexed);
+        lock.writeLock().lock();
+        try {
+            if (table.find(indexed.hash()) >= 0) return; // the same hash in another case
+            indexTokens(table.add(indexed), indexed.name());
+        } finally {
+            lock.writeLock().unlock();
+        }
     }
 
-    private void indexTokens(FileMetadata meta) {
-        for (String t : words(meta.name())) {
-            Postings hashes = invertedIndex.get(t);
-            if (hashes == null) {
-                Postings created = new Postings(meta.hash());
-                hashes = invertedIndex.putIfAbsent(t, created);
-                if (hashes == null) {
-                    dictionary.add(t); // once in the index, so that a dictionary rebuild cannot miss it
-                    continue;
-                }
+    /** Called with the write lock held. */
+    private void indexTokens(int id, String name) {
+        for (String t : words(name)) {
+            Postings ids = invertedIndex.get(t);
+            if (ids == null) {
+                invertedIndex.put(t, new Postings(id));
+                dictionary.add(t); // once in the index, so that a dictionary rebuild cannot miss it
+            } else {
+                ids.add(id);
             }
-            hashes.add(meta.hash());
         }
     }
 
@@ -331,14 +380,17 @@ public class FileIndex {
      * @return A list of {@link ClientState} representing sources.
      */
     public List<ClientState> getSources(String hash, ClientState requester, int limit) {
-        FileMetadata m = byHash.get(hash);
-        if (m == null) return Collections.emptyList();
-        
-        // Avoid full copy if possible
-        Collection<ClientState> sources = m.sources().values();
-        if (sources.isEmpty()) return Collections.emptyList();
-
-        List<ClientState> all = new ArrayList<>(sources);
+        List<ClientState> all;
+        lock.readLock().lock();
+        try {
+            int id = table.find(hash);
+            ConcurrentHashMap<String, ClientState> sources = id < 0 ? null : table.sources(id);
+            if (sources == null || sources.isEmpty()) return Collections.emptyList();
+            all = new ArrayList<>(sources.values());
+        } finally {
+            lock.readLock().unlock();
+        }
+        if (all.isEmpty()) return Collections.emptyList();
         if (all.size() <= limit && requester == null) {
             Collections.shuffle(all);
             return all;
@@ -383,37 +435,43 @@ public class FileIndex {
             eventManager.broadcast(new FileEvent(FileEvent.SEARCHED, query.toString(), "", "Complex search executed"));
         }
         if (limit <= 0) return List.of();
-        List<Postings> postings = candidates(query);
-        if (postings == null) {
-            // No keyword constrains the file name (e.g. a type or size filter alone): every file is tested
-            return byHash.values().stream()
-                    .filter(query)
-                    .sorted(SOURCE_COUNT_ORDER)
-                    .limit(limit)
-                    .toList();
-        }
-        // Only the files indexed under a word containing a keyword are tested; a file may appear in several sets
-        Map<String, FileMetadata> results = new LinkedHashMap<>();
-        for (Postings hashes : postings) {
-            for (String hash : hashes) {
-                if (results.containsKey(hash)) continue;
-                FileMetadata meta = byHash.get(hash);
-                if (meta != null && query.test(meta)) {
-                    results.put(hash, meta);
+        List<FileMetadata> results = new ArrayList<>();
+        lock.readLock().lock();
+        try {
+            List<Postings> postings = candidates(query);
+            if (postings == null) {
+                // No keyword constrains the file name (e.g. a type or size filter alone): every file is tested
+                table.forEach(id -> {
+                    FileMetadata meta = table.view(id);
+                    if (query.test(meta)) results.add(meta);
+                });
+            } else {
+                // Only the files indexed under a word containing a keyword are tested; a file may appear in
+                // several sets
+                BitSet tested = new BitSet();
+                for (Postings ids : postings) {
+                    ids.forEach(id -> {
+                        if (tested.get(id)) return;
+                        tested.set(id);
+                        FileMetadata meta = table.view(id);
+                        if (query.test(meta)) results.add(meta);
+                    });
                 }
             }
+        } finally {
+            lock.readLock().unlock();
         }
-        return results.values().stream()
+        return results.stream()
                 .sorted(SOURCE_COUNT_ORDER)
                 .limit(limit)
                 .toList();
     }
 
     /**
-     * Files that may match a query: every match belongs to one of the returned hash sets, or null when the query
-     * does not constrain the file name. A file name keyword matches a name that contains it ({@link
+     * Files that may match a query: every match belongs to one of the returned sets, or null when the query does
+     * not constrain the file name. A file name keyword matches a name that contains it ({@link
      * SearchQuery.TermQuery}); made of letters and digits only, it can only lie inside one word of the name, so the
-     * files to test are those indexed under the words containing it.
+     * files to test are those indexed under the words containing it. Called with the read lock held.
      */
     private List<Postings> candidates(SearchQuery query) {
         return switch (query) {
@@ -425,10 +483,10 @@ public class FileIndex {
                     List<Postings> sets = new ArrayList<>();
                     long size = 0;
                     for (String word : dictionary.wordsContaining(token, invertedIndex.keySet())) {
-                        Postings hashes = invertedIndex.get(word);
-                        if (hashes != null) {
-                            sets.add(hashes);
-                            size += hashes.size();
+                        Postings ids = invertedIndex.get(word);
+                        if (ids != null) {
+                            sets.add(ids);
+                            size += ids.size();
                         }
                     }
                     if (size < bestSize) {
@@ -477,11 +535,20 @@ public class FileIndex {
             eventManager.broadcast(new FileEvent(FileEvent.SEARCHED, query, "", "Search executed: " + query));
         }
         if (query == null || query.trim().isEmpty()) {
-            return byHash.values().stream().limit(limit).toList();
+            List<FileMetadata> all = new ArrayList<>();
+            lock.readLock().lock();
+            try {
+                table.forEach(id -> {
+                    if (all.size() < limit) all.add(table.view(id));
+                });
+            } finally {
+                lock.readLock().unlock();
+            }
+            return all;
         }
-        
+
         String queryLower = Keywords.normalize(query).trim();
-        
+
         // Cache check
         String cacheKey = queryLower + "|" + limit;
         List<FileMetadata> cached = searchCache.get(cacheKey);
@@ -489,38 +556,40 @@ public class FileIndex {
             return cached;
         }
 
-        String[] tokens = Keywords.split(queryLower);
-        Set<String> candidates = null;
-        for (String t : tokens) {
-            if (t.isEmpty()) continue;
-            
-            Set<String> matches = new HashSet<>();
-            
-            // Optimized prefix search via subMap (O(log n))
-            String nextPrefix = t.substring(0, t.length() - 1) + (char) (t.charAt(t.length() - 1) + 1);
-            SortedMap<String, Postings> prefixMatches = invertedIndex.subMap(t, nextPrefix);
-            for (Postings fileHashes : prefixMatches.values()) {
-                fileHashes.forEach(matches::add);
-            }
-            
-            if (matches.isEmpty()) return Collections.emptyList();
-            candidates = (candidates == null) ? new HashSet<>(matches) : candidates;
-            candidates.retainAll(matches);
-            if (candidates.isEmpty()) break;
-        }
-        
-        if (candidates == null || candidates.isEmpty()) return Collections.emptyList();
+        List<FileMetadata> res = new ArrayList<>();
+        lock.readLock().lock();
+        try {
+            BitSet candidates = null;
+            for (String t : Keywords.split(queryLower)) {
+                if (t.isEmpty()) continue;
 
-        List<FileMetadata> res = new ArrayList<>(Math.min(candidates.size(), limit));
-        for (String h : candidates) {
-            FileMetadata m = byHash.get(h);
-            if (m != null) res.add(m);
-            if (res.size() >= limit) break;
+                // Optimized prefix search via subMap (O(log n))
+                BitSet matches = new BitSet();
+                String nextPrefix = t.substring(0, t.length() - 1) + (char) (t.charAt(t.length() - 1) + 1);
+                for (Postings ids : invertedIndex.subMap(t, nextPrefix).values()) {
+                    ids.forEach(matches::set);
+                }
+
+                if (matches.isEmpty()) return Collections.emptyList();
+                if (candidates == null) {
+                    candidates = matches;
+                } else {
+                    candidates.and(matches);
+                }
+                if (candidates.isEmpty()) break;
+            }
+            if (candidates == null || candidates.isEmpty()) return Collections.emptyList();
+
+            for (int id = candidates.nextSetBit(0); id >= 0 && res.size() < limit; id = candidates.nextSetBit(id + 1)) {
+                res.add(table.view(id));
+            }
+        } finally {
+            lock.readLock().unlock();
         }
-        
+
         // Cache the result
         searchCache.put(cacheKey, res);
-        
+
         return res;
     }
 
@@ -529,9 +598,14 @@ public class FileIndex {
         return invertedIndex.size();
     }
 
-    /** True if a file with this hash is indexed. */
+    /** True if a file with this hash is indexed (case ignored for hexadecimal hashes). */
     public boolean contains(String hash) {
-        return byHash.containsKey(hash);
+        lock.readLock().lock();
+        try {
+            return table.find(hash) >= 0;
+        } finally {
+            lock.readLock().unlock();
+        }
     }
 
     /**
@@ -540,7 +614,12 @@ public class FileIndex {
      * @return The file count.
      */
     public int fileCount() {
-        return byHash.size();
+        lock.readLock().lock();
+        try {
+            return table.count();
+        } finally {
+            lock.readLock().unlock();
+        }
     }
 
     /** Number of new files (a hash not indexed before) inserted since server start, for one ingestion channel. */
