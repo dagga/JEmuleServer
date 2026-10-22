@@ -73,6 +73,7 @@ public class Server {
     private final ClientRegistry registry = new ClientRegistry();
     private final java.util.Set<Socket> clientSockets = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private final FileIndex fileIndex;
+    private final org.jemule.core.MetricsHistory metricsHistory;
     private final FloodProtector floodProtector;
     private final IPFilter ipFilter;
     private final IPFilterUpdater ipFilterUpdater;
@@ -240,6 +241,7 @@ public class Server {
         this.abuseFilter = ChildAbuseFilter.load(config.childAbuseKeywordsPath());
         this.fileIndex = new FileIndex(db, eventManager, abuseFilter);
         this.fileIndex.setPersistenceExecutor(ingestion);
+        this.metricsHistory = new org.jemule.core.MetricsHistory(db);
         String heapWarning = heapWarning(Runtime.getRuntime().maxMemory(), fileIndex.fileCount());
         if (heapWarning != null) {
             log.warn(heapWarning);
@@ -788,6 +790,9 @@ public class Server {
 
             startIpFilterLoading();
             startServerMetLoading();
+            // Curves of the admin panel: one sample now, then every 5 minutes (maintenance tier)
+            maintenance.scheduleAtFixedRate(this::recordMetrics, 0, org.jemule.core.MetricsHistory.INTERVAL_MS,
+                    TimeUnit.MILLISECONDS);
             startUdpResponder();
             startKadNode();
             startAdminInterface();
@@ -1275,6 +1280,19 @@ public class Server {
      */
     public FileIndex getFileIndex() {
         return fileIndex;
+    }
+
+    /** Samples of the index size and of the connected clients, for the curves of the admin panel. */
+    org.jemule.core.MetricsHistory getMetricsHistory() {
+        return metricsHistory;
+    }
+
+    private void recordMetrics() {
+        try {
+            metricsHistory.record(System.currentTimeMillis(), fileIndex.fileCount(), registry.size());
+        } catch (RuntimeException e) {
+            log.warn("Could not record the metrics sample: {}", e.getMessage());
+        }
     }
 
     /**

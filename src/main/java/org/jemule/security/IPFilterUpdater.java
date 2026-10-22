@@ -55,10 +55,7 @@ public final class IPFilterUpdater implements AutoCloseable {
             org.jemule.core.ServerThreads.maintenanceScheduler("ipfilter-updater");
 
     public IPFilterUpdater(IPFilter filter, Path destination, List<URI> sources) {
-        this(filter, destination, sources, HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(15))
-                .followRedirects(HttpClient.Redirect.NORMAL)
-                .build());
+        this(filter, destination, sources, org.jemule.core.SharedHttpClient.get());
     }
 
     IPFilterUpdater(IPFilter filter, Path destination, List<URI> sources, HttpClient httpClient) {

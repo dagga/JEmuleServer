@@ -65,10 +65,7 @@ public final class KadNodesUpdater implements AutoCloseable {
     private volatile String lastSource = "";
 
     public KadNodesUpdater(KadBootstrapManager bootstrapManager, Path cache, List<URI> sources) {
-        this(bootstrapManager, cache, sources, HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(15))
-                .followRedirects(HttpClient.Redirect.NORMAL)
-                .build());
+        this(bootstrapManager, cache, sources, org.jemule.core.SharedHttpClient.get());
     }
 
     KadNodesUpdater(KadBootstrapManager bootstrapManager, Path cache, List<URI> sources, HttpClient httpClient) {
