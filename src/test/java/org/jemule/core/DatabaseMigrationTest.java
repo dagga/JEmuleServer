@@ -43,6 +43,10 @@ class DatabaseMigrationTest {
             insertTag(c, "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", Tag.TYPE_UINT64, Tag.NAME_SOURCES, "99999999999");
             insertTag(c, "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC", Tag.TYPE_STRING, Tag.NAME_SOURCES, "not a number");
             stmt.execute("INSERT INTO file_sources VALUES ('CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC', 8)");
+            // Left by a migration interrupted before the swap: dropped and done again
+            stmt.execute("CREATE TABLE file_tags_new (file_hash VARCHAR(32), tag_type TINYINT, tag_name VARCHAR(255), "
+                    + "tag_value_str TEXT, tag_value_blob BLOB)");
+            stmt.execute("INSERT INTO file_tags_new (file_hash, tag_name, tag_value_str) VALUES ('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', 'x', 'stale')");
         }
 
         try (DatabaseManager db = new DatabaseManager(dbPath)) {
@@ -79,5 +83,15 @@ class DatabaseMigrationTest {
             ps.setString(4, value);
             ps.executeUpdate();
         }
+    }
+
+    @Test
+    void storedSourceCountsAreParsedAndCapped() {
+        assertEquals(12, DatabaseManager.sourceCount("12"));
+        assertEquals(Integer.MAX_VALUE, DatabaseManager.sourceCount("99999999999"));
+        assertEquals(null, DatabaseManager.sourceCount("-3"));
+        assertEquals(null, DatabaseManager.sourceCount("not a number"));
+        assertEquals(null, DatabaseManager.sourceCount("1234567890123456789"));
+        assertEquals(null, DatabaseManager.sourceCount(null));
     }
 }
