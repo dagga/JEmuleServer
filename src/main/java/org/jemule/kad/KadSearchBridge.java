@@ -22,6 +22,7 @@ import org.jemule.core.DatabaseManager;
 import org.jemule.core.FileIndex;
 import org.jemule.core.FileSource;
 import org.jemule.core.IngestionExecutor;
+import org.jemule.core.Md4Set;
 import org.jemule.core.RecentQueries;
 import org.jemule.core.ServerThreads;
 import org.jemule.core.FileMetadata;
@@ -106,7 +107,8 @@ public class KadSearchBridge implements AutoCloseable {
     private final ConcurrentHashMap<SessionKey, KadSearchSession> activeSessions = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<KadId, NodeLookup> pendingLookups = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<KadId, ClosestNodes> closestNodes = new ConcurrentHashMap<>();
-    private final Set<String> bannedHashes = ConcurrentHashMap.newKeySet();
+    /** The banned hashes of the FakeFileDetector: one set in memory for both. */
+    private final Md4Set bannedHashes;
     private final List<IllicitFileListener> illicitListeners = new CopyOnWriteArrayList<>();
 
     private final AtomicLong searchesForked = new AtomicLong(0);
@@ -239,6 +241,8 @@ public class KadSearchBridge implements AutoCloseable {
         this.udpService = Objects.requireNonNull(udpService, "udpService cannot be null");
         this.abuseFilter = abuseFilter != null ? abuseFilter : ChildAbuseFilter.defaults();
         this.fakeDetector = fakeDetector != null ? fakeDetector : new FakeFileDetector();
+        Md4Set shared = this.fakeDetector.bannedHashes();
+        this.bannedHashes = shared != null ? shared : new Md4Set(); // null for a mocked detector
         this.fileIndex = fileIndex;
         this.databaseManager = databaseManager;
         this.alphaNodes = Math.max(1, alphaNodes);

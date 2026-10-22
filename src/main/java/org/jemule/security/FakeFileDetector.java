@@ -1,13 +1,12 @@
 package org.jemule.security;
 
 import org.jemule.core.DatabaseManager;
+import org.jemule.core.Md4Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.jemule.core.Keywords;
 
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
 
 /**
@@ -26,8 +25,8 @@ public class FakeFileDetector {
             "password list", "account hacker", "credit card", "cheat engine", "private video"
     };
 
-    // Written by the admin console and read by every client thread
-    private final Set<String> bannedHashes = ConcurrentHashMap.newKeySet();
+    // Written by the admin console and read by every client thread; shared with the Kad search bridge
+    private final Md4Set bannedHashes = new Md4Set();
     private volatile DatabaseManager db;
     private volatile boolean enabled = true;
 
@@ -116,6 +115,11 @@ public class FakeFileDetector {
         if (database != null) {
             database.addBannedHash(hash.toUpperCase(), reason.length() > 255 ? reason.substring(0, 255) : reason);
         }
+    }
+
+    /** The banned hashes, shared by the components that check them (one copy in memory). */
+    public Md4Set bannedHashes() {
+        return bannedHashes;
     }
 
     public void addBannedHash(String hash) {

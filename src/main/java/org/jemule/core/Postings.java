@@ -61,6 +61,12 @@ final class Postings implements Iterable<String> {
         }
     }
 
+    /** Drops the free slots left by the growth of the array (up to a third of it), once the files are loaded. */
+    synchronized void trim() {
+        State s = state;
+        if (s.hashes().length > s.size()) state = new State(Arrays.copyOf(s.hashes(), s.size()), s.size());
+    }
+
     int size() {
         return state.size();
     }
