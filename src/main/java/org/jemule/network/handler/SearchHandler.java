@@ -4,6 +4,7 @@ import org.jemule.core.FileMetadata;
 import org.jemule.core.ClientState;
 import org.jemule.core.SearchQuery;
 import org.jemule.kad.KadSearchBridge;
+import org.jemule.network.ServerSearchBridge;
 import org.jemule.network.Packet;
 import org.jemule.protocol.OpCode;
 import org.jemule.protocol.Tag;
@@ -114,17 +115,24 @@ public class SearchHandler {
                                                                        byte[] searchTree) {
         if (query == null) return null;
         List<CompletableFuture<List<FileMetadata>>> futures = new ArrayList<>();
-        try {
-            KadSearchBridge kadBridge = context.getKadSearchBridge();
-            if (kadBridge != null) {
+        // Each network is searched on its own: a failure of Kad must not keep the search from the eD2K servers
+        KadSearchBridge kadBridge = context.getKadSearchBridge();
+        if (kadBridge != null) {
+            try {
                 CompletableFuture<List<FileMetadata>> future = kadBridge.forkSearch(query);
                 if (future != null) futures.add(future);
+            } catch (Exception e) {
+                log.debug("Error initiating the Kad search for {}: {}", query, e.getMessage());
             }
-            if (context.getServerSearchBridge() != null) {
-                futures.add(context.getServerSearchBridge().forkSearch(query, searchTree));
+        }
+        ServerSearchBridge serverBridge = context.getServerSearchBridge();
+        if (serverBridge != null) {
+            try {
+                CompletableFuture<List<FileMetadata>> future = serverBridge.forkSearch(query, searchTree);
+                if (future != null) futures.add(future);
+            } catch (Exception e) {
+                log.debug("Error initiating the eD2K server search for {}: {}", query, e.getMessage());
             }
-        } catch (Exception e) {
-            log.debug("Error initiating remote search for {}: {}", query, e.getMessage());
         }
         if (futures.isEmpty()) return null;
         List<CompletableFuture<List<FileMetadata>>> safeFutures = futures.stream()
