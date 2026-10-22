@@ -1,6 +1,6 @@
 # JEmuleServer
 
-JEmuleServer is an eMule server written in Java (version 1.2.14).
+JEmuleServer is an eMule server written in Java (version 1.2.15).
 
 Downloads (installers and JAR) are on the [releases page](https://github.com/dagga/JEmuleServer/releases); the changes
 of each version are described in `doc/release-notes-v<version>.md` (latest: [1.2.9](doc/release-notes-v1.2.9.md)).
@@ -27,7 +27,7 @@ Building requires a JDK 21 (Gradle toolchain). To compile the project and genera
 ./gradlew build
 ```
 
-The JAR file will be generated in `build/libs/JEmuleServer-1.2.14.jar`.
+The JAR file will be generated in `build/libs/JEmuleServer-1.2.15.jar`.
 
 ## Installation from the release packages
 
@@ -68,7 +68,7 @@ the JAR for IPv6.
 Once the project is compiled, you can start the server with the following command:
 
 ```bash
-java -XX:MaxRAMPercentage=75 -XX:ThreadPriorityPolicy=1 --add-modules=jdk.httpserver -jar build/libs/JEmuleServer-1.2.14.jar [config_file] [port]
+java -XX:MaxRAMPercentage=75 -XX:ThreadPriorityPolicy=1 --add-modules=jdk.httpserver -jar build/libs/JEmuleServer-1.2.15.jar [config_file] [port]
 ```
 
 - `-XX:ThreadPriorityPolicy=1`: on Linux, the JVM ignores thread priorities without it. The server runs its threads
@@ -88,7 +88,13 @@ java -XX:MaxRAMPercentage=75 -XX:ThreadPriorityPolicy=1 --add-modules=jdk.httpse
 ### Memory sizing
 
 Every known file is kept in memory for the searches: plan about 360 MB of index heap per 1,000,000 files (363 MB for
-999,913 files in the latest `./gradlew benchmark -Pfiles=1000000 -Pheap=768m -Pcpus=1` run, see below). The JVM only
+999,913 files in the latest Only the tags searches filter on are kept (source count, artist, album, title, length, bitrate, codec, rating); the
+name, size and type are fields of each file. A database written by version 1.2.14 or older is migrated at the first
+start: the source counts move to the `file_sources` table, the other tags are deleted, then the file is compacted.
+The progress is logged on the console (a few minutes for a few million tag rows); a migration interrupted halfway
+resumes at the next start.
+
+`./gradlew benchmark -Pfiles=1000000 -Pheap=768m -Pcpus=1` run, see below). The JVM only
 takes a quarter of the RAM by default; on a small dedicated server, let it use more, e.g.
 `java -XX:MaxRAMPercentage=75 -jar ...` (the .deb and .rpm launchers already do). With 1,000,000 files, a 1 GB
 server with one vCPU starts in about 30 s and answers searches in a few milliseconds.

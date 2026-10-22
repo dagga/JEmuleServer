@@ -89,9 +89,12 @@ class IndexedSearchTest {
     void limitAndRenamedFilesAreHandled() {
         assertEquals(10, index.searchComplex(term("the"), 10).size());
 
-        // A file republished under another name (no source left) is found under its new name only
+        // A file published by a client under another name (no source left) is found under its new name only
         String hash = files.getFirst().hash();
-        index.addFile(new FileMetadata(hash, "brand new title.avi", 1000, "Video"));
+        FileMetadata renamed = new FileMetadata(hash, "brand new title.avi", 1000, "Video");
+        renamed.sources().put("10.0.0.1:4662", new ClientState(java.net.InetAddress.getLoopbackAddress(), 4662, 1,
+                System.currentTimeMillis(), new java.util.concurrent.atomic.AtomicLong()));
+        index.addFile(renamed);
         files.set(0, new FileMetadata(hash, "brand new title.avi", 1000, "Video"));
         assertSameAsFullScan(term("brand"));
         assertSameAsFullScan(term(files.get(1).name().split("[^\\p{L}\\p{N}]+")[0]));

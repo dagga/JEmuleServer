@@ -21,6 +21,7 @@ package org.jemule.core;
 import org.jemule.protocol.Tag;
 
 import java.util.AbstractList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.RandomAccess;
@@ -81,6 +82,38 @@ public record FileMetadata(
 
     public FileMetadata(String hash, String name, long size, String type, List<Tag> tags) {
         this(hash, name, size, type, tags, new ConcurrentHashMap<>());
+    }
+
+    /**
+     * Whether the index keeps a tag: the source count and the media tags searches filter on ({@link SearchQuery}).
+     * The name, size and type are fields; the other tags (FT_FILENAME, FT_FILESIZE, FT_FILEFORMAT...) are dropped.
+     */
+    public static boolean isIndexedTag(String name) {
+        if (name == null || name.length() != 1) return false;
+        int id = name.charAt(0);
+        return id == (SearchQuery.ID_SOURCES & 0xFF) || id == (SearchQuery.ID_FILERATING & 0xFF)
+                || (id >= (SearchQuery.ID_MEDIA_ARTIST & 0xFF) && id <= (SearchQuery.ID_MEDIA_CODEC & 0xFF));
+    }
+
+    /** This file with only the tags the index keeps, their names shared ({@link Tag#idName}). */
+    public FileMetadata indexed() {
+        if (tags == null || tags.isEmpty()) return this;
+        if (tags instanceof CompactTags compact ? compact.retainedIndexed() : allIndexed(tags)) return this;
+        List<Tag> kept = new java.util.ArrayList<>(2);
+        for (Tag tag : tags) {
+            if (isIndexedTag(tag.name())) kept.add(new Tag(tag.type(), Tag.idName(tag.name().charAt(0)), tag.value()));
+        }
+        List<Tag> indexedTags = List.copyOf(kept);
+        return sources == NO_SOURCES ? withoutSources(hash, name, size, type, indexedTags)
+                : new FileMetadata(hash, name, size, type, indexedTags, sources);
+    }
+
+    /** Whether every tag is kept by the index, under its shared name. */
+    private static boolean allIndexed(List<Tag> tags) {
+        for (Tag tag : tags) {
+            if (!isIndexedTag(tag.name()) || tag.name() != Tag.idName(tag.name().charAt(0))) return false;
+        }
+        return true;
     }
 
     /** Number of sources sharing the complete file (FT_COMPLETE_SOURCES). */
@@ -165,6 +198,11 @@ public record FileMetadata(
 
         private long sourceCount() {
             return sourceCount;
+        }
+
+        /** Whether the other tags are all kept by the index, without building the source count tag. */
+        private boolean retainedIndexed() {
+            return allIndexed(Arrays.asList(retainedTags));
         }
     }
 }

@@ -22,6 +22,7 @@ import org.jemule.core.DatabaseManager;
 import org.jemule.core.FileIndex;
 import org.jemule.core.FileSource;
 import org.jemule.core.IngestionExecutor;
+import org.jemule.core.RecentQueries;
 import org.jemule.core.ServerThreads;
 import org.jemule.core.FileMetadata;
 import org.jemule.core.SearchQuery;
@@ -85,6 +86,11 @@ public class KadSearchBridge implements AutoCloseable {
     static final int MAX_PAGES_PER_NODE = 3;
     /** How long the nodes found by a lookup are reused for later searches of the same keyword. */
     private static final long CLOSEST_NODES_TTL_MS = 120_000;
+    /** Time during which an identical search is sent on Kad at most {@link #MAX_REPLAYS} times. */
+    public static final long REPLAY_WINDOW_MS = 10 * 60_000L;
+    /** Times an identical search is sent at most within {@link #REPLAY_WINDOW_MS}. */
+    public static final int MAX_REPLAYS = 3;
+    private static final int MAX_RECENT_QUERIES = 5_000;
 
     private final KadRoutingTable routingTable;
     private final KadUdpService udpService;
@@ -113,6 +119,7 @@ public class KadSearchBridge implements AutoCloseable {
     private volatile IngestionExecutor ingestion = IngestionExecutor.direct();
 
     private volatile boolean running = false;
+    private volatile RecentQueries recentQueries = new RecentQueries(REPLAY_WINDOW_MS, MAX_REPLAYS, MAX_RECENT_QUERIES);
 
     @FunctionalInterface
     public interface IllicitFileListener {
@@ -319,6 +326,10 @@ public class KadSearchBridge implements AutoCloseable {
         // requests are sent, so that an immediate answer finds it.
         KadSearchSession created = new KadSearchSession(keywordHash, description, searchTerms);
         KadSearchSession existing = activeSessions.putIfAbsent(key, created);
+        if (existing == null && !recentQueries.tryStart(key.target().toHexString() + ':' + key.searchTerms())) {
+            activeSessions.remove(key, created);
+            return CompletableFuture.completedFuture(List.of());
+        }
         KadSearchSession session = existing != null ? existing : created;
         if (existing == null) {
             if (routingTable.findClosest(keywordHash, 1).isEmpty()) {
@@ -669,6 +680,16 @@ public class KadSearchBridge implements AutoCloseable {
 
     public int getActiveSessionCount() {
         return activeSessions.size();
+    }
+
+    /** Searches not sent because an identical one was sent {@link #MAX_REPLAYS} times within {@link #REPLAY_WINDOW_MS}. */
+    public long getSearchesSkippedAsRecent() {
+        return recentQueries.skipped();
+    }
+
+    /** Changes the time during which an identical search is sent at most {@link #MAX_REPLAYS} times (0: always sent). */
+    public void setReplayWindowMs(long windowMs) {
+        this.recentQueries = new RecentQueries(windowMs, MAX_REPLAYS, MAX_RECENT_QUERIES);
     }
 
     public long getSearchesForked() {
