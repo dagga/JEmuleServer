@@ -77,7 +77,7 @@ java -XX:MaxRAMPercentage=75 -XX:ThreadPriorityPolicy=1 --add-modules=jdk.httpse
   priority works for any user; raising the admin tier above the clients needs root or `CAP_SYS_NICE`. The startup log
   says whether the priorities are applied. The .deb and .rpm launchers already pass the option.
 - `-XX:MaxRAMPercentage=75`: lets the heap grow to 75% of the RAM instead of 25%; the .deb and .rpm launchers
-  already pass it. On a 1 GB server, prefer the explicit `-Xmx620m -Xmn48m` of the reference server (see Memory
+  already pass it. On a 1 GB server, prefer the explicit `-Xmx480m -Xmn48m` of the reference server (see Memory
   sizing below).
 
 - Note: The server binds to the IPv6 wildcard when available, so IPv6 clients can connect. Avoid forcing the JVM to
@@ -89,9 +89,11 @@ java -XX:MaxRAMPercentage=75 -XX:ThreadPriorityPolicy=1 --add-modules=jdk.httpse
 ### Memory sizing
 
 Every known file is kept in memory for the searches: its MD4 hash, name, size, type, source count and the media tags
-searches filter on, plus its entries in the inverted index of the name words. In production this comes to about
-530 bytes of heap per file, banned hashes included. Only the tags searches filter on are kept (source count, artist,
-album, title, length, bitrate, codec, rating); the name, size and type are fields of each file.
+searches filter on, plus its entries in the inverted index of the name words. The files are stored by number in
+arrays of primitive values (the MD4 hash as two 64-bit values) rather than as one object each; only the files with
+online sources or media tags get an object of their own. In production this comes to about 360 bytes of heap per
+file, banned hashes included. Only the tags searches filter on are kept (source count, artist, album, title, length,
+bitrate, codec, rating).
 
 #### Reference server: 1,000,000 files on 1 GB of RAM
 
@@ -103,30 +105,35 @@ The production server runs with this calibration:
 | Memory | 947 MB of RAM, 512 MB swap file |
 | Disk | 9.8 GB |
 | System | Fedora Linux 43 Server, OpenJDK 25 |
-| Launch | `java --add-modules=jdk.httpserver -Xmx620m -Xmn48m -XX:ThreadPriorityPolicy=1 -jar JEmuleServer-<version>.jar server.properties` |
+| Launch | `java --add-modules=jdk.httpserver -Xmx480m -Xmn48m -XX:ThreadPriorityPolicy=1 -jar JEmuleServer-<version>.jar server.properties` |
 | `server.properties` | `maxFiles=1000000` |
 
-Measured with 1.2.17, 697,353 files and 196,096 banned hashes:
+Measured with 1.2.19, 706,165 files and 196,532 banned hashes:
 
 | | |
 |---|---|
-| Live heap after a full collection | 367 MB (about 530 bytes per file) |
-| Java process | about 650 MB resident |
-| Database file (`jemule_db.mv.db`) | 160 MB after compaction (about 230 bytes per file) |
+| Live heap after a full collection | 252 MB (about 360 bytes per file) |
+| Java process | about 490 MB resident |
+| Database file (`jemule_db.mv.db`) | 168 MB (about 240 bytes per file) |
 | Startup (database load) | about 3 minutes |
+
+The same server needed 422 MB of live heap for 686,506 files with 1.2.16 (about 615 bytes per file) and swapped:
+1.2.17 shares and compacts the banned hashes, 1.2.18 stores the files in arrays, 1.2.19 shrinks the H2 cache.
 
 Why these settings:
 
 - `-Xmn48m`: on one CPU the JVM uses the serial collector, which gives a third of the heap to the young generation
   (218 MB out of 688 MB). That memory stays committed although it is almost empty after each collection; 48 MB is
   enough for the allocation rate of the server and leaves the rest to the old generation, where the index lives.
-- `-Xmx620m`: 572 MB of old generation for about 530 MB of index at 1,000,000 files, with a margin for the
-  connections and the searches. The process then takes about 730 MB, the system and kernel about 150 MB.
+- `-Xmx480m`: 432 MB of old generation for about 360 MB of index at 1,000,000 files, with about 70 MB of margin for
+  the connections, the searches and the garbage of the startup load. The process then takes at most about 560 MB,
+  the system and kernel about 150 MB, which leaves room on 947 MB without swapping.
 - `maxFiles=1000000`: bounds the index, hence the heap. Beyond it, new files are refused; files already known still
   get their new sources. It applies at once from the Settings view of the web panel, without a restart.
 
-To size another server: old generation (`-Xmx` minus `-Xmn`) of at least `maxFiles` × 550 bytes plus 50 MB, and RAM
-of at least `-Xmx` plus 250 MB. Without these options the JVM takes a quarter of the RAM; on a dedicated server
+To size another server: old generation (`-Xmx` minus `-Xmn`) of at least `maxFiles` × 380 bytes plus 60 MB, and RAM
+of at least `-Xmx` plus 250 MB. The Overview of the web panel shows the heap against its maximum and the index against
+`maxFiles`. Without these options the JVM takes a quarter of the RAM; on a dedicated server
 `-XX:MaxRAMPercentage=75` (passed by the .deb and .rpm launchers) is a simpler alternative, which leaves a larger
 young generation.
 
@@ -140,7 +147,7 @@ reports the startup time, the heap used by the index and the search latency unde
 
 #### Disk
 
-The database takes about 230 bytes per file once compacted. Keep free at least three times its size: a migration
+The database takes about 240 bytes per file. Keep free at least three times its size: a migration
 or a compaction writes the file again before releasing the old one, and `deploy.sh`-style upgrades keep a copy of it.
 The system logs (journald) also grow on a small disk: `journalctl --vacuum-size=50M` bounds them.
 
