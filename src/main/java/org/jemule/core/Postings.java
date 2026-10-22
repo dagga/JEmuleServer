@@ -36,7 +36,8 @@ final class Postings {
     }
 
     void add(int id) {
-        if (size == ids.length) ids = Arrays.copyOf(ids, ids.length + Math.max(1, ids.length >> 1));
+        // Half of the length while short, an eighth for the long lists of the common words
+        if (size == ids.length) ids = Arrays.copyOf(ids, ids.length + Math.max(1, ids.length >= 64 ? ids.length >> 3 : ids.length >> 1));
         ids[size++] = id;
     }
 
