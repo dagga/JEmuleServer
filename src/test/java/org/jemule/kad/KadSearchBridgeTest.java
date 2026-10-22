@@ -345,6 +345,25 @@ class KadSearchBridgeTest {
     }
 
     @Test
+    void theBannedHashesAreSharedWithTheFakeFileDetector() {
+        KadRoutingTable table = new KadRoutingTable(KadId.random());
+        FakeFileDetector detector = new FakeFileDetector();
+
+        try (KadUdpService udp = new KadUdpService(0);
+             KadSearchBridge bridge = new KadSearchBridge(table, udp,
+                     ChildAbuseFilter.defaults(), detector, 3, 2000)) {
+
+            detector.addBannedHash("00112233445566778899AABBCCDDEEFF");
+            assertTrue(bridge.isHashBanned("00112233445566778899aabbccddeeff"), "banned by the detector");
+            bridge.banHash("FFEEDDCCBBAA99887766554433221100");
+            assertTrue(detector.isBanned("ffeeddccbbaa99887766554433221100"), "banned by Kad");
+            assertEquals(2, detector.bannedHashes().size(), "one set in memory");
+        } catch (Exception e) {
+            fail(e);
+        }
+    }
+
+    @Test
     void testAcceptFileRejectsBannedHashCaseInsensitive() {
         KadId localId = KadId.random();
         KadRoutingTable table = new KadRoutingTable(localId);

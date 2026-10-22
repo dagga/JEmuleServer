@@ -48,7 +48,7 @@ public class FileIndex {
     private final EventManager eventManager;
     private final ChildAbuseFilter abuseFilter;
     /** Hashes banned by the child abuse filter (upper case), loaded from the database and completed at runtime. */
-    private final Set<String> abuseBannedHashes = ConcurrentHashMap.newKeySet();
+    private final Md4Set abuseBannedHashes = new Md4Set();
     /** Count of files whose hash was not indexed yet, per ingestion channel (since server start). */
     private final Map<FileSource, LongAdder> newFilesBySource = new ConcurrentHashMap<>();
 
@@ -92,6 +92,8 @@ public class FileIndex {
                 if (!rejected.isEmpty()) {
                     log.warn("Deleted {} child abuse file(s) from the database", rejected.size());
                 }
+                // The arrays of the inverted index grew by half at a time while loading: their free slots go
+                invertedIndex.values().forEach(Postings::trim);
             } catch (Exception e) {
                 // If DB fails during load, we continue with empty memory index
                 // DatabaseManager with CircuitBreaker should handle specific errors

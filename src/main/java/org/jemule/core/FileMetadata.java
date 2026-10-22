@@ -46,6 +46,9 @@ public record FileMetadata(
      * the database cost no map each. It cannot be filled: {@link FileIndex} replaces such a file with the published
      * one, which has its own map.
      */
+    /** The other tags of the files whose only tag is their source count, the most common case. */
+    private static final Tag[] NO_TAGS = new Tag[0];
+
     private static final ConcurrentHashMap<String, ClientState> NO_SOURCES = new ConcurrentHashMap<>(1) {
         @Override public ClientState put(String key, ClientState value) { throw readOnly(); }
         @Override public ClientState putIfAbsent(String key, ClientState value) { throw readOnly(); }
@@ -70,7 +73,7 @@ public record FileMetadata(
         for (int i = 0; i < tags.size(); i++) {
             Tag tag = tags.get(i);
             if (Tag.NAME_SOURCES.equals(tag.name()) && tag.isInt()) {
-                Tag[] retainedTags = new Tag[tags.size() - 1];
+                Tag[] retainedTags = tags.size() == 1 ? NO_TAGS : new Tag[tags.size() - 1];
                 for (int j = 0; j < i; j++) retainedTags[j] = tags.get(j);
                 for (int j = i + 1; j < tags.size(); j++) retainedTags[j - 1] = tags.get(j);
                 return new FileMetadata(hash, name, size, type,
@@ -161,7 +164,6 @@ public record FileMetadata(
         private final int sourceCountTagIndex;
         private final byte sourceCountTagType;
         private final long sourceCount;
-        private volatile Tag sourceCountTag;
 
         private CompactTags(Tag[] retainedTags, int sourceCountTagIndex, byte sourceCountTagType, long sourceCount) {
             this.retainedTags = retainedTags;
@@ -174,18 +176,15 @@ public record FileMetadata(
         public Tag get(int index) {
             if (index < 0 || index >= size()) throw new IndexOutOfBoundsException(index);
             if (index == sourceCountTagIndex) {
-                Tag result = sourceCountTag;
-                if (result == null) {
-                    Object value = switch (sourceCountTagType) {
-                        case Tag.TYPE_INTEGER -> (int) sourceCount;
-                        case Tag.TYPE_INT16 -> (short) sourceCount;
-                        case Tag.TYPE_INT8 -> (byte) sourceCount;
-                        case Tag.TYPE_UINT64 -> sourceCount;
-                        default -> throw new IllegalStateException("Invalid compacted source-count tag type");
-                    };
-                    sourceCountTag = result = new Tag(sourceCountTagType, Tag.NAME_SOURCES, value);
-                }
-                return result;
+                // Built on each call rather than kept: one field less on hundreds of thousands of files
+                Object value = switch (sourceCountTagType) {
+                    case Tag.TYPE_INTEGER -> (int) sourceCount;
+                    case Tag.TYPE_INT16 -> (short) sourceCount;
+                    case Tag.TYPE_INT8 -> (byte) sourceCount;
+                    case Tag.TYPE_UINT64 -> sourceCount;
+                    default -> throw new IllegalStateException("Invalid compacted source-count tag type");
+                };
+                return new Tag(sourceCountTagType, Tag.NAME_SOURCES, value);
             }
             int retainedIndex = index < sourceCountTagIndex ? index : index - 1;
             return retainedTags[retainedIndex];
