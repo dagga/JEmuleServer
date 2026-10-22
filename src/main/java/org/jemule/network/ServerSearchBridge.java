@@ -4,6 +4,7 @@ import org.jemule.core.FileIndex;
 import org.jemule.core.FileMetadata;
 import org.jemule.core.FileSource;
 import org.jemule.core.IngestionExecutor;
+import org.jemule.core.RecentQueries;
 import org.jemule.core.SearchQuery;
 import org.jemule.protocol.FileTypes;
 import org.jemule.protocol.Tag;
@@ -52,6 +53,11 @@ public final class ServerSearchBridge implements AutoCloseable {
             "Arc", "Iso", FileTypes.DOCUMENT, FileTypes.IMAGE, FileTypes.EMULE_COLLECTION);
     /** Searches split per file type per server and per minute, to stay a light load for each server. */
     static final int MAX_PARTITIONS_PER_SERVER_PER_MINUTE = 4;
+    /** Time during which an identical search is sent to the servers at most {@link #MAX_REPLAYS} times. */
+    static final long REPLAY_WINDOW_MS = 10 * 60_000L;
+    /** Times an identical search is sent at most within {@link #REPLAY_WINDOW_MS}. */
+    public static final int MAX_REPLAYS = 3;
+    private static final int MAX_RECENT_QUERIES = 5_000;
 
     private static final class SearchSession {
         private final SearchQuery query;
@@ -96,6 +102,7 @@ public final class ServerSearchBridge implements AutoCloseable {
     /** Indexes and stores the files found, after the searches and client connections (ingestion tier). */
     private volatile IngestionExecutor ingestion = IngestionExecutor.direct();
     private volatile boolean running = true;
+    private volatile RecentQueries recentQueries = new RecentQueries(REPLAY_WINDOW_MS, MAX_REPLAYS, MAX_RECENT_QUERIES);
 
     ServerSearchBridge(Supplier<Collection<ServerGossip.VerifiedPeer>> peers,
                        Supplier<DatagramSocket> socket,
@@ -126,6 +133,10 @@ public final class ServerSearchBridge implements AutoCloseable {
         SearchSession session = new SearchSession(query, searchTree);
         SearchSession existing = sessions.putIfAbsent(key, session);
         if (existing != null) return existing.future;
+        if (!recentQueries.tryStart(key)) {
+            sessions.remove(key, session);
+            return CompletableFuture.completedFuture(List.of());
+        }
         searchesForked.incrementAndGet();
         if (sessions.size() > 128) {
             sessions.remove(key, session);
@@ -159,6 +170,16 @@ public final class ServerSearchBridge implements AutoCloseable {
             });
         }
         return session.future;
+    }
+
+    /** Searches not sent because an identical one was sent {@link #MAX_REPLAYS} times within {@link #REPLAY_WINDOW_MS}. */
+    public long getSearchesSkippedAsRecent() {
+        return recentQueries.skipped();
+    }
+
+    /** Changes the time during which an identical search is sent at most {@link #MAX_REPLAYS} times (0: always sent). */
+    void setReplayWindowMs(long windowMs) {
+        this.recentQueries = new RecentQueries(windowMs, MAX_REPLAYS, MAX_RECENT_QUERIES);
     }
 
     public long getSearchTimeoutMs() {

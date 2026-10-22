@@ -49,9 +49,9 @@ class DatabaseConcurrencyTest {
             FileIndex index = new FileIndex(db);
             index.addFiles(List.of(
                     new FileMetadata(firstHash, "first.avi", 1000, "Video",
-                            List.of(new Tag(Tag.TYPE_STRING, "source", "kad"))),
+                            List.of(new Tag(Tag.TYPE_STRING, Tag.idName(SearchQuery.ID_MEDIA_CODEC), "xvid"))),
                     new FileMetadata(secondHash, "second.avi", 2000, "Video",
-                            List.of(new Tag(Tag.TYPE_INTEGER, "sources", 3)))
+                            List.of(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, 3)))
             ));
 
             List<FileMetadata> loaded = db.loadFiles();

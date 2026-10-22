@@ -10,6 +10,17 @@ import java.util.List;
 
 public record Tag(byte type, String name, Object value) {
     private static final Logger log = LoggerFactory.getLogger(Tag.class);
+    /** Names of the ID tags (one character), shared by every tag read instead of one string each. */
+    private static final String[] ID_NAMES = new String[256];
+
+    static {
+        for (int i = 0; i < ID_NAMES.length; i++) ID_NAMES[i] = String.valueOf((char) i).intern();
+    }
+
+    /** The shared name of the ID tag {@code id} (FT_*, ST_*). */
+    public static String idName(int id) {
+        return ID_NAMES[id & 0xFF];
+    }
 
     // Tag types (TAGTYPE_* in eMule opcodes.h)
     public static final byte TYPE_HASH = (byte) 0x01;
@@ -210,7 +221,7 @@ public record Tag(byte type, String name, Object value) {
             if (buf.remaining() < 1) {
                 throw new IllegalArgumentException("Cannot read tag name: buffer underflow (expected 1 byte for ID)");
             }
-            name = String.valueOf((char) (buf.get() & 0xFF));
+            name = idName(buf.get());
         } else {
             if (buf.remaining() < 2) {
                 throw new IllegalArgumentException("Cannot read tag name length: buffer underflow");
@@ -224,7 +235,7 @@ public record Tag(byte type, String name, Object value) {
             }
             if (nameLen == 1) {
                 // Old tag format with a 1-byte numeric name (e.g. CTag::WriteTagToFile): same as an ID tag
-                name = String.valueOf((char) (buf.get() & 0xFF));
+                name = idName(buf.get());
             } else {
                 byte[] nameBytes = new byte[nameLen];
                 buf.get(nameBytes);

@@ -238,6 +238,10 @@ public class AdminInterface implements Runnable {
                 servers == null ? 0 : servers.getResultsReceived(),
                 servers == null ? 0 : servers.getFilesIngested(),
                 servers == null ? 0 : servers.getActiveSessionCount());
+        out().printf("Not sent (identical query already sent %d times in %d min): Kad %d, eD2K servers %d%n",
+                KadSearchBridge.MAX_REPLAYS, KadSearchBridge.REPLAY_WINDOW_MS / 60_000,
+                kad == null ? 0 : kad.getSearchesSkippedAsRecent(),
+                servers == null ? 0 : servers.getSearchesSkippedAsRecent());
         GlobalSearchForwarder global = server != null ? server.getGlobalSearchForwarder() : null;
         if (global != null) {
             out().printf("UDP global searches of other servers' clients: %d received, %d searched on Kad%s,%n"
@@ -587,6 +591,9 @@ public class AdminInterface implements Runnable {
         out().println("--- Kademlia Statistics ---");
         out().println("Searches forked: " + bridge.getSearchesForked());
         out().println("Active searches: " + bridge.getActiveSessionCount());
+        out().println("Searches not sent (already sent " + KadSearchBridge.MAX_REPLAYS + " times in "
+                + KadSearchBridge.REPLAY_WINDOW_MS / 60_000 + " min): "
+                + bridge.getSearchesSkippedAsRecent());
         out().println("Results received: " + bridge.getResultsReceived());
         out().println("Files ingested: " + bridge.getFilesIngested());
         out().println("Illicit files blocked: " + bridge.getIllicitFilesBlocked());

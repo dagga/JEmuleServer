@@ -39,6 +39,16 @@ public class DatabaseManager implements AutoCloseable {
     private static final Logger logger = LoggerFactory.getLogger(DatabaseManager.class);
     /** Minimum time between two attempts to reopen a database closed by a fatal error. */
     private static final long REOPEN_INTERVAL_MS = 10_000;
+    /** Version of the schema written by this code, kept in the stats table. Databases without it are version 1. */
+    static final long SCHEMA_VERSION = 2;
+    static final String SCHEMA_VERSION_KEY = "schema_version";
+    /** Rows of file_tags (by _ROWID_) migrated per transaction, so that a migration never holds much memory. */
+    private static final long MIGRATION_BATCH_ROWS = 50_000;
+    private static final String MERGE_SOURCE_COUNT =
+            "MERGE INTO file_sources (hash, source_count) KEY (hash) VALUES (?, ?)";
+    private static final String MERGE_SOURCE_COUNT_OF_SAVED_FILE = """
+            MERGE INTO file_sources (hash, source_count) KEY (hash)
+            SELECT ?, ? FROM files WHERE hash = ?""";
 
     private final String url;
     /** Replaced when the database is reopened after a fatal error; only used while holding {@link #lock}. */
@@ -71,6 +81,133 @@ public class DatabaseManager implements AutoCloseable {
         this.circuitBreaker = CircuitBreaker.of("database", config);
         
         initSchema();
+        migrate();
+    }
+
+    /**
+     * Brings a database written by an older version to {@link #SCHEMA_VERSION}, reporting its progress on the
+     * console. A migration stopped halfway (crash, restart) resumes at the next start: each batch is committed whole.
+     */
+    private void migrate() {
+        long version;
+        try {
+            version = getStatInternal(SCHEMA_VERSION_KEY, 1);
+        } catch (SQLException e) {
+            logger.error("Could not read the database schema version: {}", e.getMessage());
+            return;
+        }
+        if (version >= SCHEMA_VERSION) return;
+        try {
+            long start = System.currentTimeMillis();
+            boolean changed = migrateTagsToV2();
+            setStatInternal(SCHEMA_VERSION_KEY, SCHEMA_VERSION);
+            logger.info("Database migration to schema version {} done in {} s", SCHEMA_VERSION,
+                    (System.currentTimeMillis() - start) / 1000);
+            if (changed) compact();
+        } catch (SQLException e) {
+            logger.error("Database migration to schema version {} failed (retried at the next start): {}",
+                    SCHEMA_VERSION, e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Version 2: the source counts move from file_tags to file_sources, and the tags the index does not keep
+     * ({@link FileMetadata#isIndexedTag}: FT_FILENAME, FT_FILESIZE, FT_FILETYPE...) are deleted.
+     *
+     * @return true if rows were deleted
+     */
+    private boolean migrateTagsToV2() throws SQLException {
+        long minRow, maxRow, rows;
+        try (Statement stmt = connection.createStatement();
+             ResultSet rs = stmt.executeQuery("SELECT MIN(_ROWID_), MAX(_ROWID_), COUNT(*) FROM file_tags")) {
+            rs.next();
+            minRow = rs.getLong(1);
+            maxRow = rs.getLong(2);
+            rows = rs.getLong(3);
+        }
+        if (rows == 0) return false;
+        logger.info("Database migration to schema version {}: {} tag rows to check (source counts moved to "
+                + "file_sources, tags not used by searches deleted)", SCHEMA_VERSION, String.format("%,d", rows));
+
+        List<String> keptNames = new ArrayList<>();
+        for (int id = 0; id < 256; id++) {
+            String name = Tag.idName(id);
+            if (FileMetadata.isIndexedTag(name) && !Tag.NAME_SOURCES.equals(name)) keptNames.add(name);
+        }
+        String placeholders = String.join(", ", java.util.Collections.nCopies(keptNames.size(), "?"));
+        long deleted = 0;
+        int lastReported = 0;
+        try {
+            connection.setAutoCommit(false);
+            try (PreparedStatement moveSources = connection.prepareStatement("""
+                         MERGE INTO file_sources s USING (
+                             SELECT file_hash AS hash,
+                                    MAX(LEAST(CAST(CAST(tag_value_str AS VARCHAR) AS BIGINT), 2147483647)) AS source_count
+                             FROM file_tags
+                             WHERE _ROWID_ >= ? AND _ROWID_ < ? AND tag_name = ? AND file_hash IS NOT NULL
+                               AND REGEXP_LIKE(CAST(tag_value_str AS VARCHAR), '^[0-9]{1,18}$')
+                             GROUP BY file_hash) t ON s.hash = t.hash
+                         WHEN MATCHED THEN UPDATE SET source_count = GREATEST(s.source_count, t.source_count)
+                         WHEN NOT MATCHED THEN INSERT (hash, source_count) VALUES (t.hash, t.source_count)""");
+                 PreparedStatement deleteTags = connection.prepareStatement(
+                         "DELETE FROM file_tags WHERE _ROWID_ >= ? AND _ROWID_ < ? AND (tag_name IS NULL OR tag_name NOT IN ("
+                                 + placeholders + "))")) {
+                for (long from = minRow; from <= maxRow; from += MIGRATION_BATCH_ROWS) {
+                    long to = from + MIGRATION_BATCH_ROWS;
+                    moveSources.setLong(1, from);
+                    moveSources.setLong(2, to);
+                    moveSources.setString(3, Tag.NAME_SOURCES);
+                    moveSources.executeUpdate();
+                    deleteTags.setLong(1, from);
+                    deleteTags.setLong(2, to);
+                    for (int i = 0; i < keptNames.size(); i++) deleteTags.setString(i + 3, keptNames.get(i));
+                    deleted += deleteTags.executeUpdate();
+                    connection.commit();
+
+                    int percent = (int) (Math.min(to - minRow, maxRow - minRow + 1) * 100 / (maxRow - minRow + 1));
+                    if (percent >= lastReported + 5 || percent == 100) {
+                        lastReported = percent;
+                        logger.info("Database migration: {}% ({} tag rows deleted so far)", percent,
+                                String.format("%,d", deleted));
+                    }
+                }
+            }
+        } catch (SQLException e) {
+            try { connection.rollback(); } catch (SQLException ex) { /* ignore */ }
+            throw e;
+        } finally {
+            try { connection.setAutoCommit(true); } catch (SQLException e) { /* ignore */ }
+        }
+        logger.info("Database migration: {} of {} tag rows deleted, {} source counts in file_sources",
+                String.format("%,d", deleted), String.format("%,d", rows), String.format("%,d", countRows("file_sources")));
+        return deleted > 0;
+    }
+
+    private long countRows(String table) throws SQLException {
+        try (Statement stmt = connection.createStatement();
+             ResultSet rs = stmt.executeQuery("SELECT COUNT(*) FROM " + table)) {
+            rs.next();
+            return rs.getLong(1);
+        }
+    }
+
+    /** Rewrites the database file without the space freed by a migration, then reopens it. */
+    private void compact() {
+        logger.info("Compacting the database file to release the space freed (this can take a few minutes)...");
+        long start = System.currentTimeMillis();
+        try {
+            try (Statement stmt = connection.createStatement()) {
+                stmt.execute("SHUTDOWN COMPACT");
+            }
+        } catch (SQLException e) {
+            logger.warn("Database compaction failed: {}", e.getMessage());
+        }
+        try {
+            connection = DriverManager.getConnection(url, "sa", "");
+            logger.info("Database compacted in {} s", (System.currentTimeMillis() - start) / 1000);
+        } catch (SQLException e) {
+            logger.error("Could not reopen the database after compaction: {}", e.getMessage());
+        }
     }
 
     /**
@@ -167,6 +304,16 @@ public class DatabaseManager implements AutoCloseable {
                     tag_value_str TEXT,
                     tag_value_blob BLOB,
                     FOREIGN KEY (file_hash) REFERENCES files(hash) ON DELETE CASCADE
+                )
+                """);
+
+            // Source count of each file, apart from its tags: updating it writes one narrow row. Databases written
+            // before keep an FT_SOURCES tag in file_tags; the higher of the two counts is loaded.
+            stmt.execute("""
+                CREATE TABLE IF NOT EXISTS file_sources (
+                    hash VARCHAR(32) PRIMARY KEY,
+                    source_count INT NOT NULL,
+                    FOREIGN KEY (hash) REFERENCES files(hash) ON DELETE CASCADE
                 )
                 """);
 
@@ -335,7 +482,8 @@ public class DatabaseManager implements AutoCloseable {
                          "MERGE INTO files (hash, name, size, type) KEY (hash) VALUES (?, ?, ?, ?)");
                  PreparedStatement deleteTags = connection.prepareStatement("DELETE FROM file_tags WHERE file_hash = ?");
                  PreparedStatement insertTag = connection.prepareStatement(
-                         "INSERT INTO file_tags (file_hash, tag_type, tag_name, tag_value_str, tag_value_blob) VALUES (?, ?, ?, ?, ?)")) {
+                         "INSERT INTO file_tags (file_hash, tag_type, tag_name, tag_value_str, tag_value_blob) VALUES (?, ?, ?, ?, ?)");
+                 PreparedStatement mergeSources = connection.prepareStatement(MERGE_SOURCE_COUNT)) {
                 for (FileMetadata meta : uniqueFiles.values()) {
                     mergeFile.setString(1, meta.hash());
                     mergeFile.setString(2, meta.name());
@@ -350,7 +498,13 @@ public class DatabaseManager implements AutoCloseable {
                 deleteTags.executeBatch();
 
                 for (FileMetadata meta : uniqueFiles.values()) {
+                    if (meta.sourceCount() > 0) {
+                        mergeSources.setString(1, meta.hash());
+                        mergeSources.setInt(2, meta.sourceCount());
+                        mergeSources.addBatch();
+                    }
                     for (Tag tag : meta.tags()) {
+                        if (Tag.NAME_SOURCES.equals(tag.name())) continue; // in file_sources
                         insertTag.setString(1, meta.hash());
                         insertTag.setByte(2, tag.type());
                         insertTag.setString(3, tag.name());
@@ -365,6 +519,7 @@ public class DatabaseManager implements AutoCloseable {
                     }
                 }
                 insertTag.executeBatch();
+                mergeSources.executeBatch();
             }
 
             connection.commit();
@@ -373,6 +528,31 @@ public class DatabaseManager implements AutoCloseable {
             throw e;
         } finally {
             try { connection.setAutoCommit(true); } catch (SQLException e) { /* ignore */ }
+        }
+    }
+
+    /**
+     * Stores the source count of files already saved, without rewriting their name and tags. A file not saved yet is
+     * skipped (its count is written with it by {@link #saveFiles}).
+     */
+    public void saveSourceCounts(Collection<FileMetadata> files) {
+        if (files == null || files.isEmpty()) return;
+        try {
+            locked(() -> {
+                try (PreparedStatement mergeSources = connection.prepareStatement(MERGE_SOURCE_COUNT_OF_SAVED_FILE)) {
+                    for (FileMetadata meta : files) {
+                        mergeSources.setString(1, meta.hash());
+                        mergeSources.setInt(2, meta.sourceCount());
+                        mergeSources.setString(3, meta.hash());
+                        mergeSources.addBatch();
+                    }
+                    mergeSources.executeBatch();
+                }
+                return null;
+            });
+        } catch (Throwable e) {
+            logger.error("Circuit breaker prevented or caught error during saveSourceCounts ({} files): {}",
+                    files.size(), e.getMessage());
         }
     }
 
@@ -405,19 +585,24 @@ public class DatabaseManager implements AutoCloseable {
         Map<String, String> shared = new HashMap<>();
         try (Statement stmt = connection.createStatement();
              ResultSet rs = stmt.executeQuery("""
-                     SELECT f.hash, f.name, f.size, f.type, t.tag_type, t.tag_name, t.tag_value_str, t.tag_value_blob
-                     FROM files f LEFT JOIN file_tags t ON t.file_hash = f.hash ORDER BY f._ROWID_""")) {
+                     SELECT f.hash, f.name, f.size, f.type, t.tag_type, t.tag_name, t.tag_value_str, t.tag_value_blob,
+                            s.source_count
+                     FROM files f LEFT JOIN file_sources s ON s.hash = f.hash
+                     LEFT JOIN file_tags t ON t.file_hash = f.hash ORDER BY f._ROWID_""")) {
             String hash = null, name = null, type = null;
             long size = 0;
+            int sourceCount = -1;
             List<Tag> tags = new ArrayList<>();
             while (rs.next()) {
                 String rowHash = rs.getString(1);
                 if (!rowHash.equals(hash)) {
-                    if (hash != null) consumer.accept(FileMetadata.withoutSources(hash, name, size, type, List.copyOf(tags)));
+                    if (hash != null) consumer.accept(loaded(hash, name, size, type, tags, sourceCount));
                     hash = rowHash;
                     name = rs.getString(2);
                     size = rs.getLong(3);
                     type = share(shared, rs.getString(4));
+                    int count = rs.getInt(9);
+                    sourceCount = rs.wasNull() ? -1 : count;
                     tags.clear();
                 }
                 String tagName = rs.getString(6);
@@ -426,8 +611,25 @@ public class DatabaseManager implements AutoCloseable {
                     if (tag != null) tags.add(tag);
                 }
             }
-            if (hash != null) consumer.accept(FileMetadata.withoutSources(hash, name, size, type, List.copyOf(tags)));
+            if (hash != null) consumer.accept(loaded(hash, name, size, type, tags, sourceCount));
         }
+    }
+
+    /** A file read from the database, its source count taken from file_sources when higher than its old tag. */
+    private static FileMetadata loaded(String hash, String name, long size, String type, List<Tag> tags,
+                                       int sourceCount) {
+        if (sourceCount >= 0) {
+            int tagIndex = -1;
+            for (int i = 0; i < tags.size(); i++) {
+                if (Tag.NAME_SOURCES.equals(tags.get(i).name()) && tags.get(i).isInt()) tagIndex = i;
+            }
+            if (tagIndex < 0) {
+                tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, sourceCount));
+            } else if (tags.get(tagIndex).unsignedValue() < sourceCount) {
+                tags.set(tagIndex, new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, sourceCount));
+            }
+        }
+        return FileMetadata.withoutSources(hash, name, size, type, List.copyOf(tags));
     }
 
     /** The shared instance of a repeated string (bounded, so that unusual values cannot fill the map). */

@@ -141,9 +141,9 @@ public class FileIndex {
      * Registers a published file, recording its ingestion channel for the monitoring counters.
      */
     public FileMetadata addFile(FileMetadata meta, FileSource source) {
-        List<FileMetadata> toPersist = new ArrayList<>(1);
-        FileMetadata stored = addFileInternal(meta, toPersist, source);
-        persist(toPersist);
+        Writes writes = new Writes(1);
+        FileMetadata stored = addFileInternal(meta, writes, source);
+        persist(writes);
         return stored;
     }
 
@@ -159,26 +159,33 @@ public class FileIndex {
      */
     public List<FileMetadata> addFiles(Collection<FileMetadata> files, FileSource source) {
         if (files == null || files.isEmpty()) return List.of();
-        List<FileMetadata> toPersist = new ArrayList<>(files.size());
+        Writes writes = new Writes(files.size());
         List<FileMetadata> stored = new ArrayList<>(files.size());
         for (FileMetadata file : files) {
-            if (file != null && file.hash() != null) stored.add(addFileInternal(file, toPersist, source));
+            if (file != null && file.hash() != null) stored.add(addFileInternal(file, writes, source));
         }
-        persist(toPersist);
+        persist(writes);
         return List.copyOf(stored);
     }
 
-    private FileMetadata addFileInternal(FileMetadata meta, List<FileMetadata> toPersist, FileSource source) {
-        FileMetadata incoming = meta;
+    /** Database writes of a call: the files of unknown hashes, and the higher source counts of known ones. */
+    private record Writes(List<FileMetadata> files, List<FileMetadata> sourceCounts) {
+        Writes(int expected) {
+            this(new ArrayList<>(expected), new ArrayList<>(0));
+        }
+    }
+
+    private FileMetadata addFileInternal(FileMetadata meta, Writes writes, FileSource source) {
+        FileMetadata incoming = meta.indexed();
         boolean[] isNew = {false};
         boolean[] isNewHash = {false};
         boolean[] sourceCountChanged = {false};
         FileMetadata[] replaced = {null};
         FileMetadata stored = byHash.compute(meta.hash(), (h, existing) -> {
-            if (existing == null || existing.sources().isEmpty()) {
-                // unknown file, or a file without online source (e.g. loaded from the database): take the new metadata
+            if (existing == null || (existing.sources().isEmpty() && !incoming.sources().isEmpty())) {
+                // unknown file, or a file without online source (e.g. loaded from the database) published by a
+                // client: take the new metadata. A search result of a known hash keeps the entry below.
                 FileMetadata selected = incoming;
-                if (existing != null) selected.sources().putAll(existing.sources());
                 int knownSources = existing == null ? 0 : existing.sourceCount();
                 if (selected.sourceCount() < knownSources) {
                     selected = selected.withSourceCount(knownSources);
@@ -206,13 +213,19 @@ public class FileIndex {
                 indexTokens(stored);
             }
             searchCache.clear(); // Invalidate cache when adding a new file
-            toPersist.add(stored);
+            // The index holds every hash of the database: an unknown hash is written whole, a known one only when
+            // its source count rose
+            if (isNewHash[0]) {
+                writes.files().add(stored);
+            } else if (stored.sourceCount() > replaced[0].sourceCount()) {
+                writes.sourceCounts().add(stored);
+            }
             if (eventManager != null) {
                 eventManager.broadcast(new FileEvent(FileEvent.PUBLISHED, stored.name(), stored.hash(), "File published: " + stored.name()));
             }
         } else if (sourceCountChanged[0]) {
             searchCache.clear();
-            toPersist.add(stored);
+            writes.sourceCounts().add(stored); // the hash is already stored: only its count is written
         }
         return stored;
     }
@@ -259,8 +272,10 @@ public class FileIndex {
         this.persistence = executor == null ? Runnable::run : executor;
     }
 
-    private void persist(List<FileMetadata> files) {
-        if (db != null && !files.isEmpty()) persistence.execute(() -> db.saveFiles(files));
+    private void persist(Writes writes) {
+        if (db == null) return;
+        if (!writes.files().isEmpty()) persistence.execute(() -> db.saveFiles(writes.files()));
+        if (!writes.sourceCounts().isEmpty()) persistence.execute(() -> db.saveSourceCounts(writes.sourceCounts()));
     }
 
     private void unindexTokens(FileMetadata meta) {
@@ -284,8 +299,9 @@ public class FileIndex {
     }
 
     private void indexInMemory(FileMetadata meta) {
-        byHash.put(meta.hash(), meta);
-        indexTokens(meta);
+        FileMetadata indexed = meta.indexed();
+        byHash.put(indexed.hash(), indexed);
+        indexTokens(indexed);
     }
 
     private void indexTokens(FileMetadata meta) {

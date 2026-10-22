@@ -8,6 +8,7 @@ import java.nio.file.Path;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PersistenceTest {
@@ -24,7 +25,7 @@ class PersistenceTest {
             "test_file.txt",
             1024,
             "Text",
-            List.of(new Tag(Tag.TYPE_STRING, "Description", "A test file"))
+            List.of(new Tag(Tag.TYPE_STRING, Tag.idName(SearchQuery.ID_MEDIA_CODEC), "xvid"))
         );
 
         // Save to DB
@@ -45,7 +46,7 @@ class PersistenceTest {
             assertEquals(file.name(), loaded.name());
             assertEquals(file.size(), loaded.size());
             assertEquals(1, loaded.tags().size());
-            assertEquals("A test file", loaded.tags().getFirst().value());
+            assertEquals("xvid", loaded.tags().getFirst().value());
         }
     }
 
@@ -85,6 +86,80 @@ class PersistenceTest {
             index.addFile(file);
             queued.get(2).run();
             assertEquals(1, db.loadFiles().size());
+        }
+    }
+
+    @Test
+    void aHashAlreadyStoredOnlyHasItsHigherSourceCountWritten() throws Exception {
+        String hash = "0123456789ABCDEF0123456789ABCDEF";
+        List<Tag> tags = List.of(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, 5),
+                new Tag(Tag.TYPE_STRING, Tag.idName(SearchQuery.ID_MEDIA_CODEC), "xvid"));
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("cachedb").toString())) {
+            new FileIndex(db).addFile(new FileMetadata(hash, "known file.avi", 4096, "Video", tags), FileSource.KAD_SEARCH);
+
+            // Reloaded from the database, as after a restart
+            FileIndex index = new FileIndex(db);
+            assertEquals(5, index.search("known", 10).getFirst().sourceCount());
+            java.util.List<Runnable> queued = new java.util.ArrayList<>();
+            index.setPersistenceExecutor(queued::add);
+
+            index.addFile(new FileMetadata(hash, "known file.avi", 4096, "Video", tags), FileSource.KAD_SEARCH);
+            index.addFile(new FileMetadata(hash, "other name.avi", 4096, "Video",
+                    List.of(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, 3))), FileSource.SERVER_SEARCH);
+            assertTrue(queued.isEmpty(), "a known hash found again by searches, without more sources, is not written");
+
+            ClientState client = new ClientState(java.net.InetAddress.getByName("10.0.0.1"), 4662, 1,
+                    System.currentTimeMillis(), new java.util.concurrent.atomic.AtomicLong());
+            FileMetadata published = new FileMetadata(hash, "known file.avi", 4096, "Video", tags);
+            published.sources().put(FileIndex.sourceKey(client), client);
+            index.addFile(published, FileSource.CLIENT_PUSH);
+            assertTrue(queued.isEmpty(), "a client publishing a known hash is not written either");
+            assertEquals(1, index.search("known", 10).getFirst().sources().size(), "but becomes its source");
+
+            index.addFiles(List.of(new FileMetadata(hash, "other name.avi", 4096, "Video",
+                    List.of(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, 9)))), FileSource.SERVER_SEARCH);
+            assertEquals(1, queued.size(), "a higher source count is written");
+            queued.forEach(Runnable::run);
+
+            FileMetadata stored = db.loadFiles().getFirst();
+            assertEquals("known file.avi", stored.name(), "only the count was written");
+            assertEquals(9, stored.sourceCount());
+            assertEquals(2, stored.tags().size(), "the codec and one source count");
+
+            queued.clear();
+            index.addFile(new FileMetadata("FEDCBA9876543210FEDCBA9876543210", "new file.avi", 10, "Video"),
+                    FileSource.KAD_SEARCH);
+            assertEquals(1, queued.size(), "an unknown hash is written");
+        }
+    }
+
+    @Test
+    void theSourceCountOfAnUnsavedFileIsNotWritten() throws Exception {
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("unsaveddb").toString())) {
+            db.saveSourceCounts(List.of(new FileMetadata("0123456789ABCDEF0123456789ABCDEF", "x", 1, "Video",
+                    List.of(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, 9)))));
+            assertTrue(db.loadFiles().isEmpty());
+        }
+    }
+
+    @Test
+    void theIndexKeepsOnlyTheTagsSearchesUse() throws Exception {
+        String codec = Tag.idName(SearchQuery.ID_MEDIA_CODEC);
+        FileMetadata received = new FileMetadata("0123456789ABCDEF0123456789ABCDEF", "movie.avi", 4096, "Video", List.of(
+                new Tag(Tag.TYPE_STRING, Tag.NAME_FILENAME, "movie.avi"),
+                new Tag(Tag.TYPE_INTEGER, Tag.NAME_FILESIZE, 4096),
+                new Tag(Tag.TYPE_STRING, Tag.NAME_FILETYPE, "Video"),
+                new Tag(Tag.TYPE_STRING, Tag.NAME_FILEFORMAT, "avi"),
+                new Tag(Tag.TYPE_INTEGER, new String(Tag.NAME_SOURCES.toCharArray()), 7),
+                new Tag(Tag.TYPE_STRING, new String(codec.toCharArray()), "xvid")));
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("slimdb").toString())) {
+            FileIndex index = new FileIndex(db);
+            FileMetadata stored = index.addFile(received);
+            assertEquals(List.of(Tag.NAME_SOURCES, codec), stored.tags().stream().map(Tag::name).toList());
+            stored.tags().forEach(tag -> assertSame(Tag.idName(tag.name().charAt(0)), tag.name(), "shared name"));
+            assertEquals(7, stored.sourceCount());
+            assertEquals(1, index.searchComplex(new SearchQuery.TermQuery("xvid", SearchQuery.ID_MEDIA_CODEC), 10).size());
+            assertEquals(2, db.loadFiles().getFirst().tags().size(), "only the codec and the source count are stored");
         }
     }
 }

@@ -156,7 +156,7 @@ public interface SearchQuery extends Predicate<FileMetadata> {
     }
 
     private static String stringTag(FileMetadata meta, byte id) {
-        String name = String.valueOf((char) (id & 0xFF));
+        String name = org.jemule.protocol.Tag.idName(id);
         for (org.jemule.protocol.Tag t : meta.tags()) {
             if (t.name().equals(name) && t.value() instanceof String str) return str;
         }
@@ -164,7 +164,7 @@ public interface SearchQuery extends Predicate<FileMetadata> {
     }
 
     private static Long intTag(FileMetadata meta, byte id) {
-        String name = String.valueOf((char) (id & 0xFF));
+        String name = org.jemule.protocol.Tag.idName(id);
         for (org.jemule.protocol.Tag t : meta.tags()) {
             if (t.name().equals(name) && t.isInt()) return t.unsignedValue();
         }

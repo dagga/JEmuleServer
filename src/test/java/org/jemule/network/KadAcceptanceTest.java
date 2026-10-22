@@ -28,6 +28,7 @@ import org.jemule.core.FileMetadata;
 import org.jemule.kad.KadBootstrapManager;
 import org.jemule.kad.KadContact;
 import org.jemule.kad.KadId;
+import org.jemule.kad.KadSearchBridge;
 import org.jemule.kad.KadNode;
 import org.jemule.kad.KadOpCode;
 import org.jemule.kad.KadPacket;
@@ -340,6 +341,23 @@ class KadAcceptanceTest {
         SearchAnswer more = queryMore(ctx);
         assertTrue(more.results().isEmpty(), "files already sent are not sent again");
         assertEquals(0, more.more());
+    }
+
+    @Test
+    void anIdenticalSearchIsSentOnKadAtMostThreeTimesWithinTheReplayWindow() throws Exception {
+        String desktop = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+        peerCatalog.put(KadId.fromKeyword("ubuntu"), List.of(kadFile(desktop, "ubuntu desktop.iso", 5)));
+        peerJoinsTheRoutingTable();
+        for (int i = 0; i < KadSearchBridge.MAX_REPLAYS; i++) {
+            FakeContext ctx = client("10.1.1." + (i + 1));
+            if (search(ctx, "ubuntu").more() == 1) queryMore(ctx); // waits for the end of the Kad session
+        }
+        assertEquals(0, node.getSearchBridge().getSearchesSkippedAsRecent());
+
+        SearchAnswer local = search(client("10.2.2.2"), "ubuntu");
+        assertEquals(List.of(desktop), hashes(local), "answered from H2");
+        assertEquals(0, local.more(), "not sent on Kad a fourth time");
+        assertEquals(1, node.getSearchBridge().getSearchesSkippedAsRecent());
     }
 
     @Test
