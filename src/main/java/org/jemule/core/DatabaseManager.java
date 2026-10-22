@@ -76,8 +76,9 @@ public class DatabaseManager implements AutoCloseable {
     public DatabaseManager(String dbPath, float failureRateThreshold, int minCalls, int waitDurationInSeconds) throws SQLException {
         // No background compaction: it rewrites the live pages at the end of the file, and while a long statement
         // (the load at startup, a migration) keeps the old ones, the file grows by gigabytes. The file is
-        // compacted at startup instead (compactIfSparse).
-        this.url = "jdbc:h2:" + dbPath + ";AUTO_COMPACT_FILL_RATE=0";
+        // compacted at startup instead (compactIfSparse). A 4 MB page cache instead of 16: the database is read
+        // once at startup, then only written to.
+        this.url = "jdbc:h2:" + dbPath + ";AUTO_COMPACT_FILL_RATE=0;CACHE_SIZE=4096";
         this.file = new java.io.File(dbPath + ".mv.db");
         this.connection = DriverManager.getConnection(url, "sa", "");
         

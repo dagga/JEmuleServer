@@ -6,7 +6,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.InetAddress;
 import java.net.URI;
-import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.ByteBuffer;
@@ -24,10 +23,6 @@ final class ServerMetLoader {
     private static final long MAX_SERVER_COUNT = 100_000;
     private static final int MAX_TAG_COUNT = 50_000;
     private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(30);
-    private static final HttpClient HTTP_CLIENT = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(10))
-            .followRedirects(HttpClient.Redirect.NORMAL)
-            .build();
 
     private ServerMetLoader() {
     }
@@ -44,7 +39,7 @@ final class ServerMetLoader {
         }
 
         HttpRequest request = HttpRequest.newBuilder(uri).timeout(REQUEST_TIMEOUT).GET().build();
-        HttpResponse<InputStream> response = HTTP_CLIENT.send(request, HttpResponse.BodyHandlers.ofInputStream());
+        HttpResponse<InputStream> response = org.jemule.core.SharedHttpClient.get().send(request, HttpResponse.BodyHandlers.ofInputStream());
         try (InputStream body = response.body()) {
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
                 throw new IOException("server.met returned HTTP status " + response.statusCode());
