@@ -105,7 +105,7 @@ final class FileTable {
     /** Stores a new file and returns its number; its hash must not be stored yet. */
     int add(FileMetadata meta) {
         int id = freeCount > 0 ? free[--freeCount] : end++;
-        if (id >= used.length) grow(Math.max(INITIAL_CAPACITY, used.length + (used.length >> 1)));
+        if (id >= used.length) grow(used.length + growth(used.length));
         used[id] = true;
         count++;
         long[] value = Md4Set.parse(meta.hash());
@@ -255,6 +255,14 @@ final class FileTable {
             low >>>= 4;
         }
         return new String(chars);
+    }
+
+    /**
+     * Slots added when the arrays are full: half of them while small, an eighth once large, so that the arrays of
+     * an index of a million files carry about 60,000 free slots rather than 500,000 (a few MB instead of 20).
+     */
+    static int growth(int capacity) {
+        return Math.max(INITIAL_CAPACITY, capacity >= 65_536 ? capacity >> 3 : capacity >> 1);
     }
 
     private void grow(int capacity) {
