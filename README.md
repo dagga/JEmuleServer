@@ -101,7 +101,7 @@ The production server runs with this calibration:
 
 | | |
 |---|---|
-| CPU | 1 vCPU (AMD EPYC) |
+| CPU | 1 vCPU, AMD EPYC at 2.1 GHz (KVM virtual machine, model and boost hidden by the hypervisor) |
 | Memory | 947 MB of RAM, 512 MB swap file |
 | Disk | 9.8 GB |
 | System | Fedora Linux 43 Server, OpenJDK 25 |
