@@ -76,8 +76,9 @@ java -XX:MaxRAMPercentage=75 -XX:ThreadPriorityPolicy=1 --add-modules=jdk.httpse
   writes), regular operations; ingestion and regular operations never hold back a client or a search. Lowering a
   priority works for any user; raising the admin tier above the clients needs root or `CAP_SYS_NICE`. The startup log
   says whether the priorities are applied. The .deb and .rpm launchers already pass the option.
-- `-XX:MaxRAMPercentage=75`: lets the heap grow to 75% of the RAM instead of 25% (see Memory sizing below); the .deb
-  and .rpm launchers already pass it.
+- `-XX:MaxRAMPercentage=75`: lets the heap grow to 75% of the RAM instead of 25%; the .deb and .rpm launchers
+  already pass it. On a 1 GB server, prefer the explicit `-Xmx620m -Xmn48m` of the reference server (see Memory
+  sizing below).
 
 - Note: The server binds to the IPv6 wildcard when available, so IPv6 clients can connect. Avoid forcing the JVM to
   prefer IPv4 (i.e. do not use `-Djava.net.preferIPv4Stack=true`) if you expect IPv6 connectivity. The ed2k protocol
@@ -87,20 +88,47 @@ java -XX:MaxRAMPercentage=75 -XX:ThreadPriorityPolicy=1 --add-modules=jdk.httpse
 
 ### Memory sizing
 
-Every known file is kept in memory for the searches: plan about 360 MB of index heap per 1,000,000 files (363 MB for
-999,913 files in the latest Only the tags searches filter on are kept (source count, artist, album, title, length, bitrate, codec, rating); the
-name, size and type are fields of each file. A database written by version 1.2.14 or older is migrated at the first
-start: the source counts move to the `file_sources` table, the other tags are deleted, then the file is compacted.
-The progress is logged on the console (about 3 minutes for 3.3 million tag rows on a 1 vCPU / 1 GB server); a
-migration interrupted halfway starts again at the next start.
+Every known file is kept in memory for the searches: its MD4 hash, name, size, type, source count and the media tags
+searches filter on, plus its entries in the inverted index of the name words. In production this comes to about
+530 bytes of heap per file, banned hashes included. Only the tags searches filter on are kept (source count, artist,
+album, title, length, bitrate, codec, rating); the name, size and type are fields of each file.
 
-H2 does not compact the file in the background (a compaction running during the startup load made the file grow
-until the disk was full): the file is compacted at startup, before it is read, when less than 80% of it is used.
+#### Reference server: 1,000,000 files on 1 GB of RAM
 
-`./gradlew benchmark -Pfiles=1000000 -Pheap=768m -Pcpus=1` run, see below). The JVM only
-takes a quarter of the RAM by default; on a small dedicated server, let it use more, e.g.
-`java -XX:MaxRAMPercentage=75 -jar ...` (the .deb and .rpm launchers already do). With 1,000,000 files, a 1 GB
-server with one vCPU starts in about 30 s and answers searches in a few milliseconds.
+The production server runs with this calibration:
+
+| | |
+|---|---|
+| CPU | 1 vCPU (AMD EPYC) |
+| Memory | 947 MB of RAM, 512 MB swap file |
+| Disk | 9.8 GB |
+| System | Fedora Linux 43 Server, OpenJDK 25 |
+| Launch | `java --add-modules=jdk.httpserver -Xmx620m -Xmn48m -XX:ThreadPriorityPolicy=1 -jar JEmuleServer-<version>.jar server.properties` |
+| `server.properties` | `maxFiles=1000000` |
+
+Measured with 1.2.17, 697,353 files and 196,096 banned hashes:
+
+| | |
+|---|---|
+| Live heap after a full collection | 367 MB (about 530 bytes per file) |
+| Java process | about 650 MB resident |
+| Database file (`jemule_db.mv.db`) | 160 MB after compaction (about 230 bytes per file) |
+| Startup (database load) | about 3 minutes |
+
+Why these settings:
+
+- `-Xmn48m`: on one CPU the JVM uses the serial collector, which gives a third of the heap to the young generation
+  (218 MB out of 688 MB). That memory stays committed although it is almost empty after each collection; 48 MB is
+  enough for the allocation rate of the server and leaves the rest to the old generation, where the index lives.
+- `-Xmx620m`: 572 MB of old generation for about 530 MB of index at 1,000,000 files, with a margin for the
+  connections and the searches. The process then takes about 730 MB, the system and kernel about 150 MB.
+- `maxFiles=1000000`: bounds the index, hence the heap. Beyond it, new files are refused; files already known still
+  get their new sources. It applies at once from the Settings view of the web panel, without a restart.
+
+To size another server: old generation (`-Xmx` minus `-Xmn`) of at least `maxFiles` × 550 bytes plus 50 MB, and RAM
+of at least `-Xmx` plus 250 MB. Without these options the JVM takes a quarter of the RAM; on a dedicated server
+`-XX:MaxRAMPercentage=75` (passed by the .deb and .rpm launchers) is a simpler alternative, which leaves a larger
+young generation.
 
 The startup log gives the maximum heap and warns when it is too small for the indexed files (about 256 MB plus 400
 bytes per file); the Status view of the web panel shows `heapUsedMb` and `heapMaxMb`. An OutOfMemoryError makes H2
@@ -109,6 +137,20 @@ without a restart (`databaseReopens` in the Status view), but the heap must be e
 
 `./gradlew benchmark -Pfiles=1000000 -Pheap=768m -Pcpus=1` fills a database with the given number of files, then
 reports the startup time, the heap used by the index and the search latency under these limits.
+
+#### Disk
+
+The database takes about 230 bytes per file once compacted. Keep free at least three times its size: a migration
+or a compaction writes the file again before releasing the old one, and `deploy.sh`-style upgrades keep a copy of it.
+The system logs (journald) also grow on a small disk: `journalctl --vacuum-size=50M` bounds them.
+
+A database written by version 1.2.14 or older is migrated at the first start: the source counts move to the
+`file_sources` table, the other tags are deleted, then the file is compacted. The progress is logged on the console
+(about 75 seconds for 3.3 million tag rows on the reference server); a migration interrupted halfway starts again at
+the next start.
+
+H2 does not compact the file in the background (a compaction running during the startup load made the file grow
+until the disk was full): the file is compacted at startup, before it is read, when less than 80% of it is used.
 
 ## Configuration
 
