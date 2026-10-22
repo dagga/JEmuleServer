@@ -362,6 +362,11 @@ public class DatabaseManager implements AutoCloseable {
         }
     }
 
+    /** Size of the database file in bytes (0 for an in-memory database). */
+    public long fileSize() {
+        return file.length();
+    }
+
     /** Times the database was reopened after a fatal error since the server started. */
     public long getReopenCount() {
         return reopenCount.get();
@@ -406,6 +411,16 @@ public class DatabaseManager implements AutoCloseable {
                 CREATE TABLE IF NOT EXISTS stats (
                     stat_key VARCHAR(255) PRIMARY KEY,
                     stat_value BIGINT
+                )
+                """);
+
+            // Samples of the index size for the admin panel (one every 5 minutes, a month kept): a table of its own,
+            // that older versions ignore
+            stmt.execute("""
+                CREATE TABLE IF NOT EXISTS metrics_history (
+                    sampled_at BIGINT PRIMARY KEY,
+                    files INT NOT NULL,
+                    clients INT NOT NULL
                 )
                 """);
 
@@ -738,6 +753,48 @@ public class DatabaseManager implements AutoCloseable {
             default -> null;
         };
         return value != null ? new Tag(type, name, value) : null;
+    }
+
+    /** Stores a sample of the index size and deletes those taken before {@code keepSince}. */
+    public void saveMetricsSample(long sampledAt, int files, int clients, long keepSince) {
+        try {
+            locked(() -> {
+                try (PreparedStatement merge = connection.prepareStatement(
+                             "MERGE INTO metrics_history (sampled_at, files, clients) KEY (sampled_at) VALUES (?, ?, ?)");
+                     PreparedStatement prune = connection.prepareStatement(
+                             "DELETE FROM metrics_history WHERE sampled_at < ?")) {
+                    merge.setLong(1, sampledAt);
+                    merge.setInt(2, files);
+                    merge.setInt(3, clients);
+                    merge.executeUpdate();
+                    prune.setLong(1, keepSince);
+                    prune.executeUpdate();
+                }
+                return null;
+            });
+        } catch (Throwable e) {
+            logger.error("Circuit breaker prevented or caught error during saveMetricsSample: {}", e.getMessage());
+        }
+    }
+
+    /** Samples of the index size taken since {@code since}, oldest first: {sampledAt, files, clients} each. */
+    public List<long[]> loadMetricsSamples(long since) {
+        try {
+            return locked(() -> {
+                List<long[]> samples = new ArrayList<>();
+                try (PreparedStatement ps = connection.prepareStatement(
+                        "SELECT sampled_at, files, clients FROM metrics_history WHERE sampled_at >= ? ORDER BY sampled_at")) {
+                    ps.setLong(1, since);
+                    try (ResultSet rs = ps.executeQuery()) {
+                        while (rs.next()) samples.add(new long[]{rs.getLong(1), rs.getInt(2), rs.getInt(3)});
+                    }
+                }
+                return samples;
+            });
+        } catch (Throwable e) {
+            logger.error("Circuit breaker prevented or caught error during loadMetricsSamples: {}", e.getMessage());
+            return new ArrayList<>();
+        }
     }
 
     public void setStat(String key, long value) {

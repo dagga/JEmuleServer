@@ -1,6 +1,6 @@
 # JEmuleServer
 
-JEmuleServer is an eMule server written in Java (version 1.2.18).
+JEmuleServer is an eMule server written in Java (version 1.2.19).
 
 Downloads (installers and JAR) are on the [releases page](https://github.com/dagga/JEmuleServer/releases); the changes
 of each version are described in `doc/release-notes-v<version>.md` (latest: [1.2.9](doc/release-notes-v1.2.9.md)).
@@ -27,7 +27,7 @@ Building requires a JDK 21 (Gradle toolchain). To compile the project and genera
 ./gradlew build
 ```
 
-The JAR file will be generated in `build/libs/JEmuleServer-1.2.18.jar`.
+The JAR file will be generated in `build/libs/JEmuleServer-1.2.19.jar`.
 
 ## Installation from the release packages
 
@@ -68,7 +68,7 @@ the JAR for IPv6.
 Once the project is compiled, you can start the server with the following command:
 
 ```bash
-java -XX:MaxRAMPercentage=75 -XX:ThreadPriorityPolicy=1 --add-modules=jdk.httpserver -jar build/libs/JEmuleServer-1.2.18.jar [config_file] [port]
+java -XX:MaxRAMPercentage=75 -XX:ThreadPriorityPolicy=1 --add-modules=jdk.httpserver -jar build/libs/JEmuleServer-1.2.19.jar [config_file] [port]
 ```
 
 - `-XX:ThreadPriorityPolicy=1`: on Linux, the JVM ignores thread priorities without it. The server runs its threads
@@ -253,7 +253,18 @@ and aMule Kad nodes has not been validated yet.
 ## Administration Interface
 
 JEmuleServer includes a built-in web panel and a command-line interface (CLI). The web panel is enabled by default at
-`http://127.0.0.1:8080/` and is bound to loopback only. It shows server status, searchable clients, verified named
+`http://127.0.0.1:8080/` and is bound to loopback only.
+
+It opens on an **Overview**: the number of indexed files with its change over 24 hours and 7 days, the index capacity
+against `maxFiles`, and tiles for the connected clients (with their LowID share), the heap, the verified eD2K servers,
+the searches sent to Kad and to the servers, the files they found, the banned hashes, the database (size, and whether
+it had to be reopened after a fatal error) and the uptime; a meter or a status (icon and label) flags what nears its
+limit. Two curves follow, over 24 hours, 7 days or 30 days: the indexed files and the connected clients, sampled every
+5 minutes and kept for a month in the `metrics_history` table, so that they survive a restart. Hovering a curve, or
+the arrow keys once it has the focus, reads the samples; each curve can also be shown as a table of daily values. The
+figures refresh every 30 seconds, the curves every 5 minutes. The page follows the light or dark theme of the system.
+
+The other views show server status, searchable clients, verified named
 server peers, a monitoring view of every known eD2K server and its state, active filters, potential bot-name matches,
 persistent hash blocks, an ingestion breakdown of new database files by channel, Kad and eD2K server search counters
 (queries sent and results returned), and runtime settings. The bot list is

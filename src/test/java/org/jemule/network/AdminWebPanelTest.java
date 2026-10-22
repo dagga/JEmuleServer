@@ -361,4 +361,42 @@ class AdminWebPanelTest {
             assertTrue(response.body().contains("\"version\""), response.body());
         }
     }
+
+    @Test
+    void overviewAndHistoryGiveTheHeadlineFiguresAndTheSamples() throws Exception {
+        Server server = mock(Server.class);
+        ClientRegistry registry = mock(ClientRegistry.class);
+        FileIndex index = mock(FileIndex.class);
+        when(server.getClientRegistry()).thenReturn(registry);
+        when(server.getFileIndex()).thenReturn(index);
+        when(server.getIPFilter()).thenReturn(mock(IPFilter.class));
+        when(registry.size()).thenReturn(4);
+        when(registry.lowIdCount()).thenReturn(1);
+        when(index.fileCount()).thenReturn(1_500);
+        long now = System.currentTimeMillis();
+        org.jemule.core.MetricsHistory history = new org.jemule.core.MetricsHistory(null);
+        history.record(now - 2 * 24 * 3_600_000L, 1_000, 2);
+        history.record(now - 3_600_000L, 1_400, 3);
+        when(server.getMetricsHistory()).thenReturn(history);
+
+        try (AdminWebPanel panel = new AdminWebPanel(server)) {
+            panel.start(0);
+            HttpResponse<String> overview = HttpClient.newHttpClient().send(HttpRequest.newBuilder(
+                    URI.create("http://127.0.0.1:" + panel.port() + "/api/overview")).GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, overview.statusCode(), overview.body());
+            assertTrue(overview.body().contains("\"indexed\":1500"), overview.body());
+            assertTrue(overview.body().contains("\"ago24h\":1000"), "the sample of 2 days ago: " + overview.body());
+            assertTrue(overview.body().contains("\"ago7d\":null"), "no sample a week ago: " + overview.body());
+            assertTrue(overview.body().contains("\"connected\":4"), overview.body());
+
+            HttpResponse<String> samples = HttpClient.newHttpClient().send(HttpRequest.newBuilder(
+                    URI.create("http://127.0.0.1:" + panel.port() + "/api/history?days=1")).GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, samples.statusCode(), samples.body());
+            assertTrue(samples.body().startsWith("{\"intervalSeconds\":300,\"points\":[["), samples.body());
+            assertTrue(samples.body().contains(",1400,3]"), "only the sample of the last day: " + samples.body());
+            assertFalse(samples.body().contains(",1000,2]"), samples.body());
+        }
+    }
 }
