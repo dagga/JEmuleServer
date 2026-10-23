@@ -1,6 +1,6 @@
 # JEmuleServer
 
-JEmuleServer is an eMule server written in Java (version 1.2.21).
+JEmuleServer is an eMule server written in Java (version 1.2.22).
 
 Downloads (installers and JAR) are on the [releases page](https://github.com/dagga/JEmuleServer/releases); the changes
 of each version are described in `doc/release-notes-v<version>.md` (latest: [1.2.9](doc/release-notes-v1.2.9.md)).
@@ -27,7 +27,7 @@ Building requires a JDK 21 (Gradle toolchain). To compile the project and genera
 ./gradlew build
 ```
 
-The JAR file will be generated in `build/libs/JEmuleServer-1.2.21.jar`.
+The JAR file will be generated in `build/libs/JEmuleServer-1.2.22.jar`.
 
 ## Installation from the release packages
 
@@ -68,7 +68,7 @@ the JAR for IPv6.
 Once the project is compiled, you can start the server with the following command:
 
 ```bash
-java -XX:MaxRAMPercentage=75 -XX:ThreadPriorityPolicy=1 --add-modules=jdk.httpserver -jar build/libs/JEmuleServer-1.2.21.jar [config_file] [port]
+java -XX:MaxRAMPercentage=75 -XX:ThreadPriorityPolicy=1 --add-modules=jdk.httpserver -jar build/libs/JEmuleServer-1.2.22.jar [config_file] [port]
 ```
 
 - `-XX:ThreadPriorityPolicy=1`: on Linux, the JVM ignores thread priorities without it. The server runs its threads
@@ -77,7 +77,7 @@ java -XX:MaxRAMPercentage=75 -XX:ThreadPriorityPolicy=1 --add-modules=jdk.httpse
   priority works for any user; raising the admin tier above the clients needs root or `CAP_SYS_NICE`. The startup log
   says whether the priorities are applied. The .deb and .rpm launchers already pass the option.
 - `-XX:MaxRAMPercentage=75`: lets the heap grow to 75% of the RAM instead of 25%; the .deb and .rpm launchers
-  already pass it. On a 1 GB server, prefer the explicit `-Xmx520m -Xmn48m` of the reference server (see Memory
+  already pass it. On a 1 GB server, prefer the explicit `-Xmx600m -Xmn48m` of the reference server (see Memory
   sizing below).
 
 - Note: The server binds to the IPv6 wildcard when available, so IPv6 clients can connect. Avoid forcing the JVM to
@@ -95,7 +95,7 @@ online sources or media tags get an object of their own. In production this come
 file, banned hashes included. Only the tags searches filter on are kept (source count, artist, album, title, length,
 bitrate, codec, rating).
 
-#### Reference server: 1,000,000 files on 1 GB of RAM
+#### Reference server: 1,200,000 files on 1 GB of RAM
 
 The production server runs with this calibration:
 
@@ -105,8 +105,8 @@ The production server runs with this calibration:
 | Memory | 947 MB of RAM, 512 MB swap file |
 | Disk | 9.8 GB |
 | System | Fedora Linux 43 Server, OpenJDK 25 |
-| Launch | `java --add-modules=jdk.httpserver -Xmx520m -Xmn48m -XX:ThreadPriorityPolicy=1 -jar JEmuleServer-<version>.jar server.properties` |
-| `server.properties` | `maxFiles=1000000` |
+| Launch | `java --add-modules=jdk.httpserver -Xmx600m -Xmn48m -XX:ThreadPriorityPolicy=1 -jar JEmuleServer-<version>.jar server.properties` |
+| `server.properties` | `maxFiles=1200000` |
 
 Measured with 1.2.19, 706,165 files and 196,532 banned hashes:
 
@@ -125,11 +125,12 @@ Why these settings:
 - `-Xmn48m`: on one CPU the JVM uses the serial collector, which gives a third of the heap to the young generation
   (218 MB out of 688 MB). That memory stays committed although it is almost empty after each collection; 48 MB is
   enough for the allocation rate of the server and leaves the rest to the old generation, where the index lives.
-- `-Xmx520m`: 472 MB of old generation for about 360 MB of index at 1,000,000 files and the room the index arrays
-  keep to grow, with about 90 MB of margin for the connections, the searches and the garbage of the startup load. The
-  process then takes at most about 620 MB, the system and kernel about 150 MB, which leaves room on 947 MB without
-  swapping. `./gradlew benchmark -Pfiles=1000000 -Pheap=520m -Pcpus=1` loads 1,000,000 files in this heap.
-- `maxFiles=1000000`: bounds the index, hence the heap. Beyond it, new files are refused; files already known still
+- `-Xmx600m`: 552 MB of old generation for about 430 MB of index at 1,200,000 files and the room the index arrays
+  keep to grow, with about 100 MB of margin for the connections, the searches and the garbage of the startup load. The
+  process then takes at most about 700 MB and the system and kernel about 150 MB: on 947 MB of RAM, the swap file
+  takes the cold pages. `./gradlew benchmark -Pfiles=1200000 -Pheap=600m -Pcpus=1` loads 1,200,000 files in this
+  heap. For 1,000,000 files, `-Xmx520m` is enough.
+- `maxFiles=1200000`: bounds the index, hence the heap. Beyond it, new files are refused; files already known still
   get their new sources. It applies at once from the Settings view of the web panel, without a restart.
 
 To size another server: old generation (`-Xmx` minus `-Xmn`) of at least `maxFiles` × 380 bytes plus 60 MB, and RAM
@@ -159,9 +160,10 @@ the next start.
 
 H2 does not compact the file while the startup load reads it (a compaction running during that load made the file
 grow until the disk was full): the file is compacted at startup, before it is read, when less than 80% of it is used.
-Once the load is over, it is compacted online: in the background by H2, and every 10 minutes by the server when less
-than 80% of it is used (writes held for at most 5 seconds, logged with the sizes before and after). Without it, the
-writes of a running server made the file grow from 200 MB to 1.4 GB in 15 hours.
+Once the load is over, the server checks every 10 minutes and compacts the file again when it is larger than 64 MB and
+less than 50% of it is used, the same way: the database is closed for the few seconds of the rewrite, the writes wait
+meanwhile, and the sizes are logged. Without it, the writes of a running server made the file grow from 200 MB to
+1.4 GB in 15 hours; H2's own background compaction neither prevents that growth nor shrinks the file.
 
 ## Configuration
 

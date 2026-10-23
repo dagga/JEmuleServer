@@ -141,9 +141,6 @@ public class Server {
     }
 
     private static final long MB = 1024 * 1024;
-    /** The database file is compacted online every 10 minutes when sparse, writes held for at most 5 s each time. */
-    private static final long ONLINE_COMPACTION_INTERVAL_MINUTES = 10;
-    private static final int ONLINE_COMPACTION_MAX_MS = 5_000;
     /** Heap for everything but the index: young generation, Kad, searches, client sessions, H2 cache. */
     private static final long BASE_HEAP_BYTES = 160 * MB;
     /** Heap per indexed file measured in production with 1.2.19: 252 MB for 706,165 files, banned hashes included. */
@@ -798,13 +795,10 @@ public class Server {
             // Curves of the admin panel: one sample now, then every 5 minutes (maintenance tier)
             maintenance.scheduleAtFixedRate(this::recordMetrics, 0, org.jemule.core.MetricsHistory.INTERVAL_MS,
                     TimeUnit.MILLISECONDS);
-            // The startup load is over (FileIndex reads the database in its constructor): from now on the database file
-            // is compacted online, or the writes make it grow by about a gigabyte a day (maintenance tier)
+            // The startup load is over (FileIndex reads the database in its constructor): the database file is now
+            // compacted while the server runs, or the writes make it grow by about a gigabyte a day (maintenance tier)
             if (db != null) {
-                maintenance.scheduleWithFixedDelay(() -> {
-                    db.enableOnlineCompaction();
-                    db.compactOnline(ONLINE_COMPACTION_MAX_MS);
-                }, 1, ONLINE_COMPACTION_INTERVAL_MINUTES, TimeUnit.MINUTES);
+                maintenance.scheduleWithFixedDelay(db::compactOnline, 10, 10, TimeUnit.MINUTES);
             }
             startUdpResponder();
             startKadNode();
