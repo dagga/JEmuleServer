@@ -27,20 +27,20 @@ class DatabaseOnlineCompactionTest {
             for (int i = 0; i < count; i += 1000) {
                 db.saveFiles(files.subList(i, i + 1000));
             }
-            assertFalse(db.compactOnline(10_000), "not before the startup load is over");
-            db.enableOnlineCompaction();
-            assertFalse(db.compactOnline(10_000), "a dense file is left alone");
-
             // A running server keeps rewriting the source counts: the old versions leave the file sparse
             for (int round = 1; round <= 40; round++) {
                 int sources = round;
                 db.saveSourceCounts(files.stream().map(f -> f.withSourceCount(sources)).toList());
             }
             long sparse = db.fileSize();
+            assertFalse(db.compactOnline(10_000), "not before the startup load is over");
+            assertEquals(sparse, db.fileSize());
 
-            assertTrue(db.compactOnline(10_000), "the file is sparse");
+            // Once enabled, H2's background compaction may get there first: only the result is checked
+            db.enableOnlineCompaction();
+            db.compactOnline(10_000);
             long compacted = db.fileSize();
-            assertTrue(compacted < sparse * 0.7, "file " + sparse / 1024 + " KB -> " + compacted / 1024 + " KB");
+            assertTrue(compacted < sparse * 0.3, "file " + sparse / 1024 + " KB -> " + compacted / 1024 + " KB");
 
             // Still open and complete
             db.saveFile(new FileMetadata(String.format("%032x", count), "after the compaction.avi", 1000, "Video", List.of()));
