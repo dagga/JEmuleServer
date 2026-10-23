@@ -18,6 +18,8 @@ class HeapWarningTest {
     @Test
     void acceptsTheBenchmarkedHeap() {
         assertNull(Server.heapWarning(768 * MB, 1_000_000), "1,000,000 files run in a 768 MB heap");
+        assertNull(Server.heapWarning(520 * MB, 1_000_000), "the reference server: -Xmx520m for maxFiles=1000000");
+        assertNotNull(Server.heapWarning(480 * MB, 1_000_000), "too tight for 1,000,000 files");
         assertNull(Server.heapWarning(710 * MB, 262_902), "75% of a 1 GB server");
     }
 }

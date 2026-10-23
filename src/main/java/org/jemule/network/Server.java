@@ -141,10 +141,10 @@ public class Server {
     }
 
     private static final long MB = 1024 * 1024;
-    /** Heap for everything but the index: Kad, searches, client sessions, H2 cache. */
-    private static final long BASE_HEAP_BYTES = 256 * MB;
-    /** Index heap per file: about 360 MB per 1,000,000 files, with a margin. */
-    private static final long HEAP_BYTES_PER_FILE = 400;
+    /** Heap for everything but the index: young generation, Kad, searches, client sessions, H2 cache. */
+    private static final long BASE_HEAP_BYTES = 160 * MB;
+    /** Heap per indexed file measured in production with 1.2.19: 252 MB for 706,165 files, banned hashes included. */
+    private static final long HEAP_BYTES_PER_FILE = 360;
 
     /**
      * Warns when the maximum heap is too small for the indexed files. The JVM only takes a quarter of the RAM by
