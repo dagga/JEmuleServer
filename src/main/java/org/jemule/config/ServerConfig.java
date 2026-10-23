@@ -45,6 +45,7 @@ import java.util.Properties;
  * @param adminAllowedIps           Allowed IPv4/IPv6 addresses or CIDR blocks (comma-separated).
  * @param adminAllowedMacs          Allowed MAC addresses (comma-separated, empty: disabled).
  * @param offerFiles                OFFERFILES v1 publication pace announced to the clients asking for it, and enforced.
+ * @param kadSources                Kad source searches started by the clients' OP_GETSOURCES.
  */
 public record ServerConfig(
         int port,
@@ -105,7 +106,10 @@ public record ServerConfig(
         String adminAllowedMacs,
 
         // OFFERFILES v1: publication pace answered to clients asking for it (null means OfferFilesConfig.DEFAULT)
-        OfferFilesConfig offerFiles
+        OfferFilesConfig offerFiles,
+
+        // Kad source searches for the clients' OP_GETSOURCES (null means KadSourcesConfig.DEFAULT)
+        KadSourcesConfig kadSources
 ) {
     /**
      * Default time allowed for the HighID test, in seconds.
@@ -235,7 +239,26 @@ public record ServerConfig(
                 maxSourcesPerFile, databasePath, ipFilterPath, fakeFileDetectionEnabled, cbFailureRateThreshold,
                 cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds, heartbeatIntervalSeconds,
                 publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad, serverPeers, adminWebPort,
-                serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, OfferFilesConfig.DEFAULT);
+                serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, OfferFilesConfig.DEFAULT,
+                KadSourcesConfig.DEFAULT);
+    }
+
+    /**
+     * Constructor retaining source compatibility for callers that do not provide the Kad source search settings.
+     */
+    public ServerConfig(int port, int maxPacketSize, int maxSearchResults, int floodMaxRequestsPerSecond, int maxUsers,
+                        int maxFiles, int maxFilesPerUser, int maxSourcesPerFile, String databasePath, String ipFilterPath,
+                        boolean fakeFileDetectionEnabled, float cbFailureRateThreshold, int cbMinimumNumberOfCalls,
+                        int cbWaitDurationInSeconds, int tcpKeepAliveTimeoutInSeconds, int heartbeatIntervalSeconds,
+                        String publicIp, int lowIdCheckTimeoutSeconds, String childAbuseKeywordsPath, int adminPort,
+                        KadConfig kad, String serverPeers, int adminWebPort, String serverMetUrl,
+                        String adminBindAddress, String adminAllowedIps, String adminAllowedMacs,
+                        OfferFilesConfig offerFiles) {
+        this(port, maxPacketSize, maxSearchResults, floodMaxRequestsPerSecond, maxUsers, maxFiles, maxFilesPerUser,
+                maxSourcesPerFile, databasePath, ipFilterPath, fakeFileDetectionEnabled, cbFailureRateThreshold,
+                cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds, heartbeatIntervalSeconds,
+                publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad, serverPeers, adminWebPort,
+                serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, KadSourcesConfig.DEFAULT);
     }
 
     public ServerConfig {
@@ -259,6 +282,9 @@ public record ServerConfig(
         }
         if (offerFiles == null) {
             offerFiles = OfferFilesConfig.DEFAULT;
+        }
+        if (kadSources == null) {
+            kadSources = KadSourcesConfig.DEFAULT;
         }
         if (port < 1 || port > 65535) {
             throw new IllegalArgumentException("Port must be between 1 and 65535");
@@ -306,7 +332,7 @@ public record ServerConfig(
                 maxFilesPerUser, maxSourcesPerFile, databasePath, ipFilterPath, fakeFileDetectionEnabled,
                 cbFailureRateThreshold, cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds,
                 heartbeatIntervalSeconds, publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad,
-                serverPeers, adminWebPort, serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles);
+                serverPeers, adminWebPort, serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources);
     }
 
     /**
@@ -317,7 +343,7 @@ public record ServerConfig(
                 maxFilesPerUser, maxSourcesPerFile, databasePath, ipFilterPath, fakeFileDetectionEnabled,
                 cbFailureRateThreshold, cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds,
                 heartbeatIntervalSeconds, publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, newKad,
-                serverPeers, adminWebPort, serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles);
+                serverPeers, adminWebPort, serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources);
     }
 
     /**
@@ -329,7 +355,7 @@ public record ServerConfig(
                 fakeFileDetectionEnabled, cbFailureRateThreshold, cbMinimumNumberOfCalls, cbWaitDurationInSeconds,
                 tcpKeepAliveTimeoutInSeconds, heartbeatIntervalSeconds, publicIp, lowIdCheckTimeoutSeconds,
                 resolve(baseDir, childAbuseKeywordsPath), adminPort, kad, serverPeers, adminWebPort, serverMetUrl,
-                adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles);
+                adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources);
     }
 
     public ServerConfig withAdminPort(int newAdminPort) {
@@ -337,7 +363,7 @@ public record ServerConfig(
                 maxFilesPerUser, maxSourcesPerFile, databasePath, ipFilterPath, fakeFileDetectionEnabled,
                 cbFailureRateThreshold, cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds,
                 heartbeatIntervalSeconds, publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, newAdminPort, kad,
-                serverPeers, adminWebPort, serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles);
+                serverPeers, adminWebPort, serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources);
     }
 
     public ServerConfig withAdminWebPort(int newAdminWebPort) {
@@ -345,7 +371,7 @@ public record ServerConfig(
                 maxFilesPerUser, maxSourcesPerFile, databasePath, ipFilterPath, fakeFileDetectionEnabled,
                 cbFailureRateThreshold, cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds,
                 heartbeatIntervalSeconds, publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad,
-                serverPeers, newAdminWebPort, serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles);
+                serverPeers, newAdminWebPort, serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources);
     }
 
     public ServerConfig withServerMetUrl(String newServerMetUrl) {
@@ -353,7 +379,7 @@ public record ServerConfig(
                 maxFilesPerUser, maxSourcesPerFile, databasePath, ipFilterPath, fakeFileDetectionEnabled, cbFailureRateThreshold,
                 cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds, heartbeatIntervalSeconds,
                 publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad, serverPeers, adminWebPort,
-                newServerMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles);
+                newServerMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources);
     }
 
     public ServerConfig withAdminBindAddress(String newAdminBindAddress) {
@@ -361,7 +387,7 @@ public record ServerConfig(
                 maxFilesPerUser, maxSourcesPerFile, databasePath, ipFilterPath, fakeFileDetectionEnabled, cbFailureRateThreshold,
                 cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds, heartbeatIntervalSeconds,
                 publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad, serverPeers, adminWebPort,
-                serverMetUrl, newAdminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles);
+                serverMetUrl, newAdminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources);
     }
 
     public ServerConfig withAdminAllowedIps(String newAdminAllowedIps) {
@@ -369,7 +395,7 @@ public record ServerConfig(
                 maxFilesPerUser, maxSourcesPerFile, databasePath, ipFilterPath, fakeFileDetectionEnabled, cbFailureRateThreshold,
                 cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds, heartbeatIntervalSeconds,
                 publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad, serverPeers, adminWebPort,
-                serverMetUrl, adminBindAddress, newAdminAllowedIps, adminAllowedMacs, offerFiles);
+                serverMetUrl, adminBindAddress, newAdminAllowedIps, adminAllowedMacs, offerFiles, kadSources);
     }
 
     public ServerConfig withAdminAllowedMacs(String newAdminAllowedMacs) {
@@ -377,7 +403,15 @@ public record ServerConfig(
                 maxFilesPerUser, maxSourcesPerFile, databasePath, ipFilterPath, fakeFileDetectionEnabled, cbFailureRateThreshold,
                 cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds, heartbeatIntervalSeconds,
                 publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad, serverPeers, adminWebPort,
-                serverMetUrl, adminBindAddress, adminAllowedIps, newAdminAllowedMacs, offerFiles);
+                serverMetUrl, adminBindAddress, adminAllowedIps, newAdminAllowedMacs, offerFiles, kadSources);
+    }
+
+    public ServerConfig withKadSources(KadSourcesConfig newKadSources) {
+        return new ServerConfig(port, maxPacketSize, maxSearchResults, floodMaxRequestsPerSecond, maxUsers, maxFiles,
+                maxFilesPerUser, maxSourcesPerFile, databasePath, ipFilterPath, fakeFileDetectionEnabled, cbFailureRateThreshold,
+                cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds, heartbeatIntervalSeconds,
+                publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad, serverPeers, adminWebPort,
+                serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, newKadSources);
     }
 
     public ServerConfig withOfferFiles(OfferFilesConfig newOfferFiles) {
@@ -385,7 +419,7 @@ public record ServerConfig(
                 maxFilesPerUser, maxSourcesPerFile, databasePath, ipFilterPath, fakeFileDetectionEnabled, cbFailureRateThreshold,
                 cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds, heartbeatIntervalSeconds,
                 publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad, serverPeers, adminWebPort,
-                serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, newOfferFiles);
+                serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, newOfferFiles, kadSources);
     }
 
     /**
@@ -442,6 +476,9 @@ public record ServerConfig(
         props.put("offerFilesBatchMax", String.valueOf(offerFiles.batchMax()));
         props.put("offerFilesMinIntervalMs", String.valueOf(offerFiles.minIntervalMs()));
         props.put("offerFilesGlobalRecordsPerSec", String.valueOf(offerFiles.globalRecordsPerSec()));
+        props.put("kadSourceSearchEnabled", String.valueOf(kadSources.enabled()));
+        props.put("kadSourceSearchMinLocal", String.valueOf(kadSources.minLocalSources()));
+        props.put("kadSourceSearchesPerMinute", String.valueOf(kadSources.searchesPerMinute()));
         return props;
     }
 
@@ -484,7 +521,8 @@ public record ServerConfig(
                 props.getProperty("adminBindAddress", DEFAULT.adminBindAddress()),
                 props.getProperty("adminAllowedIps", DEFAULT.adminAllowedIps()),
                 props.getProperty("adminAllowedMacs", DEFAULT.adminAllowedMacs()),
-                OfferFilesConfig.fromProperties(props)
+                OfferFilesConfig.fromProperties(props),
+                KadSourcesConfig.fromProperties(props)
         );
     }
 }

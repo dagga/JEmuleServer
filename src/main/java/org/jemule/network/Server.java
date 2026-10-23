@@ -74,6 +74,7 @@ public class Server {
     private final java.util.Set<Socket> clientSockets = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private final FileIndex fileIndex;
     private final org.jemule.core.MetricsHistory metricsHistory;
+    private volatile KadSourceService kadSourceService;
     /** OFFERFILES v1 ceiling shared by all v1 connections, and its counters. */
     private final org.jemule.core.OfferFilesV1 offerFilesV1 = new org.jemule.core.OfferFilesV1();
     private final FloodProtector floodProtector;
@@ -134,6 +135,24 @@ public class Server {
 
     public KadSearchBridge getKadSearchBridge() {
         return kadSearchBridge;
+    }
+
+    /** Kad source searches for the clients' OP_GETSOURCES; finds nothing while no Kad node runs. */
+    public KadSourceService getKadSourceService() {
+        KadSourceService service = kadSourceService;
+        if (service == null) {
+            synchronized (this) {
+                if (kadSourceService == null) {
+                    kadSourceService = new KadSourceService((hash, size) -> {
+                        KadSearchBridge bridge = kadSearchBridge;
+                        return bridge == null ? java.util.concurrent.CompletableFuture.completedFuture(java.util.List.of())
+                                : bridge.searchSources(hash, size);
+                    }, registry, ipFilter::isBlocked, this::configSnapshot, System::currentTimeMillis);
+                }
+                service = kadSourceService;
+            }
+        }
+        return service;
     }
 
     public void setKadSearchBridge(KadSearchBridge kadSearchBridge) {

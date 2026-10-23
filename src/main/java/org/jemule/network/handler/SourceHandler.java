@@ -35,9 +35,24 @@ public class SourceHandler {
         log.debug("Client {} requested sources for {} ({})", context.getState().clientId(), hash, obfu ? "OBFU" : "plain");
 
         var sources = context.getFileIndex().getSources(hash, context.getState(), context.getConfig().maxSourcesPerFile());
-        byte[] response = obfu ? encodeFoundSourcesObfu(hashBytes, sources) : encodeFoundSources(hashBytes, sources);
+        List<FoundSource> answer = FoundSource.of(reachableSources(sources));
+        // With few sources here, Kad is asked too: its sources come in a second answer
+        org.jemule.network.KadSourceService kad = context.getKadSourceService();
+        if (kad != null) {
+            answer = kad.onGetSources(context.getState(), hashBytes, requestedSize(data), obfu, answer);
+        }
+        byte[] response = obfu ? encodeObfu(hashBytes, answer) : encodePlain(hashBytes, answer);
         byte opcode = obfu ? OpCode.SOURCES_RESULT_OBFU.value : OpCode.FOUND_SOURCES.value;
         new Packet(Packet.PROTOCOL_ED2K, opcode, response).write(out, context.getState().isZlibSupported());
+    }
+
+    /** File size of an OP_GETSOURCES: <code>&lt;size 4&gt;</code>, or <code>&lt;0 4&gt;&lt;size 8&gt;</code> above 4 GB; 0 if absent. */
+    static long requestedSize(byte[] data) {
+        if (data.length < 20) return 0;
+        ByteBuffer buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN);
+        long size = Integer.toUnsignedLong(buf.getInt(16));
+        if (size == 0 && data.length >= 28) size = buf.getLong(20);
+        return size;
     }
 
     /** Connect options of a source as understood by CUpDownClient::SetConnectOptions. */
@@ -55,17 +70,21 @@ public class SourceHandler {
      * obfuscated connection (CPartFile::AddSources).
      */
     public static byte[] encodeFoundSourcesObfu(byte[] hashBytes, List<ClientState> sources) {
-        List<ClientState> usable = reachableSources(sources);
-        int count = Math.min(usable.size(), 255);
+        return encodeObfu(hashBytes, FoundSource.of(reachableSources(sources)));
+    }
+
+    /** OP_FOUNDSOURCES_OBFU of {@code sources}, at most 255. */
+    public static byte[] encodeObfu(byte[] hashBytes, List<FoundSource> sources) {
+        int count = Math.min(sources.size(), 255);
         ByteBuffer buf = ByteBuffer.allocate(16 + 1 + count * (6 + 1 + 16)).order(ByteOrder.LITTLE_ENDIAN);
         buf.put(hashBytes);
         buf.put((byte) count);
         for (int i = 0; i < count; i++) {
-            ClientState s = usable.get(i);
-            int options = cryptOptions(s);
-            boolean withHash = (options & 0x01) != 0;
-            buf.putInt((int) s.clientId());
-            buf.putShort((short) s.listenPort());
+            FoundSource s = sources.get(i);
+            int options = s.cryptOptions() & 0x07;
+            boolean withHash = (options & 0x01) != 0 && s.userHash() != null;
+            buf.putInt((int) s.id());
+            buf.putShort((short) s.port());
             buf.put((byte) (options | (withHash ? 0x80 : 0)));
             if (withHash) buf.put(s.userHash());
         }
@@ -86,15 +105,19 @@ public class SourceHandler {
      * little-endian as read by CPartFile::AddSources. Used by OP_FOUNDSOURCES (TCP) and OP_GLOBFOUNDSOURCES (UDP).
      */
     public static byte[] encodeFoundSources(byte[] hashBytes, List<ClientState> sources) {
-        List<ClientState> usable = reachableSources(sources);
-        int count = Math.min(usable.size(), 255);
+        return encodePlain(hashBytes, FoundSource.of(reachableSources(sources)));
+    }
+
+    /** OP_FOUNDSOURCES of {@code sources}, at most 255. */
+    public static byte[] encodePlain(byte[] hashBytes, List<FoundSource> sources) {
+        int count = Math.min(sources.size(), 255);
         ByteBuffer buf = ByteBuffer.allocate(16 + 1 + count * 6).order(ByteOrder.LITTLE_ENDIAN);
         buf.put(hashBytes);
         buf.put((byte) count);
         for (int i = 0; i < count; i++) {
-            ClientState s = usable.get(i);
-            buf.putInt((int) s.clientId());
-            buf.putShort((short) s.listenPort());
+            FoundSource s = sources.get(i);
+            buf.putInt((int) s.id());
+            buf.putShort((short) s.port());
         }
         return buf.array();
     }

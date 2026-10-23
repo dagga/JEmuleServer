@@ -116,6 +116,30 @@ public final class ClientState {
 
     public java.util.concurrent.atomic.AtomicBoolean softLimitReported() { return softLimitReported; }
 
+    /** Kad source searches started for this client: file hash to time, the 64 most recent. */
+    private final java.util.Map<String, Long> kadSourceSearches = new java.util.LinkedHashMap<>() {
+        @Override
+        protected boolean removeEldestEntry(java.util.Map.Entry<String, Long> eldest) {
+            return size() > 64;
+        }
+    };
+
+    /**
+     * Records a Kad source search for {@code hash} unless this client had one for it within {@code reaskMs}, or
+     * already {@code perHour} in the last hour.
+     *
+     * @return true if the search may start
+     */
+    public boolean tryKadSourceSearch(String hash, long now, long reaskMs, int perHour) {
+        synchronized (kadSourceSearches) {
+            Long last = kadSourceSearches.get(hash);
+            if (last != null && now - last < reaskMs) return false;
+            if (kadSourceSearches.values().stream().filter(t -> now - t < 3_600_000L).count() >= perHour) return false;
+            kadSourceSearches.put(hash, now);
+            return true;
+        }
+    }
+
     /** CT_SERVER_FLAGS: SRVCAP_* capabilities announced by the client. */
     public int serverCaps() { return serverCaps; }
     public void setServerCaps(int serverCaps) { this.serverCaps = serverCaps; }

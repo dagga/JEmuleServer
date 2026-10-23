@@ -62,6 +62,14 @@ public class ClientRegistry {
         }
     }
 
+    /** Sends {@code p} to one connection, if it is still open. @return false if it is closed. */
+    public boolean sendToConnection(int connectionId, Packet p) {
+        Consumer<Packet> messenger = messengers.get(connectionId);
+        if (messenger == null) return false;
+        messenger.accept(p);
+        return true;
+    }
+
     public int size() {
         return connections.size();
     }

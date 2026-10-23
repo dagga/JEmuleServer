@@ -1,6 +1,6 @@
 # JEmuleServer
 
-JEmuleServer is an eMule server written in Java (version 1.2.22).
+JEmuleServer is an eMule server written in Java (version 1.2.23).
 
 Downloads (installers and JAR) are on the [releases page](https://github.com/dagga/JEmuleServer/releases); the changes
 of each version are described in `doc/release-notes-v<version>.md` (latest: [1.2.9](doc/release-notes-v1.2.9.md)).
@@ -27,7 +27,7 @@ Building requires a JDK 21 (Gradle toolchain). To compile the project and genera
 ./gradlew build
 ```
 
-The JAR file will be generated in `build/libs/JEmuleServer-1.2.22.jar`.
+The JAR file will be generated in `build/libs/JEmuleServer-1.2.23.jar`.
 
 ## Installation from the release packages
 
@@ -68,7 +68,7 @@ the JAR for IPv6.
 Once the project is compiled, you can start the server with the following command:
 
 ```bash
-java -XX:MaxRAMPercentage=75 -XX:ThreadPriorityPolicy=1 --add-modules=jdk.httpserver -jar build/libs/JEmuleServer-1.2.22.jar [config_file] [port]
+java -XX:MaxRAMPercentage=75 -XX:ThreadPriorityPolicy=1 --add-modules=jdk.httpserver -jar build/libs/JEmuleServer-1.2.23.jar [config_file] [port]
 ```
 
 - `-XX:ThreadPriorityPolicy=1`: on Linux, the JVM ignores thread priorities without it. The server runs its threads
@@ -232,6 +232,14 @@ that brings this content to its clients without exposing them to illicit files:
   local index and, with `kadForkGlobalSearches=true`, also searched on Kad in the background to populate the
   database: once per query per 30 minutes, at most 20 per minute (3 per source IP), never for queries matching the
   child abuse filter, and never forwarded to other eD2K servers, which could send them back.
+- **Kad sources** (`kadSourceSearchEnabled`, opt-in): when a client asks for the sources of a file
+  (`OP_GETSOURCES`) and the server knows fewer than `kadSourceSearchMinLocal` (10), it answers at once with them, then
+  searches Kad for the file (`KADEMLIA2_SEARCH_SOURCE_REQ` to the nodes closest to its hash) and sends the new sources
+  in a second `OP_FOUNDSOURCES`, which eMule and aMule accept at any time for a file they download. A Kad source that
+  accepts connections is sent with its IP as HighID; a firewalled one is useless to an eD2K client unless it is also
+  connected to this server: it is then sent with its ID here, LowID included, and reached through this server's
+  callback. The sources Kad gave for a file are reused for 20 minutes (1,000 files at most); a client starts at most
+  one search per file every 15 minutes and 20 an hour, and all clients together `kadSourceSearchesPerMinute` (30).
 
 The client waits for Kad only when nothing matches locally (cold search), at most `kadSearchTimeoutSeconds`; the files
 found are then paginated by 300 with the "More" button (`OP_QUERY_MORE_RESULT`), up to the 1,800 files an eMule
@@ -255,11 +263,15 @@ kadAutoIngestToH2=true
 kadMinSourcesForIngest=1
 kadNodesUrls=https://upd.emule-security.org/nodes.dat,http://www.alldivx.de/nodes/nodes.dat
 kadForkGlobalSearches=true
+kadSourceSearchEnabled=false
+kadSourceSearchMinLocal=10
+kadSourceSearchesPerMinute=30
 ```
 
 The bridge stays compatible with the historical eMule clients: the ed2k client-server protocol is unchanged and the
 Kad files reach them as ordinary search results (`OP_SEARCHRESULT`), so clients without Kad support benefit from it
-too. The server never publishes its files on Kad, answers no request from other Kad nodes and never relays file data.
+too; the Kad sources reach them as ordinary server sources (`OP_FOUNDSOURCES`). The server never publishes its files on
+Kad, answers no request from other Kad nodes and never relays file data.
 The packet formats, flows and tests are described in [Kademlia](doc/kademlia.md); interoperability with the eMule
 and aMule Kad nodes has not been validated yet.
 
@@ -270,13 +282,14 @@ JEmuleServer includes a built-in web panel and a command-line interface (CLI). T
 
 It opens on an **Overview**: the number of indexed files with its change over 24 hours and 7 days, the index capacity
 against `maxFiles`, and tiles for the connected clients (with their LowID share), the heap, the verified eD2K servers,
-the searches sent to Kad and to the servers, the files they found, the new files published by
-[OFFERFILES v1](doc/offerfiles-v1.md) clients next to those of legacy clients, the banned hashes, the database (size,
-and whether it had to be reopened after a fatal error) and the uptime; a meter or a status (icon and label) flags what
-nears its limit. Two curves follow, over 24 hours, 7 days or 30 days: the indexed files and the connected clients, sampled every
-5 minutes and kept for a month in the `metrics_history` table, so that they survive a restart. Hovering a curve, or
-the arrow keys once it has the focus, reads the samples; each curve can also be shown as a table of daily values. The
-figures refresh every 30 seconds, the curves every 5 minutes. The page follows the light or dark theme of the system.
+the searches sent to Kad and to the servers, the files they found, the new files published by [OFFERFILES
+v1](doc/offerfiles-v1.md) clients next to those of legacy clients, the Kad sources sent to the clients, the banned
+hashes, the database (size, and whether it had to be reopened after a fatal error) and the uptime; a meter or a status
+(icon and label) flags what nears its limit. Two curves follow, over 24 hours, 7 days or 30 days: the indexed files
+and the connected clients, sampled every 5 minutes and kept for a month in the `metrics_history` table, so that they
+survive a restart. Hovering a curve, or the arrow keys once it has the focus, reads the samples; each curve can also
+be shown as a table of daily values. The figures refresh every 30 seconds, the curves every 5 minutes. The page
+follows the light or dark theme of the system.
 
 The other views show server status, searchable clients, verified named
 server peers, a monitoring view of every known eD2K server and its state, active filters, potential bot-name matches,

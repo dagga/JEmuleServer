@@ -37,6 +37,7 @@ import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashSet;
@@ -107,6 +108,8 @@ public class KadSearchBridge implements AutoCloseable {
     private final ConcurrentHashMap<SessionKey, KadSearchSession> activeSessions = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<KadId, NodeLookup> pendingLookups = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<KadId, ClosestNodes> closestNodes = new ConcurrentHashMap<>();
+    /** Source searches in progress, by file hash: their answers are read as sources, never ingested as files. */
+    private final ConcurrentHashMap<KadId, SourceSession> sourceSessions = new ConcurrentHashMap<>();
     /** The banned hashes of the FakeFileDetector: one set in memory for both. */
     private final Md4Set bannedHashes;
     private final List<IllicitFileListener> illicitListeners = new CopyOnWriteArrayList<>();
@@ -116,6 +119,8 @@ public class KadSearchBridge implements AutoCloseable {
     private final AtomicLong resultsReceived = new AtomicLong(0);
     private final AtomicLong illicitFilesBlocked = new AtomicLong(0);
     private final AtomicLong filesIngested = new AtomicLong(0);
+    private final AtomicLong sourceSearches = new AtomicLong(0);
+    private final AtomicLong sourcesReceived = new AtomicLong(0);
 
     /** Indexes and stores the files found, after the searches and client connections (ingestion tier). */
     private volatile IngestionExecutor ingestion = IngestionExecutor.direct();
@@ -126,6 +131,13 @@ public class KadSearchBridge implements AutoCloseable {
     @FunctionalInterface
     public interface IllicitFileListener {
         void onIllicitFile(FileMetadata file, String reason);
+    }
+
+    /** A source search: the nodes asked, and the sources they answered. */
+    private static final class SourceSession {
+        private final Set<InetSocketAddress> queried = ConcurrentHashMap.newKeySet();
+        private final List<KadPacket.KadSource> sources = new CopyOnWriteArrayList<>();
+        private final CompletableFuture<List<KadPacket.KadSource>> future = new CompletableFuture<>();
     }
 
     /** Searches share a session when they query the same keyword with the same search expression. */
@@ -369,6 +381,62 @@ public class KadSearchBridge implements AutoCloseable {
     }
 
     /**
+     * Searches Kad for the sources of a file (KADEMLIA2_SEARCH_SOURCE_REQ to the nodes closest to its hash), on the
+     * search tier. Concurrent searches of the same file share one session.
+     *
+     * @return the sources answered within the search timeout, possibly none
+     */
+    public CompletableFuture<List<KadPacket.KadSource>> searchSources(byte[] fileHash, long fileSize) {
+        if (!running) {
+            return CompletableFuture.completedFuture(List.of());
+        }
+        KadId target = new KadId(fileHash);
+        SourceSession created = new SourceSession();
+        SourceSession existing = sourceSessions.putIfAbsent(target, created);
+        if (existing != null) {
+            return existing.future;
+        }
+        if (routingTable.findClosest(target, 1).isEmpty()) {
+            sourceSessions.remove(target, created);
+            created.future.complete(List.of());
+            return created.future;
+        }
+        sourceSearches.incrementAndGet();
+        ServerThreads.start(ServerThreads.Tier.SEARCH, "KadSources-" + target.toHexString(), () -> {
+            try {
+                long deadline = System.currentTimeMillis() + searchTimeoutMs;
+                List<KadContact> nodes = closestNodes(target);
+                KadPacket req = KadPacket.createSearchSourceReq(target, fileSize);
+                int sent = 0;
+                for (KadContact contact : nodes.subList(0, Math.min(SEARCH_CANDIDATES, nodes.size()))) {
+                    if (sent == SEARCH_NODES) break;
+                    InetSocketAddress node = new InetSocketAddress(contact.address(), contact.udpPort());
+                    created.queried.add(node); // before the answer can arrive
+                    try {
+                        udpService.send(req, contact.address(), contact.udpPort());
+                        sent++;
+                    } catch (IOException e) {
+                        created.queried.remove(node);
+                        log.debug("Failed to send source search to {}: {}", contact, e.getMessage());
+                    }
+                }
+                requestsSent.addAndGet(sent);
+                if (sent > 0) {
+                    Thread.sleep(Math.max(MIN_RESULT_WAIT_MS, deadline - System.currentTimeMillis()));
+                }
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+            } catch (RuntimeException e) {
+                log.debug("Kad source search for {} failed: {}", target, e.getMessage());
+            } finally {
+                sourceSessions.remove(target, created);
+                created.future.complete(List.copyOf(created.sources));
+            }
+        });
+        return created.future;
+    }
+
+    /**
      * Returns the contacts closest to {@code target}: those of a recent lookup, or of a new one. Searches of the
      * same keyword at the same time wait for a single lookup.
      */
@@ -532,6 +600,7 @@ public class KadSearchBridge implements AutoCloseable {
     }
 
     protected void handleSearchRes(KadPacket packet, InetAddress remoteAddress, int remotePort) {
+        if (handleSourceRes(packet.data(), remoteAddress, remotePort)) return;
         KadPacket.SearchRes parsed = KadPacket.parseSearchRes(packet.data());
         if (parsed == null) return;
 
@@ -597,6 +666,27 @@ public class KadSearchBridge implements AutoCloseable {
                 requestNextPage(session, remoteAddress, remotePort, nextPage);
             }
         }
+    }
+
+    /**
+     * Takes a KADEMLIA2_SEARCH_RES whose target is a file of a source search, from a node that search asked.
+     *
+     * @return true if the packet answered a source search (or was refused for it), false for a keyword search
+     */
+    private boolean handleSourceRes(byte[] data, InetAddress remoteAddress, int remotePort) {
+        if (sourceSessions.isEmpty() || data == null || data.length < 34) return false;
+        SourceSession session = sourceSessions.get(KadId.fromWire(Arrays.copyOfRange(data, 16, 32)));
+        if (session == null) return false;
+        if (!session.queried.contains(new InetSocketAddress(remoteAddress, remotePort))) {
+            log.debug("Ignored source answer from {}:{}, not queried", remoteAddress.getHostAddress(), remotePort);
+            return true;
+        }
+        KadPacket.SourceRes parsed = KadPacket.parseSourceRes(data);
+        if (parsed != null) {
+            session.sources.addAll(parsed.sources());
+            sourcesReceived.addAndGet(parsed.sources().size());
+        }
+        return true;
     }
 
     /**
@@ -710,6 +800,16 @@ public class KadSearchBridge implements AutoCloseable {
 
     public long getResultsReceived() {
         return resultsReceived.get();
+    }
+
+    /** Kad source searches started. */
+    public long getSourceSearches() {
+        return sourceSearches.get();
+    }
+
+    /** Sources received from Kad, of any type. */
+    public long getSourcesReceived() {
+        return sourcesReceived.get();
     }
 
     public long getFilesIngested() {
