@@ -52,7 +52,10 @@ public class DatabaseManager implements AutoCloseable {
             MERGE INTO file_sources (hash, source_count) KEY (hash)
             SELECT ?, ? FROM files WHERE hash = ?""";
 
-    private final String url;
+    /** The database without its settings. */
+    private final String baseUrl;
+    /** Connection URL: AUTO_COMPACT_FILL_RATE=0 until {@link #enableOnlineCompaction()}. */
+    private volatile String url;
     /** The H2 file, for the sizes logged around a compaction. */
     private final java.io.File file;
     /** Replaced when the database is reopened after a fatal error; only used while holding {@link #lock}. */
@@ -74,11 +77,13 @@ public class DatabaseManager implements AutoCloseable {
     }
 
     public DatabaseManager(String dbPath, float failureRateThreshold, int minCalls, int waitDurationInSeconds) throws SQLException {
-        // No background compaction: it rewrites the live pages at the end of the file, and while a long statement
-        // (the load at startup, a migration) keeps the old ones, the file grows by gigabytes. The file is
-        // compacted at startup instead (compactIfSparse). A 4 MB page cache instead of 16: the database is read
-        // once at startup, then only written to.
-        this.url = "jdbc:h2:" + dbPath + ";AUTO_COMPACT_FILL_RATE=0;CACHE_SIZE=4096";
+        // No background compaction until the startup load is over: it rewrites the live pages at the end of the
+        // file, and while a long statement (the load at startup, a migration) keeps the old ones, the file grows by
+        // gigabytes. The file is compacted at startup instead (compactIfSparse), then online once the server runs
+        // (enableOnlineCompaction). A 4 MB page cache instead of 16: the database is read once at startup, then only
+        // written to.
+        this.baseUrl = "jdbc:h2:" + dbPath;
+        this.url = baseUrl + ";AUTO_COMPACT_FILL_RATE=0;CACHE_SIZE=4096";
         this.file = new java.io.File(dbPath + ".mv.db");
         this.connection = DriverManager.getConnection(url, "sa", "");
         
@@ -270,6 +275,71 @@ public class DatabaseManager implements AutoCloseable {
              ResultSet rs = stmt.executeQuery("SELECT COUNT(*) FROM " + table)) {
             rs.next();
             return rs.getLong(1);
+        }
+    }
+
+    /**
+     * Turns compaction on once the startup load is over, by reopening the connection with
+     * AUTO_COMPACT_FILL_RATE={@link #MIN_FILL_RATE}: H2 then compacts in the background, and {@link #compactOnline}
+     * works. Without it, the writes of a running server make the file grow by about a gigabyte a day. Never before
+     * the load: while a long read keeps the old pages, the pages rewritten by a compaction cannot be freed and the
+     * file grows instead (1.2.15).
+     */
+    public void enableOnlineCompaction() {
+        try {
+            locked(() -> {
+                if (url.contains("AUTO_COMPACT_FILL_RATE=" + MIN_FILL_RATE)) return null;
+                url = baseUrl + ";AUTO_COMPACT_FILL_RATE=" + MIN_FILL_RATE + ";CACHE_SIZE=4096";
+                connection.close();
+                connection = DriverManager.getConnection(url, "sa", "");
+                logger.info("Online database compaction enabled (file {} MB, {}% used)", file.length() / 1_048_576,
+                        chunksFillRate());
+                return null;
+            });
+        } catch (Throwable e) {
+            logger.error("Could not enable online database compaction: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Compacts the file, for at most {@code maxMillis}, when its chunks are less than {@link #MIN_FILL_RATE}% used.
+     * Does nothing before {@link #enableOnlineCompaction}. Holds the connection lock meanwhile, so that no other
+     * statement runs.
+     *
+     * @return true if the file was compacted
+     */
+    public boolean compactOnline(int maxMillis) {
+        try {
+            return locked(() -> {
+                if (!url.contains("AUTO_COMPACT_FILL_RATE=" + MIN_FILL_RATE)) return false;
+                int fillRate = chunksFillRate();
+                if (fillRate < 0 || fillRate >= MIN_FILL_RATE) return false;
+                if (!(connection instanceof org.h2.jdbc.JdbcConnection jdbc)
+                        || !(jdbc.getSession() instanceof org.h2.engine.SessionLocal session)) return false;
+                org.h2.mvstore.db.Store store = session.getDatabase().getStore();
+                if (store == null) return false;
+                long before = file.length();
+                long start = System.currentTimeMillis();
+                store.compactFile(maxMillis);
+                logger.info("Database compacted in {} ms: {} MB, {}% used -> {} MB, {}% used",
+                        System.currentTimeMillis() - start, before / 1_048_576, fillRate, file.length() / 1_048_576,
+                        chunksFillRate());
+                return true;
+            });
+        } catch (Throwable e) {
+            logger.warn("Online database compaction failed: {}", e.getMessage());
+            return false;
+        }
+    }
+
+    /** Percentage of the chunks of the file still in use, -1 if unknown. */
+    private int chunksFillRate() {
+        try (Statement stmt = connection.createStatement();
+             ResultSet rs = stmt.executeQuery(
+                     "SELECT SETTING_VALUE FROM INFORMATION_SCHEMA.SETTINGS WHERE SETTING_NAME = 'info.CHUNKS_FILL_RATE'")) {
+            return rs.next() ? Integer.parseInt(rs.getString(1)) : -1;
+        } catch (SQLException | NumberFormatException e) {
+            return -1;
         }
     }
 

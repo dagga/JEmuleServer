@@ -1,6 +1,6 @@
 # JEmuleServer
 
-JEmuleServer is an eMule server written in Java (version 1.2.20).
+JEmuleServer is an eMule server written in Java (version 1.2.21).
 
 Downloads (installers and JAR) are on the [releases page](https://github.com/dagga/JEmuleServer/releases); the changes
 of each version are described in `doc/release-notes-v<version>.md` (latest: [1.2.9](doc/release-notes-v1.2.9.md)).
@@ -27,7 +27,7 @@ Building requires a JDK 21 (Gradle toolchain). To compile the project and genera
 ./gradlew build
 ```
 
-The JAR file will be generated in `build/libs/JEmuleServer-1.2.20.jar`.
+The JAR file will be generated in `build/libs/JEmuleServer-1.2.21.jar`.
 
 ## Installation from the release packages
 
@@ -68,7 +68,7 @@ the JAR for IPv6.
 Once the project is compiled, you can start the server with the following command:
 
 ```bash
-java -XX:MaxRAMPercentage=75 -XX:ThreadPriorityPolicy=1 --add-modules=jdk.httpserver -jar build/libs/JEmuleServer-1.2.20.jar [config_file] [port]
+java -XX:MaxRAMPercentage=75 -XX:ThreadPriorityPolicy=1 --add-modules=jdk.httpserver -jar build/libs/JEmuleServer-1.2.21.jar [config_file] [port]
 ```
 
 - `-XX:ThreadPriorityPolicy=1`: on Linux, the JVM ignores thread priorities without it. The server runs its threads
@@ -157,8 +157,11 @@ A database written by version 1.2.14 or older is migrated at the first start: th
 (about 75 seconds for 3.3 million tag rows on the reference server); a migration interrupted halfway starts again at
 the next start.
 
-H2 does not compact the file in the background (a compaction running during the startup load made the file grow
-until the disk was full): the file is compacted at startup, before it is read, when less than 80% of it is used.
+H2 does not compact the file while the startup load reads it (a compaction running during that load made the file
+grow until the disk was full): the file is compacted at startup, before it is read, when less than 80% of it is used.
+Once the load is over, it is compacted online: in the background by H2, and every 10 minutes by the server when less
+than 80% of it is used (writes held for at most 5 seconds, logged with the sizes before and after). Without it, the
+writes of a running server made the file grow from 200 MB to 1.4 GB in 15 hours.
 
 ## Configuration
 
