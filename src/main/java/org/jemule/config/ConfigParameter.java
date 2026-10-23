@@ -86,7 +86,15 @@ public enum ConfigParameter {
     KAD_NODES_URLS("kadNodesUrls", Type.STRING, Scope.RESTART, 0, 0,
             "nodes.dat sources used to bootstrap Kad (comma-separated, empty = disabled)"),
     KAD_FORK_GLOBAL_SEARCHES("kadForkGlobalSearches", Type.BOOLEAN, Scope.RESTART, 0, 0,
-            "Search the UDP global searches of other servers' clients on Kad to populate the database");
+            "Search the UDP global searches of other servers' clients on Kad to populate the database"),
+    OFFER_FILES_V1_ENABLED("offerFilesV1Enabled", Type.BOOLEAN, Scope.HOT, 0, 0,
+            "Answer clients asking for OFFERFILES v1 at login and hold them to its pace (new logins)"),
+    OFFER_FILES_BATCH_MAX("offerFilesBatchMax", Type.INTEGER, Scope.HOT, 1, 100_000,
+            "OFFERFILES v1: most files in one OP_OFFERFILES (new logins)"),
+    OFFER_FILES_MIN_INTERVAL_MS("offerFilesMinIntervalMs", Type.INTEGER, Scope.HOT, 1, 3_600_000,
+            "OFFERFILES v1: least time in milliseconds between two full batches (new logins)"),
+    OFFER_FILES_GLOBAL_RECORDS_PER_SEC("offerFilesGlobalRecordsPerSec", Type.INTEGER, Scope.HOT, 0, 10_000_000,
+            "OFFERFILES v1: files per second accepted from all v1 clients together (0 = no ceiling)");
 
     /** Value type of a parameter, with its parsing and formatting rules. */
     public enum Type {

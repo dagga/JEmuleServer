@@ -87,6 +87,14 @@ public record Tag(byte type, String name, Object value) {
     public static final String NAME_SERVER_VERSION = "\u0091"; // CT_SERVER_VERSION (Same as ST_VERSION, but used in Server.java)
 
 
+    // OFFERFILES v1 (doc/offerfiles-v1.md): string-named uint32 tags, which legacy peers skip as unknown tags.
+    // The client asks with NAME_OFFERFILES_VERSION in OP_LOGINREQUEST, the server answers with all three in OP_SERVERIDENT.
+    public static final String NAME_OFFERFILES_VERSION = "offerfiles_v";
+    public static final String NAME_OFFERFILES_BATCH_MAX = "offerfiles_batch_max";
+    public static final String NAME_OFFERFILES_MIN_INTERVAL_MS = "offerfiles_min_interval_ms";
+    /** Version of the OFFERFILES contract this server implements. */
+    public static final int OFFERFILES_VERSION = 1;
+
     // Capability flags (from server.h)
     public static final int TCPFLG_COMPRESSION = 0x01;
     public static final int TCPFLG_NEWTAGS = 0x08;

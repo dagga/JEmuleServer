@@ -11,11 +11,11 @@ TODO tracks implementation work, not configuration reference. Configuration defa
 - [x] Collect client-reported server lists and gossip discoveries into the verified server pool; periodically refresh server status and remove peers after repeated missed probes. Client searches are also sent to verified servers, and matching, filtered results are persisted in the file index/H2 like Kad results. Client-reported lists are accepted only when explicitly sent as server-list packets; standard clients do not automatically upload their local list.
 - [x] NAT traversal (NAT-T) hole-punch coordination for LowID↔LowID transfers: callback requests now notify both clients of each other's observed public IP, listening port, crypt options, and user hash so they can initiate TCP connections simultaneously.
 - [x] Built-in admin web panel on configurable loopback-only HTTP (`adminWebPort`, default 8080), with server-side client search, named verified server peers, IP/fake-file filters, persistent hash blocks, runtime settings, and potential-bot matches labeled as nickname heuristics only. The CLI includes client search plus `peers`, `filters`, `bots`, `blocks`, and `settings` commands.
+- [x] OFFERFILES v1 (opt-in): clients that ask at login are told, in `OP_SERVERIDENT`, how many files per batch and how often they may publish, and are held to it, so a large library is published in minutes instead of hours. Same contract as ed2k-server and aMule 3.2.
 
 ## Remaining
 
 - [ ] IPv6 (opt-in): clients can connect over IPv6, and a client that is LowID on IPv4 but has a public IPv6 is published as an IPv6 source to peers that can parse it.
-- [ ] OFFERFILES v1 (opt-in): tells capable clients how many files per batch and how often they may publish, and holds them to it, so a large library is published in minutes instead of hours.
 - [ ] HighID verified by a client-to-client hello, not only a TCP connect: a port forwarded to a different client behind the same NAT no longer earns HighID.
 - [ ] IP filtering in eMule guarding.p2p format, with per-range hit statistics.
 - [ ] GeoIP country and provider for IPv4 and IPv6 (MaxMind DB, with the ip-to-country.csv fallback), bot/scanner detection, CSAM-publisher banning.

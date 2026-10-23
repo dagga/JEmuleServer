@@ -94,7 +94,7 @@ class ServerTagsTest {
         assertEquals(Tag.TYPE_INTEGER, verTag.type());
         int version = (int) verTag.value();
         // displayed by eMule as String.format("%u.%02u", v >> 16, v & 0xFFFF)
-        assertEquals("17.15", String.format("%d.%02d", version >>> 16, version & 0xFFFF));
+        assertEquals("17.16", String.format("%d.%02d", version >>> 16, version & 0xFFFF));
 
         Tag maxUsersTag = findTag(tags, Tag.NAME_MAXUSERS);
         assertNotNull(maxUsersTag, "Missing NAME_MAXUSERS tag");
@@ -104,7 +104,7 @@ class ServerTagsTest {
         Tag softTag = findTag(tags, Tag.NAME_SOFT_FILES);
         assertNotNull(softTag, "Missing NAME_SOFT_FILES tag");
         assertEquals(Tag.TYPE_INTEGER, softTag.type());
-        assertEquals(1000000, ((Number) softTag.value()).intValue());
+        assertEquals(100, ((Number) softTag.value()).intValue(), "ST_SOFTFILES is maxFilesPerUser");
 
         Tag hardTag = findTag(tags, Tag.NAME_HARD_FILES);
         assertNotNull(hardTag, "Missing NAME_HARD_FILES tag");

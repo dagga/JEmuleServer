@@ -74,6 +74,8 @@ public class Server {
     private final java.util.Set<Socket> clientSockets = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private final FileIndex fileIndex;
     private final org.jemule.core.MetricsHistory metricsHistory;
+    /** OFFERFILES v1 ceiling shared by all v1 connections, and its counters. */
+    private final org.jemule.core.OfferFilesV1 offerFilesV1 = new org.jemule.core.OfferFilesV1();
     private final FloodProtector floodProtector;
     private final IPFilter ipFilter;
     private final IPFilterUpdater ipFilterUpdater;
@@ -1122,8 +1124,8 @@ public class Server {
         resp.putInt(registry.size());
         resp.putInt(fileIndex.fileCount());
         resp.putInt(config.maxUsers());
-        resp.putInt(1000000); // SoftFiles (Standard Lugdunum value)
-        resp.putInt(2000000); // HardFiles (Standard Lugdunum value)
+        resp.putInt(config.maxFilesPerUser()); // SoftFiles: distinct files indexed per client
+        resp.putInt(org.jemule.network.handler.PublishHandler.HARD_FILES); // HardFiles: an OP_OFFERFILES must declare fewer
         resp.putInt(Tag.SERVER_UDP_FLAGS);
         resp.putInt(registry.lowIdCount());
         resp.putShort((short) udpObfuscationPort()); // CServer::SetObfuscationPortUDP
@@ -1237,8 +1239,8 @@ public class Server {
         java.util.List<org.jemule.protocol.Tag> tags = new java.util.ArrayList<>();
         tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_HASH, "\u0011", getServerHash())); // ST_SERVERHASH (mapped to version tag ID in some contexts, but usually hash is first)
         tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_MAXUSERS, maxUsers));
-        tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_SOFTFILES, 1000000));
-        tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_HARDFILES, 2000000));
+        tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_SOFTFILES, config.maxFilesPerUser()));
+        tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_HARDFILES, org.jemule.network.handler.PublishHandler.HARD_FILES));
 
         tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_STRING, org.jemule.protocol.Tag.NAME_SERVERNAME, sName));
         tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_STRING, org.jemule.protocol.Tag.NAME_DESCRIPTION, sDesc));
@@ -1285,6 +1287,10 @@ public class Server {
     /** Samples of the index size and of the connected clients, for the curves of the admin panel. */
     org.jemule.core.MetricsHistory getMetricsHistory() {
         return metricsHistory;
+    }
+
+    public org.jemule.core.OfferFilesV1 getOfferFilesV1() {
+        return offerFilesV1;
     }
 
     private void recordMetrics() {

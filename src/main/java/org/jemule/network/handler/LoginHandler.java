@@ -1,7 +1,9 @@
 package org.jemule.network.handler;
 
 import org.jemule.Main;
+import org.jemule.config.OfferFilesConfig;
 import org.jemule.core.ClientState;
+import org.jemule.core.OfferFilesSession;
 import org.jemule.core.event.ClientEvent;
 import org.jemule.network.Packet;
 import org.jemule.network.FirewallChecker;
@@ -65,8 +67,9 @@ public class LoginHandler {
         });
 
         // Send server version FIRST on its own line for eMule auto-detection
-        sendServerMessage(context, out, "server version 17.15");
+        sendServerMessage(context, out, "server version " + Main.ESERVER_VERSION);
 
+        negotiateOfferFiles(context, state);
         sendServerIdent(context, out);
         
         // --- Corrected ID_CHANGE packet construction matching eMule's expectations ---
@@ -95,6 +98,25 @@ public class LoginHandler {
     }
 
     /**
+     * OFFERFILES v1 (doc/offerfiles-v1.md): only a client that asked for it at login, on a server where it is enabled,
+     * gets the terms in OP_SERVERIDENT and is held to them for the whole connection. Every other client publishes as on
+     * a legacy server.
+     */
+    static void negotiateOfferFiles(ClientContext context, ClientState state) {
+        if (state.offerFilesRequested() < Tag.OFFERFILES_VERSION) return;
+        context.getOfferFilesV1().loginAsked();
+        OfferFilesConfig offerFiles = context.getConfig().offerFiles();
+        if (!offerFiles.enabled()) return;
+        OfferFilesSession session = OfferFilesSession.of(context.getConfig().maxFilesPerUser(), PublishHandler.HARD_FILES, offerFiles);
+        if (!session.isValid()) {
+            log.error("OFFERFILES v1 not advertised: invalid terms {}", session);
+            return;
+        }
+        state.setOfferFilesSession(session);
+        context.getOfferFilesV1().sessionAdvertised();
+    }
+
+    /**
      * Chooses the client's ID like eD2K servers do: its IP (HighID) if it accepts incoming connections on
      * the TCP port announced in the login (the answer must carry its user hash), a LowID (&lt; 2^24) otherwise. An IP whose ID would be below 2^24
      * (x.y.z.0) or that is not IPv4 can only get a LowID.
@@ -119,7 +141,8 @@ public class LoginHandler {
     /**
      * Parses OP_LOGINREQUEST as sent by CServerConnect::ConnectionEstablished:
      * <pre>&lt;userhash 16&gt;&lt;clientID 4&gt;&lt;listen port 2&gt;&lt;tagcount 4&gt;
-     *   CT_NAME (string), CT_VERSION (uint32), CT_SERVER_FLAGS (uint32 SRVCAP_*), CT_EMULE_VERSION (uint32)</pre>
+     *   CT_NAME (string), CT_VERSION (uint32), CT_SERVER_FLAGS (uint32 SRVCAP_*), CT_EMULE_VERSION (uint32)
+     *   [offerfiles_v (string-named uint32, OFFERFILES v1 request)]</pre>
      * A malformed or short packet is tolerated: the corresponding fields keep their defaults.
      */
     public static void parseLoginRequest(ClientState state, byte[] data) {
@@ -140,6 +163,8 @@ public class LoginHandler {
                 case Tag.NAME_CLIENT_VERSION -> { if (tag.isInt()) state.setClientVersion(tag.unsignedValue()); }
                 case Tag.NAME_TCP_FLAGS -> { if (tag.isInt()) state.setServerCaps((int) tag.unsignedValue()); }
                 case Tag.NAME_EMULE_VERSION -> { if (tag.isInt()) state.setEmuleVersion(tag.unsignedValue()); }
+                // Highest OFFERFILES version the client implements; any other type than uint32 means a legacy client
+                case Tag.NAME_OFFERFILES_VERSION -> { if (tag.type() == Tag.TYPE_INTEGER) state.setOfferFilesRequested(tag.unsignedValue()); }
                 default -> log.debug("Ignoring unknown login tag 0x{}", tag.name().length() == 1 ? Integer.toHexString(tag.name().charAt(0)) : tag.name());
             }
         }
@@ -193,9 +218,11 @@ public class LoginHandler {
         // Important: Standard Lugdunum/eMule servers often send critical stats first
         // Note: Using TYPE_STRING for limits as some eMule clients expect strings for display
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_MAXUSERS, maxUsers));
-        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOFTFILES, 1000000));
-        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_HARDFILES, 2000000));
-        
+        // ST_SOFTFILES: distinct files indexed per connection; ST_HARDFILES: an OP_OFFERFILES must declare fewer files
+        OfferFilesSession offerFiles = context.getState() != null ? context.getState().offerFilesSession() : null;
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOFTFILES, offerFiles != null ? offerFiles.softFiles() : context.getConfig().maxFilesPerUser()));
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_HARDFILES, offerFiles != null ? offerFiles.hardFiles() : PublishHandler.HARD_FILES));
+
         tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_SERVERNAME, serverName));
         tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_DESCRIPTION, desc));
         // ST_VERSION as integer for standard compliance
@@ -206,6 +233,12 @@ public class LoginHandler {
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDPKEYIP, (int) ClientState.ipToLong(context.getSocket().getInetAddress()))); // ST_UDPKEYIP: IP the key is valid for
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_TCPPORTOBFUSCATION, portInt)); // ST_TCPPORTOBFUSCATION
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_UDPPORTOBFUSCATION, portInt + 12)); // ST_UDPPORTOBFUSCATION (port + 12)
+        if (offerFiles != null) {
+            // All or nothing, each once, only to a client that asked: the connection is held to exactly these terms
+            tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_OFFERFILES_VERSION, Tag.OFFERFILES_VERSION));
+            tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_OFFERFILES_BATCH_MAX, offerFiles.batchMax()));
+            tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_OFFERFILES_MIN_INTERVAL_MS, offerFiles.minIntervalMs()));
+        }
 
         ByteBuffer buf = ByteBuffer.allocate(4096).order(ByteOrder.LITTLE_ENDIAN);
         buf.put(hash);

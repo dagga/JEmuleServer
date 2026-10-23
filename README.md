@@ -264,9 +264,10 @@ JEmuleServer includes a built-in web panel and a command-line interface (CLI). T
 
 It opens on an **Overview**: the number of indexed files with its change over 24 hours and 7 days, the index capacity
 against `maxFiles`, and tiles for the connected clients (with their LowID share), the heap, the verified eD2K servers,
-the searches sent to Kad and to the servers, the files they found, the banned hashes, the database (size, and whether
-it had to be reopened after a fatal error) and the uptime; a meter or a status (icon and label) flags what nears its
-limit. Two curves follow, over 24 hours, 7 days or 30 days: the indexed files and the connected clients, sampled every
+the searches sent to Kad and to the servers, the files they found, the new files published by
+[OFFERFILES v1](doc/offerfiles-v1.md) clients next to those of legacy clients, the banned hashes, the database (size,
+and whether it had to be reopened after a fatal error) and the uptime; a meter or a status (icon and label) flags what
+nears its limit. Two curves follow, over 24 hours, 7 days or 30 days: the indexed files and the connected clients, sampled every
 5 minutes and kept for a month in the `metrics_history` table, so that they survive a restart. Hovering a curve, or
 the arrow keys once it has the focus, reads the samples; each curve can also be shown as a table of daily values. The
 figures refresh every 30 seconds, the curves every 5 minutes. The page follows the light or dark theme of the system.
@@ -388,6 +389,7 @@ More information can be found in the `doc/` directory:
 - [Release notes 1.2.6](doc/release-notes-v1.2.6.md) / [1.2.5](doc/release-notes-v1.2.5.md) / [1.2.3](doc/release-notes-v1.2.3.md) / [1.2.2](doc/release-notes-v1.2.2.md) / [1.2.1](doc/release-notes-v1.2.1.md) / [1.2](doc/release-notes-v1.2.md) / [1.1](doc/release-notes-v1.1.md) / [1.0.1](doc/release-notes-v1.0.1.md) / [1.0](doc/release-notes-v1.0.md)
 - [Protocols Description](doc/protocols.md)
 - [Kademlia Search Bridge](doc/kademlia.md)
+- [OFFERFILES v1: negotiated fast publishing](doc/offerfiles-v1.md)
 - [Technical References](doc/references.md)
 - [Class Diagram](doc/class_diagram.puml)
 - [Connection Sequence Diagram](doc/sequence_diagram.puml)

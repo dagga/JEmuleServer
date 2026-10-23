@@ -112,7 +112,7 @@ public class EmuleSpecTest {
 
                         Tag softFilesTag = tags.stream().filter(t -> t.name().equals(Tag.NAME_SOFTFILES)).findFirst().orElse(null);
                         assertNotNull(softFilesTag, "ST_SOFTFILES missing");
-                        assertEquals(1000000, ((Number) softFilesTag.value()).intValue());
+                        assertEquals(1000, ((Number) softFilesTag.value()).intValue(), "ST_SOFTFILES is maxFilesPerUser");
 
                         Tag hardFilesTag = tags.stream().filter(t -> t.name().equals(Tag.NAME_HARDFILES)).findFirst().orElse(null);
                         assertNotNull(hardFilesTag, "ST_HARDFILES missing");
@@ -198,7 +198,7 @@ public class EmuleSpecTest {
             
             assertEquals(TEST_PORT, tcpPort, "Wrong TCP port in the UDP packet");
             assertEquals(5000, maxUsers, "Wrong MaxUsers in OP_GLOBSERVSTATRES");
-            assertEquals(1000000, softFiles, "Wrong SoftFiles in OP_GLOBSERVSTATRES");
+            assertEquals(1000, softFiles, "Wrong SoftFiles in OP_GLOBSERVSTATRES: maxFilesPerUser");
             assertEquals(2000000, hardFiles, "Wrong HardFiles in OP_GLOBSERVSTATRES");
             assertTrue((udpFlags & 0x200) != 0, "UDPOBFUSCATION flag (0x200) missing in OP_GLOBSERVSTATRES");
             assertTrue((udpFlags & 0x400) != 0, "TCPOBFUSCATION flag (0x400) missing in OP_GLOBSERVSTATRES");

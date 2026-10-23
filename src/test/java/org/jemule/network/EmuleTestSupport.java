@@ -58,6 +58,8 @@ public final class EmuleTestSupport {
         private ServerSearchBridge serverSearchBridge;
         private ClientState state;
         private OutputStream wrappedOut;
+        private org.jemule.core.OfferFilesV1 offerFilesV1 = new org.jemule.core.OfferFilesV1();
+        private boolean disconnected;
 
         public FakeContext(Socket socket, ServerConfig config, ClientRegistry registry, FileIndex fileIndex) {
             this.socket = socket;
@@ -91,7 +93,12 @@ public final class EmuleTestSupport {
         @Override public OutputStream getWrappedOut() { return wrappedOut; }
         @Override public void setWrappedOut(OutputStream out) { this.wrappedOut = out; }
         @Override public void setObfuscated(boolean obfuscated) { }
-        @Override public void disconnect() throws IOException { }
+        @Override public void disconnect() throws IOException { disconnected = true; }
+
+        public boolean isDisconnected() { return disconnected; }
+
+        @Override public org.jemule.core.OfferFilesV1 getOfferFilesV1() { return offerFilesV1; }
+        public void setOfferFilesV1(org.jemule.core.OfferFilesV1 offerFilesV1) { this.offerFilesV1 = offerFilesV1; }
     }
 
     /** Default eMule TCP listen port announced in the login request of test clients. */
