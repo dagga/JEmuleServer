@@ -77,8 +77,20 @@ java -XX:MaxRAMPercentage=75 -XX:ThreadPriorityPolicy=1 --add-modules=jdk.httpse
   priority works for any user; raising the admin tier above the clients needs root or `CAP_SYS_NICE`. The startup log
   says whether the priorities are applied. The .deb and .rpm launchers already pass the option.
 - `-XX:MaxRAMPercentage=75`: lets the heap grow to 75% of the RAM instead of 25%; the .deb and .rpm launchers
-  already pass it. On a 1 GB server, prefer the explicit `-Xmx600m -Xmn48m` of the reference server (see Memory
-  sizing below).
+  already pass it. On a 1 GB server, prefer the explicit heap options of the reference server (see Memory sizing
+  below).
+
+JVM options used by the server:
+
+| Option | Effect | When |
+|---|---|---|
+| `--add-modules=jdk.httpserver` | Loads the HTTP server module of the admin web panel and its API. | Always (the launchers pass it). |
+| `-XX:ThreadPriorityPolicy=1` | Applies the thread priority tiers on Linux. | Always on Linux (the launchers pass it). |
+| `-XX:MaxRAMPercentage=75` | Heap up to 75% of the RAM instead of 25%. | Dedicated server with enough RAM; the .deb and .rpm launchers pass it. |
+| `-Xmx<size>` | Maximum heap, replaces `MaxRAMPercentage`. | Small server: sized from `maxFiles` (see Memory sizing). |
+| `-Xmn48m` | Young generation of 48 MB instead of a third of the heap. | With `-Xmx` on a small server. |
+| `-XX:MinHeapFreeRatio=10 -XX:MaxHeapFreeRatio=30` | After a full collection, the JVM gives back to the system the heap beyond 30% above what is in use, and grows it again when needed. | Small server whose RAM is short. |
+| `-Djava.net.preferIPv4Stack=true` | Do not use: it disables the IPv6 listener. | Never. |
 
 - Note: The server binds to the IPv6 wildcard when available, so IPv6 clients can connect. Avoid forcing the JVM to
   prefer IPv4 (i.e. do not use `-Djava.net.preferIPv4Stack=true`) if you expect IPv6 connectivity. The ed2k protocol
@@ -105,7 +117,7 @@ The production server runs with this calibration:
 | Memory | 947 MB of RAM, 512 MB swap file |
 | Disk | 9.8 GB |
 | System | Fedora Linux 43 Server, OpenJDK 25 |
-| Launch | `java --add-modules=jdk.httpserver -Xmx600m -Xmn48m -XX:ThreadPriorityPolicy=1 -jar JEmuleServer-<version>.jar server.properties` |
+| Launch | `java --add-modules=jdk.httpserver -Xmx600m -Xmn48m -XX:MinHeapFreeRatio=10 -XX:MaxHeapFreeRatio=30 -XX:ThreadPriorityPolicy=1 -jar JEmuleServer-<version>.jar server.properties` |
 | `server.properties` | `maxFiles=1200000` |
 
 Measured with 1.2.19, 706,165 files and 196,532 banned hashes:
@@ -116,6 +128,16 @@ Measured with 1.2.19, 706,165 files and 196,532 banned hashes:
 | Java process | about 490 MB resident |
 | Database file (`jemule_db.mv.db`) | 168 MB (about 240 bytes per file) |
 | Startup (database load) | about 3 minutes |
+
+Measured with 1.2.22, 825,542 files and 232,355 banned hashes, after a full collection:
+
+| | |
+|---|---|
+| Live heap | 293 MB (about 350 bytes per file) |
+| Old generation kept by the JVM | 419 MB with the heap free ratios, 503 MB without them |
+| Java process | 549 MB resident with the heap free ratios, 616 MB without them |
+| Database file (`jemule_db.mv.db`) | 250 MB |
+| Startup (database load) | about 4 minutes 30 |
 
 The same server needed 422 MB of live heap for 686,506 files with 1.2.16 (about 615 bytes per file) and swapped:
 1.2.17 shares and compacts the banned hashes, 1.2.18 stores the files in arrays, 1.2.19 shrinks the H2 cache.
@@ -130,6 +152,11 @@ Why these settings:
   process then takes at most about 700 MB and the system and kernel about 150 MB: on 947 MB of RAM, the swap file
   takes the cold pages. `./gradlew benchmark -Pfiles=1200000 -Pheap=600m -Pcpus=1` loads 1,200,000 files in this
   heap. For 1,000,000 files, `-Xmx520m` is enough.
+- `-XX:MinHeapFreeRatio=10 -XX:MaxHeapFreeRatio=30`: the serial collector keeps the old generation at the largest size
+  it ever reached, i.e. after the garbage of the startup load. With these ratios, each full collection shrinks it to
+  the live heap plus 30% (503 MB to 419 MB at 825,542 files) and gives about 70 MB back to the system; the heap still
+  grows up to `-Xmx` as the index grows. Full collections are rare with a small young generation, so the gain shows
+  after the first one.
 - `maxFiles=1200000`: bounds the index, hence the heap. Beyond it, new files are refused; files already known still
   get their new sources. It applies at once from the Settings view of the web panel, without a restart.
 
