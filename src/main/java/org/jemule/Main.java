@@ -35,17 +35,17 @@ import java.util.Properties;
 
 public class Main {
     private static final Logger log = LoggerFactory.getLogger(Main.class);
-    public static final String VERSION = "1.2.19";
+    public static final String VERSION = "1.2.20";
     /** Server name shown in the clients' server list (ST_SERVERNAME). */
     public static final String SERVER_NAME = "JEmuleServer v" + VERSION + " (no pedo) (https://github.com/dagga/JEmuleServer/)";
     /** Server description shown in the clients' server list (ST_DESCRIPTION). */
     public static final String SERVER_DESCRIPTION = "eMule Server - version " + VERSION;
-    public static final String ESERVER_VERSION = "17.15";
+    public static final String ESERVER_VERSION = "17.16";
     /**
      * ESERVER_VERSION as the integer form of ST_VERSION: (major &lt;&lt; 16) | minor. The client displays it with
      * "%u.%02u" of (v &gt;&gt; 16, v &amp; 0xFFFF) (CUDPSocket::ProcessPacket, OP_SERVER_DESC_RES).
      */
-    public static final int ESERVER_VERSION_INT = (17 << 16) | 15;
+    public static final int ESERVER_VERSION_INT = (17 << 16) | 16;
 
     public static void main(String[] args) {
         String configPath = null;

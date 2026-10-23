@@ -55,6 +55,12 @@ public final class ClientState {
     private volatile long clientVersion;
     private volatile long emuleVersion;
     private volatile int serverCaps;
+    /** OFFERFILES v1 version asked for in the login (string-named uint32 tag offerfiles_v), 0 if none. */
+    private volatile long offerFilesRequested;
+    /** OFFERFILES v1 terms advertised to this client at login, null for a legacy connection. */
+    private volatile OfferFilesSession offerFilesSession;
+    /** Whether the client was already told that files beyond ST_SOFTFILES are ignored: once per connection. */
+    private final java.util.concurrent.atomic.AtomicBoolean softLimitReported = new java.util.concurrent.atomic.AtomicBoolean();
 
     public ClientState(InetAddress address, int port, long clientId, long connectedAt, AtomicLong lastActivity) {
         this.connectionId = nextConnectionId.getAndIncrement();
@@ -101,6 +107,14 @@ public final class ClientState {
     /** CT_EMULE_VERSION ((major << 17) | (minor << 10) | (update << 7)), 0 for non eMule clients. */
     public long emuleVersion() { return emuleVersion; }
     public void setEmuleVersion(long emuleVersion) { this.emuleVersion = emuleVersion; }
+
+    public long offerFilesRequested() { return offerFilesRequested; }
+    public void setOfferFilesRequested(long version) { this.offerFilesRequested = version; }
+
+    public OfferFilesSession offerFilesSession() { return offerFilesSession; }
+    public void setOfferFilesSession(OfferFilesSession session) { this.offerFilesSession = session; }
+
+    public java.util.concurrent.atomic.AtomicBoolean softLimitReported() { return softLimitReported; }
 
     /** CT_SERVER_FLAGS: SRVCAP_* capabilities announced by the client. */
     public int serverCaps() { return serverCaps; }

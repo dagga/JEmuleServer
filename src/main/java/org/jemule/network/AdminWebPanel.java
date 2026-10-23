@@ -194,7 +194,7 @@ final class AdminWebPanel implements AutoCloseable {
               let o;try{o=await getJson('/api/overview')}catch(e){notice.textContent='Request failed: '+e.message;return}
               notice.textContent='';
               meta.textContent='v'+o.version+' · up '+duration(o.uptimeSeconds)+' · updated '+clock(Date.now());
-              const f=o.files,c=o.clients,m=o.memory,s=o.searches;
+              const f=o.files,c=o.clients,m=o.memory,s=o.searches,v=o.offerFilesV1;
               $('#heroFiles').innerHTML='<div class="label">Indexed files</div><div class="big">'+fmt(f.indexed)+'</div><div class="deltas">'+
                 delta(f.indexed,f.ago24h,'in 24 h')+delta(f.indexed,f.ago7d,'in 7 days')+'</div><div class="sub" style="margin-top:6px">'+fmt(f.newSinceStart)+' new files since the last start</div>';
               const fill=f.max?f.indexed/f.max:0;
@@ -207,6 +207,7 @@ final class AdminWebPanel implements AutoCloseable {
                 tile('Peer eD2K servers',fmt(o.servers.verified),'verified of '+fmt(o.servers.known)+' known')+
                 tile('Remote searches',fmt(s.kad+s.ed2kServers),'Kad '+fmt(s.kad)+' · eD2K servers '+fmt(s.ed2kServers)+' · UDP global received '+fmt(s.udpGlobal))+
                 tile('Files found by searches',fmt(s.filesIngested),'indexed since the last start')+
+                tile('OFFERFILES v1',fmt(v.newFiles),'new files from fast-publishing clients since the last start · '+fmt(v.newFilesLegacy)+' from legacy clients · '+fmt(v.sessionsAdvertised)+' of '+fmt(v.loginsAsked)+' asking logins answered',v.enabled?state('good','Enabled'):'<div class="sub">Disabled (offerFilesV1Enabled)</div>')+
                 tile('Banned hashes',compact(o.protection.bannedHashes),fmt(o.protection.bannedHashes)+' hashes · '+fmt(o.protection.ipFilterRanges)+' IP filter ranges')+
                 tile('Database',o.database.sizeMb==null?'–':fmt(o.database.sizeMb)+' MB',o.database.reopens?state('critical','Reopened '+o.database.reopens+' times after a fatal error'):state('good','No fatal error'))+
                 tile('Uptime',duration(o.uptimeSeconds),'version '+esc(o.version));
@@ -526,6 +527,14 @@ final class AdminWebPanel implements AutoCloseable {
         overview.put("searches", searches);
         overview.put("protection", protection);
         overview.put("database", db);
+        org.jemule.core.OfferFilesV1 offerFilesV1 = server.getOfferFilesV1();
+        Map<String, Object> offerFiles = offerFilesV1 == null ? new java.util.LinkedHashMap<>()
+                : new java.util.LinkedHashMap<>(offerFilesV1.stats());
+        offerFiles.put("enabled", config != null && config.offerFiles().enabled());
+        // What the evolution brings: new files published by v1 clients, next to those of legacy clients
+        offerFiles.put("newFiles", index.newFileCount(org.jemule.core.FileSource.CLIENT_PUSH_V1));
+        offerFiles.put("newFilesLegacy", index.newFileCount(org.jemule.core.FileSource.CLIENT_PUSH));
+        overview.put("offerFilesV1", offerFiles);
         return overview;
     }
 

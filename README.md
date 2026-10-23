@@ -1,6 +1,6 @@
 # JEmuleServer
 
-JEmuleServer is an eMule server written in Java (version 1.2.19).
+JEmuleServer is an eMule server written in Java (version 1.2.20).
 
 Downloads (installers and JAR) are on the [releases page](https://github.com/dagga/JEmuleServer/releases); the changes
 of each version are described in `doc/release-notes-v<version>.md` (latest: [1.2.9](doc/release-notes-v1.2.9.md)).
@@ -27,7 +27,7 @@ Building requires a JDK 21 (Gradle toolchain). To compile the project and genera
 ./gradlew build
 ```
 
-The JAR file will be generated in `build/libs/JEmuleServer-1.2.19.jar`.
+The JAR file will be generated in `build/libs/JEmuleServer-1.2.20.jar`.
 
 ## Installation from the release packages
 
@@ -68,7 +68,7 @@ the JAR for IPv6.
 Once the project is compiled, you can start the server with the following command:
 
 ```bash
-java -XX:MaxRAMPercentage=75 -XX:ThreadPriorityPolicy=1 --add-modules=jdk.httpserver -jar build/libs/JEmuleServer-1.2.19.jar [config_file] [port]
+java -XX:MaxRAMPercentage=75 -XX:ThreadPriorityPolicy=1 --add-modules=jdk.httpserver -jar build/libs/JEmuleServer-1.2.20.jar [config_file] [port]
 ```
 
 - `-XX:ThreadPriorityPolicy=1`: on Linux, the JVM ignores thread priorities without it. The server runs its threads
@@ -77,7 +77,7 @@ java -XX:MaxRAMPercentage=75 -XX:ThreadPriorityPolicy=1 --add-modules=jdk.httpse
   priority works for any user; raising the admin tier above the clients needs root or `CAP_SYS_NICE`. The startup log
   says whether the priorities are applied. The .deb and .rpm launchers already pass the option.
 - `-XX:MaxRAMPercentage=75`: lets the heap grow to 75% of the RAM instead of 25%; the .deb and .rpm launchers
-  already pass it. On a 1 GB server, prefer the explicit `-Xmx480m -Xmn48m` of the reference server (see Memory
+  already pass it. On a 1 GB server, prefer the explicit `-Xmx520m -Xmn48m` of the reference server (see Memory
   sizing below).
 
 - Note: The server binds to the IPv6 wildcard when available, so IPv6 clients can connect. Avoid forcing the JVM to
@@ -105,7 +105,7 @@ The production server runs with this calibration:
 | Memory | 947 MB of RAM, 512 MB swap file |
 | Disk | 9.8 GB |
 | System | Fedora Linux 43 Server, OpenJDK 25 |
-| Launch | `java --add-modules=jdk.httpserver -Xmx480m -Xmn48m -XX:ThreadPriorityPolicy=1 -jar JEmuleServer-<version>.jar server.properties` |
+| Launch | `java --add-modules=jdk.httpserver -Xmx520m -Xmn48m -XX:ThreadPriorityPolicy=1 -jar JEmuleServer-<version>.jar server.properties` |
 | `server.properties` | `maxFiles=1000000` |
 
 Measured with 1.2.19, 706,165 files and 196,532 banned hashes:
@@ -125,9 +125,10 @@ Why these settings:
 - `-Xmn48m`: on one CPU the JVM uses the serial collector, which gives a third of the heap to the young generation
   (218 MB out of 688 MB). That memory stays committed although it is almost empty after each collection; 48 MB is
   enough for the allocation rate of the server and leaves the rest to the old generation, where the index lives.
-- `-Xmx480m`: 432 MB of old generation for about 360 MB of index at 1,000,000 files, with about 70 MB of margin for
-  the connections, the searches and the garbage of the startup load. The process then takes at most about 560 MB,
-  the system and kernel about 150 MB, which leaves room on 947 MB without swapping.
+- `-Xmx520m`: 472 MB of old generation for about 360 MB of index at 1,000,000 files and the room the index arrays
+  keep to grow, with about 90 MB of margin for the connections, the searches and the garbage of the startup load. The
+  process then takes at most about 620 MB, the system and kernel about 150 MB, which leaves room on 947 MB without
+  swapping. `./gradlew benchmark -Pfiles=1000000 -Pheap=520m -Pcpus=1` loads 1,000,000 files in this heap.
 - `maxFiles=1000000`: bounds the index, hence the heap. Beyond it, new files are refused; files already known still
   get their new sources. It applies at once from the Settings view of the web panel, without a restart.
 
@@ -137,7 +138,7 @@ of at least `-Xmx` plus 250 MB. The Overview of the web panel shows the heap aga
 `-XX:MaxRAMPercentage=75` (passed by the .deb and .rpm launchers) is a simpler alternative, which leaves a larger
 young generation.
 
-The startup log gives the maximum heap and warns when it is too small for the indexed files (about 256 MB plus 400
+The startup log gives the maximum heap and warns when it is too small for the indexed files (about 160 MB plus 360
 bytes per file); the Status view of the web panel shows `heapUsedMb` and `heapMaxMb`. An OutOfMemoryError makes H2
 close the database: the server then reopens it at the next database operation and logs it, so that writes resume
 without a restart (`databaseReopens` in the Status view), but the heap must be enlarged.
@@ -264,9 +265,10 @@ JEmuleServer includes a built-in web panel and a command-line interface (CLI). T
 
 It opens on an **Overview**: the number of indexed files with its change over 24 hours and 7 days, the index capacity
 against `maxFiles`, and tiles for the connected clients (with their LowID share), the heap, the verified eD2K servers,
-the searches sent to Kad and to the servers, the files they found, the banned hashes, the database (size, and whether
-it had to be reopened after a fatal error) and the uptime; a meter or a status (icon and label) flags what nears its
-limit. Two curves follow, over 24 hours, 7 days or 30 days: the indexed files and the connected clients, sampled every
+the searches sent to Kad and to the servers, the files they found, the new files published by
+[OFFERFILES v1](doc/offerfiles-v1.md) clients next to those of legacy clients, the banned hashes, the database (size,
+and whether it had to be reopened after a fatal error) and the uptime; a meter or a status (icon and label) flags what
+nears its limit. Two curves follow, over 24 hours, 7 days or 30 days: the indexed files and the connected clients, sampled every
 5 minutes and kept for a month in the `metrics_history` table, so that they survive a restart. Hovering a curve, or
 the arrow keys once it has the focus, reads the samples; each curve can also be shown as a table of daily values. The
 figures refresh every 30 seconds, the curves every 5 minutes. The page follows the light or dark theme of the system.
@@ -388,6 +390,7 @@ More information can be found in the `doc/` directory:
 - [Release notes 1.2.6](doc/release-notes-v1.2.6.md) / [1.2.5](doc/release-notes-v1.2.5.md) / [1.2.3](doc/release-notes-v1.2.3.md) / [1.2.2](doc/release-notes-v1.2.2.md) / [1.2.1](doc/release-notes-v1.2.1.md) / [1.2](doc/release-notes-v1.2.md) / [1.1](doc/release-notes-v1.1.md) / [1.0.1](doc/release-notes-v1.0.1.md) / [1.0](doc/release-notes-v1.0.md)
 - [Protocols Description](doc/protocols.md)
 - [Kademlia Search Bridge](doc/kademlia.md)
+- [OFFERFILES v1: negotiated fast publishing](doc/offerfiles-v1.md)
 - [Technical References](doc/references.md)
 - [Class Diagram](doc/class_diagram.puml)
 - [Connection Sequence Diagram](doc/sequence_diagram.puml)

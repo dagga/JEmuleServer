@@ -107,7 +107,7 @@ public class ServerIntegrationTest {
                 Assertions.assertNotNull(p_ver, "Connection closed before SERVER_MESSAGE (version)");
                 Assertions.assertEquals(Packet.PROTOCOL_ED2K, p_ver.protocol());
                 Assertions.assertEquals(OpCode.SERVER_MESSAGE.value, p_ver.opcode());
-                Assertions.assertTrue(new String(p_ver.data()).contains("server version 17.15"));
+                Assertions.assertTrue(new String(p_ver.data()).contains("server version " + org.jemule.Main.ESERVER_VERSION));
 
                 Assertions.assertNotNull(p1, "Connection closed before SERVER_IDENT");
                 Assertions.assertEquals(OpCode.SERVER_IDENT.value, p1.opcode());

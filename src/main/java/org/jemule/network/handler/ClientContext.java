@@ -33,6 +33,14 @@ public interface ClientContext {
         return getServer() != null ? getServer().getServerSearchBridge() : null;
     }
 
+    /** Server-wide OFFERFILES v1 ceiling and counters. */
+    default org.jemule.core.OfferFilesV1 getOfferFilesV1() {
+        return getServer() != null ? getServer().getOfferFilesV1() : DETACHED_OFFER_FILES;
+    }
+
+    /** Used by contexts without a server, which share no ceiling with real connections. */
+    org.jemule.core.OfferFilesV1 DETACHED_OFFER_FILES = new org.jemule.core.OfferFilesV1();
+
     ClientState getState();
     void setState(ClientState state);
 

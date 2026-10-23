@@ -25,6 +25,8 @@ package org.jemule.core;
 public enum FileSource {
     /** A connected client published the file (OP_OFFERFILES). */
     CLIENT_PUSH("client push"),
+    /** A client publishing at the faster pace it negotiated with OFFERFILES v1 published the file. */
+    CLIENT_PUSH_V1("client push (OFFERFILES v1)"),
     /** A forked Kad keyword search returned the file. */
     KAD_SEARCH("Kad search"),
     /** A search fanned out to verified eD2K servers returned the file. */
