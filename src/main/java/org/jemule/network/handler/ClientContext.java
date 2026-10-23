@@ -33,6 +33,11 @@ public interface ClientContext {
         return getServer() != null ? getServer().getServerSearchBridge() : null;
     }
 
+    /** Kad source searches for OP_GETSOURCES, null without a server or a Kad node. */
+    default org.jemule.network.KadSourceService getKadSourceService() {
+        return getServer() != null ? getServer().getKadSourceService() : null;
+    }
+
     /** Server-wide OFFERFILES v1 ceiling and counters. */
     default org.jemule.core.OfferFilesV1 getOfferFilesV1() {
         return getServer() != null ? getServer().getOfferFilesV1() : DETACHED_OFFER_FILES;

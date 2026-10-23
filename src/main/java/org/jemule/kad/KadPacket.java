@@ -427,6 +427,79 @@ public final class KadPacket {
         return new SearchRes(KadId.fromWire(targetBytes), files);
     }
 
+    /**
+     * Creates a KADEMLIA2_SEARCH_SOURCE_REQ <code>&lt;target 16&gt;&lt;start position 2&gt;&lt;file size 8&gt;</code>
+     * (CSearch::SendFindValue): the target is the file's MD4 hash.
+     */
+    public static KadPacket createSearchSourceReq(KadId fileHash, long fileSize) {
+        Objects.requireNonNull(fileHash, "fileHash cannot be null");
+        ByteBuffer buf = ByteBuffer.allocate(26).order(ByteOrder.LITTLE_ENDIAN);
+        buf.put(fileHash.toWire());
+        buf.putShort((short) 0);
+        buf.putLong(fileSize);
+        return new KadPacket(KadOpCode.SEARCH_SOURCE_REQ, buf.array());
+    }
+
+    /**
+     * One source of a KADEMLIA2_SEARCH_RES answering a source search (CSearch::ProcessResultFile).
+     *
+     * @param userHash     the answer ID: the source's user hash
+     * @param type         TAG_SOURCETYPE: 1 and 4 can be contacted directly, 3, 5 and 6 are firewalled
+     * @param ip           TAG_SOURCEIP, host order (a.b.c.d is a &lt;&lt; 24 | ... | d)
+     * @param tcpPort      TAG_SOURCEPORT
+     * @param cryptOptions TAG_ENCRYPTION: 0x01 supports, 0x02 requests, 0x04 requires the crypt layer
+     */
+    public record KadSource(byte[] userHash, int type, int ip, int tcpPort, int cryptOptions) {
+        /** Whether another client can open a TCP connection to the source with its IP and port. */
+        public boolean isDirect() {
+            return type == 1 || type == 4;
+        }
+    }
+
+    public record SourceRes(KadId targetId, List<KadSource> sources) {}
+
+    private static final String TAG_ENCRYPTION = Tag.idName(0xF3);
+    private static final String TAG_SOURCEPORT = Tag.idName(0xFD);
+    private static final String TAG_SOURCEIP = Tag.idName(0xFE);
+    private static final String TAG_SOURCETYPE = Tag.idName(0xFF);
+
+    /**
+     * Parses a KADEMLIA2_SEARCH_RES answering a source search:
+     * <code>&lt;sender 16&gt;&lt;target 16&gt;&lt;count 2&gt;(&lt;user hash 16&gt;&lt;tag list&gt;)*</code>.
+     */
+    public static SourceRes parseSourceRes(byte[] data) {
+        if (data == null || data.length < 34) {
+            return null;
+        }
+        ByteBuffer buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN);
+        buf.position(16);
+        byte[] targetBytes = new byte[16];
+        buf.get(targetBytes);
+        int count = Short.toUnsignedInt(buf.getShort());
+
+        List<KadSource> sources = new ArrayList<>(Math.min(count, 100));
+        for (int i = 0; i < count && buf.remaining() >= 16; i++) {
+            byte[] answer = new byte[16];
+            buf.get(answer);
+            List<Tag> tags;
+            try {
+                tags = readKadTagList(buf);
+            } catch (Exception e) {
+                break;
+            }
+            int type = 0, ip = 0, port = 0, crypt = 0;
+            for (Tag t : tags) {
+                if (!t.isInt()) continue;
+                if (TAG_SOURCETYPE.equals(t.name())) type = (int) t.unsignedValue();
+                else if (TAG_SOURCEIP.equals(t.name())) ip = (int) t.unsignedValue();
+                else if (TAG_SOURCEPORT.equals(t.name())) port = (int) t.unsignedValue() & 0xFFFF;
+                else if (TAG_ENCRYPTION.equals(t.name())) crypt = (int) t.unsignedValue() & 0xFF;
+            }
+            sources.add(new KadSource(KadId.fromWire(answer).getBytes(), type, ip, port, crypt));
+        }
+        return new SourceRes(KadId.fromWire(targetBytes), sources);
+    }
+
     /** Writes a Kad tag list: the count is a single byte, then the tags (unlike the 4-byte eD2K count). */
     private static void writeKadTagList(ByteBuffer buf, List<Tag> tags) {
         buf.put((byte) tags.size());

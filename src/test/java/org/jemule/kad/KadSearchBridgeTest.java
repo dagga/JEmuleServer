@@ -223,6 +223,62 @@ class KadSearchBridgeTest {
         }
     }
 
+    /** A KADEMLIA2_SEARCH_RES answering a source search with one directly reachable source. */
+    private static KadPacket sourceRes(KadId fileHash, byte[] userHash, int ip) {
+        java.nio.ByteBuffer b = java.nio.ByteBuffer.allocate(128).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+        b.put(new byte[16]).put(fileHash.toWire()).putShort((short) 1);
+        b.put(new KadId(userHash).toWire());
+        List<Tag> tags = List.of(new Tag(Tag.TYPE_INT8, Tag.idName(0xFF), (byte) 4),
+                new Tag(Tag.TYPE_INTEGER, Tag.idName(0xFE), ip),
+                new Tag(Tag.TYPE_INT16, Tag.idName(0xFD), (short) 4662));
+        b.put((byte) tags.size());
+        tags.forEach(t -> t.writeKad(b));
+        return new KadPacket(KadOpCode.SEARCH_RES, java.util.Arrays.copyOf(b.array(), b.position()));
+    }
+
+    @Test
+    void sourceSearchesAskTheClosestNodesAndKeepOnlyTheirAnswers() throws Exception {
+        KadRoutingTable table = new KadRoutingTable(KadId.random());
+
+        try (KadUdpService serverUdp = new KadUdpService(0);
+             KadUdpService peerUdp = new KadUdpService(0);
+             KadUdpService intruderUdp = new KadUdpService(0);
+             KadSearchBridge bridge = new KadSearchBridge(table, serverUdp, 3, 500)) {
+            serverUdp.start();
+            peerUdp.start();
+            intruderUdp.start();
+            bridge.start();
+            table.addOrUpdate(new KadContact(table.generateRandomIdForBucket(1), InetAddress.getLoopbackAddress(), peerUdp.getPort()));
+
+            byte[] file = org.jemule.network.handler.HandlerUtils.hashToBytes("0123456789abcdef0123456789abcdef");
+            KadId target = new KadId(file);
+            byte[] genuine = org.jemule.network.handler.HandlerUtils.hashToBytes("11111111111111111111111111111111");
+            CountDownLatch answered = new CountDownLatch(1);
+            peerUdp.registerListener(KadOpCode.SEARCH_SOURCE_REQ, (packet, addr, port) -> {
+                try {
+                    assertEquals(target, KadId.fromWire(java.util.Arrays.copyOf(packet.data(), 16)));
+                    assertEquals(700_000_000L, java.nio.ByteBuffer.wrap(packet.data(), 18, 8)
+                            .order(java.nio.ByteOrder.LITTLE_ENDIAN).getLong());
+                    intruderUdp.send(sourceRes(target, new byte[16], 0x01020304), addr, port);
+                    Thread.sleep(50);
+                    peerUdp.send(sourceRes(target, genuine, 0x5BD86E2A), addr, port);
+                    answered.countDown();
+                } catch (Exception e) {
+                    fail(e);
+                }
+            });
+
+            CompletableFuture<List<KadPacket.KadSource>> future = bridge.searchSources(file, 700_000_000L);
+            assertTrue(answered.await(3, TimeUnit.SECONDS));
+            List<KadPacket.KadSource> sources = future.get(3, TimeUnit.SECONDS);
+            assertEquals(1, sources.size(), "only the answer of the queried node is kept");
+            assertArrayEquals(genuine, sources.get(0).userHash());
+            assertEquals(0x5BD86E2A, sources.get(0).ip());
+            assertEquals(0, bridge.getResultsReceived(), "source answers are never taken as files");
+            assertEquals(1, bridge.getSourceSearches());
+        }
+    }
+
     @Test
     void testUnsolicitedSearchAnswersAreIgnored() throws Exception {
         KadRoutingTable table = new KadRoutingTable(KadId.random());

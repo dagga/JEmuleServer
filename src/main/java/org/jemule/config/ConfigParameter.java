@@ -94,7 +94,13 @@ public enum ConfigParameter {
     OFFER_FILES_MIN_INTERVAL_MS("offerFilesMinIntervalMs", Type.INTEGER, Scope.HOT, 1, 3_600_000,
             "OFFERFILES v1: least time in milliseconds between two full batches (new logins)"),
     OFFER_FILES_GLOBAL_RECORDS_PER_SEC("offerFilesGlobalRecordsPerSec", Type.INTEGER, Scope.HOT, 0, 10_000_000,
-            "OFFERFILES v1: files per second accepted from all v1 clients together (0 = no ceiling)");
+            "OFFERFILES v1: files per second accepted from all v1 clients together (0 = no ceiling)"),
+    KAD_SOURCE_SEARCH_ENABLED("kadSourceSearchEnabled", Type.BOOLEAN, Scope.HOT, 0, 0,
+            "Search Kad for the sources of a file a client asks for, when the server knows few"),
+    KAD_SOURCE_SEARCH_MIN_LOCAL("kadSourceSearchMinLocal", Type.INTEGER, Scope.HOT, 1, 255,
+            "Kad source search: below this number of local sources, Kad is asked"),
+    KAD_SOURCE_SEARCHES_PER_MINUTE("kadSourceSearchesPerMinute", Type.INTEGER, Scope.HOT, 1, 600,
+            "Kad source search: new searches per minute for all clients");
 
     /** Value type of a parameter, with its parsing and formatting rules. */
     public enum Type {
