@@ -247,6 +247,8 @@ class KadAcceptanceTest {
         assertFalse(storedHashes().contains(illicit), "the illicit file is never stored");
         assertFalse(index.contains(illicit), "the illicit file is never indexed");
         assertEquals(1, node.getSearchBridge().getIllicitFilesBlocked());
+        await(() -> db.loadBannedNames().stream().anyMatch(n -> n.name().equals("pthc collection.avi")),
+                "the illicit name is recorded among the banned names");
     }
 
     @Test

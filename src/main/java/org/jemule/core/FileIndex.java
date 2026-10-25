@@ -56,6 +56,13 @@ public class FileIndex {
     private final ChildAbuseFilter abuseFilter;
     /** Files the child abuse filter rejected since the start. */
     private final LongAdder childAbuseRejected = new LongAdder();
+    /** Names recorded lately: a file that comes back with every search is written once. */
+    private final Map<String, Boolean> recentAbuseNames = new LinkedHashMap<>(256, 0.75f, true) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<String, Boolean> eldest) {
+            return size() > 10_000;
+        }
+    };
     /** Most files indexed: new hashes beyond it are refused (Integer.MAX_VALUE: no limit). */
     private volatile java.util.function.IntSupplier maxFiles = () -> Integer.MAX_VALUE;
     /** True when the heap cannot take more files: new hashes are refused too. */
@@ -98,6 +105,7 @@ public class FileIndex {
                     }
                 });
                 for (FileMetadata meta : rejected) {
+                    recordChildAbuseName(meta.name());
                     db.deleteFile(meta.hash());
                 }
                 if (!rejected.isEmpty()) {
@@ -127,7 +135,8 @@ public class FileIndex {
     }
 
     /**
-     * Checks a file name against the child abuse filter.
+     * Checks a file name against the child abuse filter. The name of a rejected file is recorded among the banned
+     * names (reason {@link ChildAbuseFilter#BAN_REASON}), to be exported from the admin panel.
      *
      * @return true if the file must be rejected
      */
@@ -135,7 +144,21 @@ public class FileIndex {
         if (!abuseFilter.matches(name)) return false;
         childAbuseRejected.increment();
         log.debug("Child abuse file rejected: hash={} name='{}'", hash, name);
+        recordChildAbuseName(name);
         return true;
+    }
+
+    /**
+     * Records the name of a file the child abuse filter rejected among the banned names, in the database only: the
+     * filter rejects that name anyway, and the names would fill the heap. Written by the persistence executor.
+     */
+    public void recordChildAbuseName(String name) {
+        String normalized = org.jemule.security.FakeFileDetector.normalize(name);
+        if (normalized == null || db == null) return;
+        synchronized (recentAbuseNames) {
+            if (recentAbuseNames.put(normalized, Boolean.TRUE) != null) return;
+        }
+        persistence.execute(() -> db.addBannedNameIfAbsent(normalized, ChildAbuseFilter.BAN_REASON));
     }
 
     /** Files the child abuse filter rejected since the start. */

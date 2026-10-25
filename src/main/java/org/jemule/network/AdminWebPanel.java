@@ -212,7 +212,7 @@ final class AdminWebPanel implements AutoCloseable {
                 tile('Files found by searches',fmt(s.filesIngested),'indexed since the last start')+
                 tile('Kad and server sources for clients',fmt(k.sourcesDelivered||0),'sent in '+fmt(k.answersSent||0)+' answers · '+fmt(k.searches||0)+' searches, '+fmt(k.cacheHits||0)+' from cache · '+fmt(ss.highIdSources||0)+' HighID sources from other servers · '+fmt(k.firewalledMatched||0)+' firewalled Kad sources reachable through this server · quota '+fmt(k.quota||0)+' of '+fmt(k.quotaMax||0)+' searches a minute ('+fmt(k.kadRefusals||0)+' Kad refusals)',k.enabled?state('good','Enabled'):'<div class="sub">Disabled (kadSourceSearchEnabled)</div>')+
                 tile('OFFERFILES v1',fmt(v.newFiles),'new files from fast-publishing clients since the last start · '+fmt(v.newFilesLegacy)+' from legacy clients · '+fmt(v.sessionsAdvertised)+' of '+fmt(v.loginsAsked)+' asking logins answered',v.enabled?state('good','Enabled'):'<div class="sub">Disabled (offerFilesV1Enabled)</div>')+
-                tile('Banned names',compact(o.protection.bannedNames),fmt(o.protection.bannedNames)+' file names · '+fmt(o.protection.childAbuseRejected)+' files refused by the child abuse filter and Kad screening since the last start · '+fmt(o.protection.ipFilterRanges)+' IP filter ranges')+
+                tile('Banned names',compact(o.protection.bannedNames),fmt(o.protection.bannedNames)+' file names, from the administrator and the child abuse filter · '+fmt(o.protection.childAbuseRejected)+' files refused by the child abuse filter and Kad screening since the last start · '+fmt(o.protection.ipFilterRanges)+' IP filter ranges')+
                 tile('Database',o.database.sizeMb==null?'–':fmt(o.database.sizeMb)+' MB',o.database.reopens?state('critical','Reopened '+o.database.reopens+' times after a fatal error'):state('good','No fatal error'))+
                 tile('Uptime',duration(o.uptimeSeconds),'version '+esc(o.version));
             }
@@ -390,12 +390,7 @@ final class AdminWebPanel implements AutoCloseable {
                 case "/api/filters" -> json(exchange, 200, filters());
                 case "/api/bots" -> json(exchange, 200, bots());
                 case "/api/blocks" -> json(exchange, 200, blocks());
-                case "/api/blocks/export" -> {
-                    // One banned name per line, to keep or to load on another server
-                    exchange.getResponseHeaders().set("Content-Disposition", "attachment; filename=\"banned-names.txt\"");
-                    String names = String.join("\n", server.getFakeFileDetector().bannedNames());
-                    send(exchange, 200, "text/plain; charset=utf-8", names.isEmpty() ? "" : names + "\n");
-                }
+                case "/api/blocks/export" -> exportBannedNames(exchange);
                 case "/api/settings" -> json(exchange, 200, settings());
                 default -> sendError(exchange, 404, "Not found");
             }
@@ -524,8 +519,8 @@ final class AdminWebPanel implements AutoCloseable {
                 + (serverBridge == null ? 0L : serverBridge.getFilesIngested()));
 
         Map<String, Object> protection = new java.util.LinkedHashMap<>();
-        protection.put("bannedNames", server.getFakeFileDetector() == null ? 0
-                : server.getFakeFileDetector().bannedNameCount());
+        protection.put("bannedNames", database != null ? database.countBannedNames()
+                : server.getFakeFileDetector() == null ? 0 : server.getFakeFileDetector().bannedNameCount());
         protection.put("childAbuseRejected", server.getFileIndex().childAbuseRejectedCount()
                 + (server.getKadSearchBridge() == null ? 0 : server.getKadSearchBridge().getIllicitFilesBlocked()));
         protection.put("ipFilterRanges", server.getIPFilter().getFilterCount());
@@ -758,11 +753,40 @@ final class AdminWebPanel implements AutoCloseable {
         return result;
     }
 
+    /**
+     * Every banned name, one per line in name order: the administrator's and those the child abuse filter rejected.
+     * Read from the database 5,000 at a time and streamed, so that hundreds of thousands of names never sit in the
+     * heap at once.
+     */
+    private void exportBannedNames(HttpExchange exchange) throws IOException {
+        exchange.getResponseHeaders().set("Content-Disposition", "attachment; filename=\"banned-names.txt\"");
+        DatabaseManager database = server.getDatabaseManager();
+        if (database == null) {
+            String names = String.join("\n", server.getFakeFileDetector().bannedNames());
+            send(exchange, 200, "text/plain; charset=utf-8", names.isEmpty() ? "" : names + "\n");
+            return;
+        }
+        exchange.getResponseHeaders().set("Content-Type", "text/plain; charset=utf-8");
+        exchange.getResponseHeaders().set("Cache-Control", "no-store");
+        exchange.getResponseHeaders().set("X-Content-Type-Options", "nosniff");
+        exchange.sendResponseHeaders(200, 0); // chunked
+        try (java.io.Writer out = new java.io.BufferedWriter(
+                new java.io.OutputStreamWriter(exchange.getResponseBody(), StandardCharsets.UTF_8))) {
+            String last = null;
+            List<String> page;
+            do {
+                page = database.bannedNamesAfter(last, 5_000);
+                for (String name : page) out.write(name + "\n");
+                if (!page.isEmpty()) last = page.get(page.size() - 1);
+            } while (page.size() == 5_000);
+        }
+    }
+
     /** The 200 most recently banned names. */
     private List<Map<String, Object>> blocks() {
         DatabaseManager database = server.getDatabaseManager();
         if (database == null) return List.of();
-        return database.loadBannedNames().stream().limit(200).map(n -> {
+        return database.loadRecentBannedNames(200).stream().map(n -> {
             Map<String, Object> row = new java.util.LinkedHashMap<>();
             row.put("name", n.name());
             row.put("reason", n.reason() == null ? "" : n.reason());

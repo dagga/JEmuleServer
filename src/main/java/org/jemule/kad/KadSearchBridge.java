@@ -708,6 +708,7 @@ public class KadSearchBridge implements AutoCloseable {
         if (abuseFilter != null && abuseFilter.matches(file.name())) {
             log.debug("Kad file rejected by ChildAbuseFilter: {} ({})", file.name(), file.hash());
             illicitFilesBlocked.incrementAndGet();
+            if (fileIndex != null) fileIndex.recordChildAbuseName(file.name());
             notifyIllicitFile(file, ChildAbuseFilter.BAN_REASON);
             return false;
         }
