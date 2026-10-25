@@ -90,6 +90,7 @@ JVM options used by the server:
 | `-Xmx<size>` | Maximum heap, replaces `MaxRAMPercentage`. | Small server: sized from `maxFiles` (see Memory sizing). |
 | `-Xmn48m` | Young generation of 48 MB instead of a third of the heap. | With `-Xmx` on a small server. |
 | `-XX:MinHeapFreeRatio=10 -XX:MaxHeapFreeRatio=30` | After a full collection, the JVM gives back to the system the heap beyond 30% above what is in use, and grows it again when needed. | Small server whose RAM is short. |
+| `-XX:MarkSweepDeadRatio=0` | A full collection of the serial collector compacts every dead object instead of leaving up to 5% of the old generation as dead space. | One CPU (serial collector), so that the heap guard measures the live heap only. |
 | `-Djava.net.preferIPv4Stack=true` | Do not use: it disables the IPv6 listener. | Never. |
 
 - Note: The server binds to the IPv6 wildcard when available, so IPv6 clients can connect. Avoid forcing the JVM to
@@ -118,7 +119,7 @@ The production server runs with this calibration:
 | Memory | 947 MB of RAM, 512 MB swap file |
 | Disk | 9.8 GB |
 | System | Fedora Linux 43 Server, OpenJDK 25 |
-| Launch | `java --add-modules=jdk.httpserver -Xmx600m -Xmn48m -XX:MinHeapFreeRatio=10 -XX:MaxHeapFreeRatio=30 -XX:ThreadPriorityPolicy=1 -jar JEmuleServer-<version>.jar server.properties` |
+| Launch | `java --add-modules=jdk.httpserver -Xmx600m -Xmn48m -XX:MinHeapFreeRatio=10 -XX:MaxHeapFreeRatio=30 -XX:MarkSweepDeadRatio=0 -XX:ThreadPriorityPolicy=1 -jar JEmuleServer-<version>.jar server.properties` |
 | `server.properties` | `maxFiles=3000000` (the heap guard stops the index first, see below) |
 
 Measured with 1.2.19, 706,165 files and 196,532 banned hashes:
@@ -162,6 +163,11 @@ Why these settings:
   the live heap plus 30% (503 MB to 419 MB at 825,542 files) and gives about 70 MB back to the system; the heap still
   grows up to `-Xmx` as the index grows. Full collections are rare with a small young generation, so the gain shows
   after the first one.
+- `-XX:MarkSweepDeadRatio=0`: by default a full collection of the serial collector leaves up to 5% of the old
+  generation as dead objects (filler arrays) to avoid moving the live ones. The heap guard reads the old generation
+  after a collection, so it counted that dead space as live data: in production on October 25, 2026, 16 MB of the
+  405 MB it saw at 1,526,803 files were filler arrays, and up to 28 MB can be. With 0, every full collection compacts
+  everything, which takes slightly longer but is rare here.
 - `maxFiles=3000000`: bounds the index. Beyond it, new files are refused, whatever brings them (clients, Kad, other
   servers); files already known still get their new sources. It applies at once from the Settings view of the web
   panel, without a restart.
