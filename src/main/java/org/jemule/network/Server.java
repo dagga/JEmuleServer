@@ -67,6 +67,7 @@ import java.util.concurrent.TimeUnit;
 public class Server {
     private static final Logger log = LoggerFactory.getLogger(Server.class);
     private volatile ServerConfig config;
+    private final org.jemule.core.HeapGuard heapGuard;
     private volatile ConfigFile configFile;
     private final ServerGossip serverGossip;
     private final ServerSearchBridge serverSearchBridge;
@@ -262,6 +263,9 @@ public class Server {
         this.abuseFilter = ChildAbuseFilter.load(config.childAbuseKeywordsPath());
         this.fileIndex = new FileIndex(db, eventManager, abuseFilter);
         this.fileIndex.setPersistenceExecutor(ingestion);
+        // Every channel (clients, Kad, other servers) stops bringing new files at maxFiles or when the heap is full
+        this.heapGuard = org.jemule.core.HeapGuard.jvm();
+        this.fileIndex.setCapacity(() -> config.maxFiles(), heapGuard::full);
         this.metricsHistory = new org.jemule.core.MetricsHistory(db);
         String heapWarning = heapWarning(Runtime.getRuntime().maxMemory(), fileIndex.fileCount());
         if (heapWarning != null) {
@@ -399,6 +403,11 @@ public class Server {
     }
 
     /** The configuration currently in effect, for the admin interfaces of other packages. */
+    /** Tells when the heap cannot take more indexed files. */
+    public org.jemule.core.HeapGuard getHeapGuard() {
+        return heapGuard;
+    }
+
     public ServerConfig configSnapshot() {
         return config;
     }

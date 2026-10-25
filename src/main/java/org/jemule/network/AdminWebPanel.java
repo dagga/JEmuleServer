@@ -197,9 +197,12 @@ final class AdminWebPanel implements AutoCloseable {
               const f=o.files,c=o.clients,m=o.memory,s=o.searches,v=o.offerFilesV1,k=o.kadSources||{};
               $('#heroFiles').innerHTML='<div class="label">Indexed files</div><div class="big">'+fmt(f.indexed)+'</div><div class="deltas">'+
                 delta(f.indexed,f.ago24h,'in 24 h')+delta(f.indexed,f.ago7d,'in 7 days')+'</div><div class="sub" style="margin-top:6px">'+fmt(f.newSinceStart)+' new files since the last start</div>';
-              const fill=f.max?f.indexed/f.max:0;
+              // The index is full at maxFiles or when the live heap reaches the guard, whichever comes first
+              const fileFill=f.max?f.indexed/f.max:0,heapFill=m.guardMb?m.liveOldMb/m.guardMb:0,fill=Math.min(1,Math.max(fileFill,heapFill));
               $('#heroCapacity').innerHTML='<div class="label">Index capacity</div><div class="value">'+(fill*100).toFixed(1)+' %</div>'+meter(fill)+
-                state(level(fill),fill>=.9?'Near the limit':fill>=.75?'Filling up':'Room to grow')+'<div class="sub" style="margin-top:6px">'+fmt(f.indexed)+' of '+fmt(f.max)+' files (maxFiles); new files are refused beyond, known files still get sources</div>';
+                state(m.heapFull||fileFill>=1?'critical':level(fill),m.heapFull?'Full: heap':fileFill>=1?'Full: maxFiles':fill>=.9?'Near the limit':fill>=.75?'Filling up':'Room to grow')+
+                '<div class="sub" style="margin-top:6px">'+fmt(f.indexed)+' of '+fmt(f.max)+' files (maxFiles)'+(m.guardMb?' · live heap '+fmt(m.liveOldMb)+' of '+fmt(m.guardMb)+' MB allowed':'')+
+                ' · '+fmt(f.refusedFull||0)+' new files refused since the last start; known files still get sources</div>';
               const heap=m.heapMaxMb?m.heapUsedMb/m.heapMaxMb:0,lowShare=c.connected?Math.round(c.lowId*100/c.connected):0;
               $('#kpis').innerHTML=
                 tile('Connected clients',fmt(c.connected),fmt(c.lowId)+' LowID ('+lowShare+' %) · max '+fmt(c.max))+
@@ -477,6 +480,7 @@ final class AdminWebPanel implements AutoCloseable {
         files.put("indexed", index.fileCount());
         files.put("max", config == null ? null : config.maxFiles());
         files.put("newSinceStart", index.totalNewFiles());
+        files.put("refusedFull", index.refusedFullCount());
         files.put("ago24h", filesAt(history, now - 24 * 3_600_000L));
         files.put("ago7d", filesAt(history, now - 7 * 24 * 3_600_000L));
         MetricsHistory.Sample oldest = history == null ? null : history.oldest();
@@ -490,6 +494,13 @@ final class AdminWebPanel implements AutoCloseable {
         Map<String, Object> memory = new java.util.LinkedHashMap<>();
         memory.put("heapUsedMb", (runtime.totalMemory() - runtime.freeMemory()) / 1024 / 1024);
         memory.put("heapMaxMb", runtime.maxMemory() / 1024 / 1024);
+        org.jemule.core.HeapGuard guard = server.getHeapGuard();
+        if (guard != null && guard.maxBytes() > 0) {
+            memory.put("liveOldMb", guard.liveBytes() / 1024 / 1024);
+            memory.put("oldMaxMb", guard.maxBytes() / 1024 / 1024);
+            memory.put("guardMb", (long) (guard.maxBytes() * org.jemule.core.HeapGuard.MAX_LIVE_RATIO) / 1024 / 1024);
+            memory.put("heapFull", guard.full());
+        }
         double load = java.lang.management.ManagementFactory.getOperatingSystemMXBean().getSystemLoadAverage();
         memory.put("systemLoad", Double.isFinite(load) ? load : null);
 

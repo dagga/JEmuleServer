@@ -197,12 +197,14 @@ public class PublishHandler {
                 && context.getState().publishedHashes().size() >= softFiles(context)) {
             return Outcome.OVER_SOFT_LIMIT;
         }
-        if (!context.getFileIndex().contains(hash) && context.getFileIndex().fileCount() >= context.getConfig().maxFiles()) {
+        if (!context.getFileIndex().contains(hash) && (context.getFileIndex().fileCount() >= context.getConfig().maxFiles()
+                || context.getFileIndex().isFull())) {
             // A known file still gets the client as a new source; only new files are refused
             long now = System.currentTimeMillis();
             long last = lastFullIndexWarning.get();
             if (now - last >= 60_000 && lastFullIndexWarning.compareAndSet(last, now)) {
-                log.warn("File index full ({} files): new files are refused", context.getConfig().maxFiles());
+                log.warn("File index full ({} files, maxFiles {}, or heap full): new files are refused",
+                        context.getFileIndex().fileCount(), context.getConfig().maxFiles());
             }
             return Outcome.IGNORED;
         }

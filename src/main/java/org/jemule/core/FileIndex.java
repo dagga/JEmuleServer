@@ -56,6 +56,12 @@ public class FileIndex {
     private final ChildAbuseFilter abuseFilter;
     /** Hashes banned by the child abuse filter (upper case), loaded from the database and completed at runtime. */
     private final Md4Set abuseBannedHashes = new Md4Set();
+    /** Most files indexed: new hashes beyond it are refused (Integer.MAX_VALUE: no limit). */
+    private volatile java.util.function.IntSupplier maxFiles = () -> Integer.MAX_VALUE;
+    /** True when the heap cannot take more files: new hashes are refused too. */
+    private volatile java.util.function.BooleanSupplier heapFull = () -> false;
+    /** New hashes refused because the index was full (since server start). */
+    private final LongAdder refusedFull = new LongAdder();
     /** Count of files whose hash was not indexed yet, per ingestion channel (since server start). */
     private final Map<FileSource, LongAdder> newFilesBySource = new ConcurrentHashMap<>();
 
@@ -142,11 +148,30 @@ public class FileIndex {
     }
 
     /**
+     * Limits the index: once {@code maxFiles} files are indexed or {@code heapFull} says so, files of unknown hashes
+     * are refused, whatever channel brings them; known files still get their new sources.
+     */
+    public void setCapacity(java.util.function.IntSupplier maxFiles, java.util.function.BooleanSupplier heapFull) {
+        this.maxFiles = maxFiles;
+        this.heapFull = heapFull;
+    }
+
+    /** True when new files are refused: maxFiles reached, or the heap full. */
+    public boolean isFull() {
+        return fileCount() >= maxFiles.getAsInt() || heapFull.getAsBoolean();
+    }
+
+    /** New files refused because the index was full, since the server started. */
+    public long refusedFullCount() {
+        return refusedFull.sum();
+    }
+
+    /**
      * Registers a published file. If the file (same hash) is already known, the publisher's sources are
      * <b>added</b> to the existing entry: every client sharing a file must be returned as a source.
      *
      * @param meta The file metadata to add, carrying the publishing client(s) in {@link FileMetadata#sources()}.
-     * @return the file as now stored in the index for this hash
+     * @return the file as now stored in the index for this hash, null for a new file refused by a full index
      */
     public FileMetadata addFile(FileMetadata meta) {
         return addFile(meta, FileSource.UNKNOWN);
@@ -177,7 +202,9 @@ public class FileIndex {
         Writes writes = new Writes(files.size());
         List<FileMetadata> stored = new ArrayList<>(files.size());
         for (FileMetadata file : files) {
-            if (file != null && file.hash() != null) stored.add(addFileInternal(file, writes, source));
+            if (file == null || file.hash() == null) continue;
+            FileMetadata added = addFileInternal(file, writes, source);
+            if (added != null) stored.add(added);
         }
         persist(writes);
         return List.copyOf(stored);
@@ -191,6 +218,8 @@ public class FileIndex {
     }
 
     private FileMetadata addFileInternal(FileMetadata meta, Writes writes, FileSource source) {
+        // Checked before the lock: a full index refuses the new hashes of every channel at once
+        boolean full = isFull();
         FileMetadata incoming = meta.indexed();
         boolean isNew = false;
         boolean isNewHash = false;
@@ -201,6 +230,10 @@ public class FileIndex {
         try {
             int id = table.find(incoming.hash());
             FileMetadata existing = id < 0 ? null : table.view(id);
+            if (existing == null && full) {
+                refusedFull.increment();
+                return null;
+            }
             if (existing == null || (existing.sources().isEmpty() && !incoming.sources().isEmpty())) {
                 // unknown file, or a file without online source (e.g. loaded from the database) published by a
                 // client: take the new metadata, under the hash the database knows. A search result of a known hash
