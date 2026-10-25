@@ -73,6 +73,8 @@ public class Server {
     private final ServerSearchBridge serverSearchBridge;
     /** Source searches on the verified eD2K servers, beside Kad, for the clients' OP_GETSOURCES. */
     private final ServerSourceSearcher serverSourceSearcher;
+    /** Index update from the verified eD2K servers (off unless serverIndexUpdateEnabled). */
+    private final ServerIndexUpdater serverIndexUpdater;
     private final ClientRegistry registry = new ClientRegistry();
     private final java.util.Set<Socket> clientSockets = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private final FileIndex fileIndex;
@@ -302,6 +304,9 @@ public class Server {
         this.serverSearchBridge = new ServerSearchBridge(serverGossip::verifiedPeers,
                 () -> boundUdpSockets.get(config.port() + 4), fileIndex, fakeFileDetector);
         this.serverSearchBridge.setIngestionExecutor(ingestion);
+        this.serverIndexUpdater = new ServerIndexUpdater(serverGossip::verifiedPeers, fileIndex, fakeFileDetector,
+                () -> this.config.serverIndexUpdate(), this::nearlyFull);
+        this.serverIndexUpdater.setIngestionExecutor(ingestion);
         this.kadNode = config.kad().enabled()
                 ? new KadNode(config.kad(), config.port(), db, fileIndex, abuseFilter, fakeFileDetector,
                         kadNodesCachePath(config))
@@ -427,6 +432,19 @@ public class Server {
     }
 
     /** The configuration currently in effect, for the admin interfaces of other packages. */
+    /** The index update from the verified eD2K servers. */
+    public ServerIndexUpdater getServerIndexUpdater() {
+        return serverIndexUpdater;
+    }
+
+    /** True when a server announces at least 90% of its maximum users. */
+    private boolean nearlyFull(ServerGossip.Endpoint endpoint) {
+        return serverGossip.serverViews().stream()
+                .filter(v -> v.endpoint().equals(endpoint))
+                .anyMatch(v -> v.users() != null && v.maxUsers() != null && v.maxUsers() > 0
+                        && v.users() >= v.maxUsers() * 0.9);
+    }
+
     /** Counters of the source searches on the other eD2K servers. */
     public java.util.Map<String, Object> serverSourceStats() {
         return serverSourceSearcher.stats();
@@ -935,6 +953,14 @@ public class Server {
                 log.warn("Server gossip polling failed: {}", e.getMessage());
             }
         }, 1, 1, TimeUnit.SECONDS);
+        // One index update worker per verified server, started and stopped as the servers are verified or dropped
+        maintenance.scheduleWithFixedDelay(() -> {
+            try {
+                if (running) serverIndexUpdater.refreshWorkers();
+            } catch (RuntimeException e) {
+                log.warn("Index update workers: {}", e.getMessage());
+            }
+        }, 2, 1, TimeUnit.MINUTES);
 
         for (int port : ports) {
             final int bindPort = port;
@@ -1390,6 +1416,7 @@ public class Server {
         if (panel != null) panel.close();
         maintenance.shutdownNow();
         serverSearchBridge.close();
+        serverIndexUpdater.close();
         if (ipFilterUpdater != null) ipFilterUpdater.close();
         kadSearchBridge = null;
         if (kadNode != null) {

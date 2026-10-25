@@ -100,7 +100,15 @@ public enum ConfigParameter {
     KAD_SOURCE_SEARCH_MIN_LOCAL("kadSourceSearchMinLocal", Type.INTEGER, Scope.HOT, 1, 255,
             "Kad source search: below this number of local sources, Kad is asked"),
     KAD_SOURCE_SEARCHES_PER_MINUTE("kadSourceSearchesPerMinute", Type.INTEGER, Scope.HOT, 1, 600,
-            "Source search: new searches per minute for all clients at most (adaptive quota)");
+            "Source search: new searches per minute for all clients at most (adaptive quota)"),
+    SERVER_INDEX_UPDATE_ENABLED("serverIndexUpdateEnabled", Type.BOOLEAN, Scope.HOT, 0, 0,
+            "Index update from the verified eD2K servers"),
+    SERVER_INDEX_UPDATE_MAX_PER_HOUR("serverIndexUpdateMaxPerHour", Type.INTEGER, Scope.HOT, 1, 120,
+            "Index update: searches per server and per hour at most"),
+    SERVER_INDEX_UPDATE_MAX_PER_DAY("serverIndexUpdateMaxPerDay", Type.INTEGER, Scope.HOT, 1, 2000,
+            "Index update: searches per server and per day at most"),
+    SERVER_INDEX_UPDATE_MIN_SOURCES("serverIndexUpdateMinSources", Type.INTEGER, Scope.HOT, 1, 1000,
+            "Index update: sources a file needs to be indexed");
 
     /** Value type of a parameter, with its parsing and formatting rules. */
     public enum Type {

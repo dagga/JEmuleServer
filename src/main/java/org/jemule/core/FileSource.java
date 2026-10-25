@@ -31,6 +31,8 @@ public enum FileSource {
     KAD_SEARCH("Kad search"),
     /** A search fanned out to verified eD2K servers returned the file. */
     SERVER_SEARCH("server search"),
+    /** The index update from the verified eD2K servers returned the file. */
+    SERVER_INDEX_UPDATE("server index update"),
     /** Any other origin (tests, administrative insertion). */
     UNKNOWN("other");
 

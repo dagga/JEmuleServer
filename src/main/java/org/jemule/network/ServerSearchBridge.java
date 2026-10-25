@@ -319,23 +319,51 @@ public final class ServerSearchBridge implements AutoCloseable {
             while (input.hasRemaining()) {
                 if (input.remaining() < 24 || (input.get() & 0xFF) != (Packet.PROTOCOL_ED2K & 0xFF)
                         || (input.get() & 0xFF) != OP_GLOBSEARCHRES) return null;
-                byte[] hashBytes = new byte[16];
-                input.get(hashBytes);
-                input.position(input.position() + 6); // server-assigned client ID and port
-                if (input.remaining() < 4) return null;
-                input.mark();
-                int tagCount = input.getInt();
-                input.reset();
-                if (tagCount < 1 || tagCount > 128) return null;
-                List<Tag> tags = Tag.readList(input);
-                if (tags.size() != tagCount) return null;
-                FileMetadata metadata = metadata(hashBytes, tags);
-                if (metadata != null) files.add(metadata);
+                if (!readResult(input, files)) return null;
             }
         } catch (RuntimeException e) {
             return null;
         }
         return files;
+    }
+
+    /**
+     * Decodes the payload of a TCP OP_SEARCHRESULT: {@code <count 4>(<result>)*[<more 1>]}, each result as in
+     * OP_GLOBSEARCHRES. Results that are not valid files are skipped.
+     *
+     * @return the files, or null for a malformed payload
+     */
+    static List<FileMetadata> decodeSearchResult(byte[] payload) {
+        if (payload == null || payload.length < 4) return null;
+        ByteBuffer input = ByteBuffer.wrap(payload).order(ByteOrder.LITTLE_ENDIAN);
+        int count = input.getInt();
+        if (count < 0 || count > 10_000) return null;
+        List<FileMetadata> files = new ArrayList<>(count);
+        try {
+            for (int i = 0; i < count; i++) {
+                if (input.remaining() < 22 || !readResult(input, files)) return null;
+            }
+        } catch (RuntimeException e) {
+            return null;
+        }
+        return files;
+    }
+
+    /** Reads {@code <hash 16><ID 4><port 2><tags>} and adds the file when it is valid; false when malformed. */
+    private static boolean readResult(ByteBuffer input, List<FileMetadata> files) {
+        byte[] hashBytes = new byte[16];
+        input.get(hashBytes);
+        input.position(input.position() + 6); // server-assigned client ID and port
+        if (input.remaining() < 4) return false;
+        input.mark();
+        int tagCount = input.getInt();
+        input.reset();
+        if (tagCount < 1 || tagCount > 128) return false;
+        List<Tag> tags = Tag.readList(input);
+        if (tags.size() != tagCount) return false;
+        FileMetadata metadata = metadata(hashBytes, tags);
+        if (metadata != null) files.add(metadata);
+        return true;
     }
 
     private static FileMetadata metadata(byte[] hashBytes, List<Tag> tags) {
