@@ -270,10 +270,12 @@ public class Server {
                     config.cbWaitDurationInSeconds()
             );
             this.fakeFileDetector.setDatabaseManager(dbMgr);
-            // Bans apply even when the fake file heuristics are disabled
-            List<DatabaseManager.BannedName> banned = dbMgr.loadBannedNames();
+            // Bans apply even when the fake file heuristics are disabled. The names the child abuse filter rejected
+            // stay in the database: the filter rejects them anyway
+            List<DatabaseManager.BannedName> banned = dbMgr.loadBannedNames(ChildAbuseFilter.BAN_REASON);
             banned.forEach(n -> this.fakeFileDetector.addBannedName(n.name()));
-            log.info("Loaded {} banned file names from database", banned.size());
+            log.info("Loaded {} banned file names from database ({} in all with the child abuse filter's)",
+                    banned.size(), dbMgr.countBannedNames());
         } catch (SQLException e) {
             log.error("Failed to initialize database: {}", e.getMessage());
         }
@@ -284,7 +286,8 @@ public class Server {
         this.fileIndex.setPersistenceExecutor(ingestion);
         // Every channel (clients, Kad, other servers) stops bringing new files at maxFiles or when the heap is full
         this.heapGuard = org.jemule.core.HeapGuard.jvm();
-        this.fileIndex.setCapacity(() -> config.maxFiles(), heapGuard::full);
+        // this.config: the field, which a settings change replaces, not the constructor parameter
+        this.fileIndex.setCapacity(() -> this.config.maxFiles(), heapGuard::full);
         this.metricsHistory = new org.jemule.core.MetricsHistory(db);
         String heapWarning = heapWarning(Runtime.getRuntime().maxMemory(), heapGuard.maxBytes(), fileIndex.fileCount());
         if (heapWarning != null) {
