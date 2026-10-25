@@ -307,6 +307,8 @@ public final class ServerIndexUpdater implements AutoCloseable {
                 return sleeper.sleepUntil(now + 30_000);
             }
             if (fileIndex.isFull()) {
+                // maxFiles reached or the heap full: no update, and no idle session, until there is room again
+                closeSession();
                 state = "index full";
                 return sleeper.sleepUntil(now + 60_000);
             }
