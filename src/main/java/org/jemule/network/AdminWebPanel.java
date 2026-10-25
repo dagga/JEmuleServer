@@ -197,9 +197,11 @@ final class AdminWebPanel implements AutoCloseable {
                 delta(f.indexed,f.ago24h,'in 24 h')+delta(f.indexed,f.ago7d,'in 7 days')+'</div><div class="sub" style="margin-top:6px">'+fmt(f.newSinceStart)+' new files since the last start</div>';
               // The index is full at maxFiles or when the live heap reaches the guard, whichever comes first
               const fileFill=f.max?f.indexed/f.max:0,heapFill=m.guardMb?m.liveOldMb/m.guardMb:0,fill=Math.min(1,Math.max(fileFill,heapFill));
-              $('#heroCapacity').innerHTML='<div class="label">Index capacity</div><div class="value">'+(fill*100).toFixed(1)+' %</div>'+meter(fill)+
+              const byHeap=heapFill>fileFill,pct=r=>(r*100).toFixed(1)+' %';
+              $('#heroCapacity').innerHTML='<div class="label">Index capacity · limited by '+(byHeap?'the heap':'maxFiles')+'</div><div class="value">'+pct(fill)+'</div>'+meter(fill)+
                 state(m.heapFull||fileFill>=1?'critical':level(fill),m.heapFull?'Full: heap':fileFill>=1?'Full: maxFiles':fill>=.9?'Near the limit':fill>=.75?'Filling up':'Room to grow')+
-                '<div class="sub" style="margin-top:6px">'+fmt(f.indexed)+' of '+fmt(f.max)+' files (maxFiles)'+(m.guardMb?' · live heap '+fmt(m.liveOldMb)+' of '+fmt(m.guardMb)+' MB allowed':'')+
+                '<div class="sub" style="margin-top:6px">maxFiles: '+fmt(f.indexed)+' of '+fmt(f.max)+' files ('+pct(fileFill)+')'+
+                (m.guardMb?' · heap guard: '+fmt(m.liveOldMb)+' of '+fmt(m.guardMb)+' MB of live heap ('+pct(heapFill)+')':'')+
                 ' · '+fmt(f.refusedFull||0)+' new files refused since the last start; known files still get sources</div>';
               const heap=m.heapMaxMb?m.heapUsedMb/m.heapMaxMb:0,lowShare=c.connected?Math.round(c.lowId*100/c.connected):0;
               $('#kpis').innerHTML=
