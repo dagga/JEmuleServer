@@ -348,6 +348,61 @@ class ServerGossipTest {
     }
 
     @Test
+    void aLateAnswerToAnEarlierProbeDoesNotRejectTheServer() throws Exception {
+        // Production: a long GC pause expired every probe; the next poll sent new challenges, then the answers to
+        // the old ones were read, and all the servers were rejected for good
+        try (DatagramSocket local = bindServerUdpSocket(); DatagramSocket peer = bindServerUdpSocket()) {
+            peer.setSoTimeout(2000);
+            int localTcpPort = local.getLocalPort() - 4;
+            ServerGossip gossip = new ServerGossip("127.0.0.1:" + (peer.getLocalPort() - 4));
+            InetAddress loopback = InetAddress.getByName("127.0.0.1");
+            long now = System.currentTimeMillis();
+
+            gossip.poll(local, now);
+            int oldChallenge = ByteBuffer.wrap(receive(peer).getData(), 2, 4).order(ByteOrder.LITTLE_ENDIAN).getInt();
+            gossip.poll(local, now + 61_000); // the first probe expired, a second one is sent
+            int newChallenge = ByteBuffer.wrap(receive(peer).getData(), 2, 4).order(ByteOrder.LITTLE_ENDIAN).getInt();
+
+            assertTrue(gossip.handle(local, loopback, peer.getLocalPort(),
+                    statusPacket(oldChallenge, 100, 200, 1000, 500, 0), false, loopback, localTcpPort, now + 61_001));
+            assertEquals("probing", gossip.serverViews().get(0).state(), "the late answer is ignored");
+
+            assertTrue(gossip.handle(local, loopback, peer.getLocalPort(),
+                    statusPacket(newChallenge, 100, 200, 1000, 500, 0), false, loopback, localTcpPort, now + 61_002));
+            int descriptionChallenge = ByteBuffer.wrap(receive(peer).getData(), 2, 4)
+                    .order(ByteOrder.LITTLE_ENDIAN).getInt();
+            assertTrue(gossip.handle(local, loopback, peer.getLocalPort(),
+                    descriptionPacket(descriptionChallenge, "Busy server", "Late"), false, loopback, localTcpPort,
+                    now + 61_003));
+            assertEquals("verified", gossip.serverViews().get(0).state());
+        }
+    }
+
+    @Test
+    void aRejectedServerIsProbedAgainLater() throws Exception {
+        try (DatagramSocket local = bindServerUdpSocket(); DatagramSocket peer = bindServerUdpSocket()) {
+            peer.setSoTimeout(2000);
+            int localTcpPort = local.getLocalPort() - 4;
+            ServerGossip gossip = new ServerGossip("127.0.0.1:" + (peer.getLocalPort() - 4));
+            InetAddress loopback = InetAddress.getByName("127.0.0.1");
+            long now = System.currentTimeMillis();
+
+            gossip.poll(local, now);
+            int challenge = ByteBuffer.wrap(receive(peer).getData(), 2, 4).order(ByteOrder.LITTLE_ENDIAN).getInt();
+            // More users than its maximum: an implausible status
+            assertTrue(gossip.handle(local, loopback, peer.getLocalPort(),
+                    statusPacket(challenge, 5000, 200, 1000, 500, 0), false, loopback, localTcpPort, now));
+            assertEquals("rejected", gossip.serverViews().get(0).state());
+
+            gossip.poll(local, now + ServerGossip.REJECT_RETRY_MILLIS - 1);
+            assertEquals("rejected", gossip.serverViews().get(0).state());
+            gossip.poll(local, now + ServerGossip.REJECT_RETRY_MILLIS + 60_000);
+            assertEquals("probing", gossip.serverViews().get(0).state());
+            assertEquals((byte) 0x96, receive(peer).getData()[1], "probed again");
+        }
+    }
+
+    @Test
     void monitoringViewsTrackSourcesAndCandidates() throws Exception {
         ServerGossip gossip = new ServerGossip("127.0.0.1:4661");
         gossip.addServerMetCandidates(List.of(new ServerGossip.Endpoint(InetAddress.getByName("192.0.2.10"), 5000)));

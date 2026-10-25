@@ -27,7 +27,6 @@ import org.jemule.core.FileSource;
 import org.jemule.kad.GlobalSearchForwarder;
 import org.jemule.kad.KadBootstrapManager;
 import org.jemule.kad.KadContact;
-import org.jemule.kad.KadHashBanService;
 import org.jemule.kad.KadMaintenanceService;
 import org.jemule.kad.KadNode;
 import org.jemule.kad.KadNodesUpdater;
@@ -106,8 +105,8 @@ public class AdminInterface implements Runnable {
             case "files" -> showFiles();
             case "ingestion" -> showIngestion();
             case "searches" -> showSearches();
-            case "ban" -> handleBan(parts);
-            case "unban" -> handleUnban(parts);
+            case "ban" -> handleBan(line.trim().substring(parts[0].length()).strip());
+            case "unban" -> handleUnban(line.trim().substring(parts[0].length()).strip());
             case "events" -> showEvents();
             case "kad" -> handleKad(parts);
             case "peers" -> showPeers();
@@ -252,35 +251,28 @@ public class AdminInterface implements Runnable {
         out().println("-------------------------------------------------------------");
     }
 
-    private void handleBan(String[] parts) {
-        if (parts.length < 2) {
-            out().println("Usage: ban <hash> [reason]");
+    private void handleBan(String name) {
+        if (name.isEmpty()) {
+            out().println("Usage: ban <file name>");
             return;
         }
-        String hash = parts[1].toUpperCase();
-        if (!hash.matches("[0-9A-F]{32}")) {
-            out().println("Error: Hash must be 32 characters (hex).");
+        String banned = fakeFileDetector.ban(name, "Admin console");
+        if (banned == null) {
+            out().println("Error: the name is longer than " + FakeFileDetector.MAX_NAME_LENGTH + " characters.");
             return;
         }
-        String reason = "Manual ban" + (parts.length > 2 ? ": " + parts[2] : "");
-        fakeFileDetector.ban(hash, reason);
-        boolean removed = fileIndex.removeFile(hash);
-        out().println("Hash " + hash + " added to blacklist" + (removed ? " and removed from the index." : "."));
+        int removed = fileIndex.removeFilesNamed(banned);
+        out().println("Name '" + banned + "' banned; " + removed + " file(s) removed from the index.");
     }
 
-    private void handleUnban(String[] parts) {
-        if (parts.length < 2) {
-            out().println("Usage: unban <hash>");
+    private void handleUnban(String name) {
+        if (name.isEmpty()) {
+            out().println("Usage: unban <file name>");
             return;
         }
-        String hash = parts[1].toUpperCase(Locale.ROOT);
-        if (!hash.matches("[0-9A-F]{32}")) {
-            out().println("Error: Hash must be 32 characters (hex).");
-            return;
-        }
-        boolean wasBanned = fakeFileDetector.unban(hash);
-        out().println(wasBanned ? "Hash " + hash + " removed from the blacklist."
-                : "Hash " + hash + " was not in the blacklist.");
+        boolean wasBanned = fakeFileDetector.unban(name);
+        out().println(wasBanned ? "Name '" + FakeFileDetector.normalize(name) + "' no longer banned."
+                : "Name '" + name + "' was not banned.");
     }
 
     private void handleKick(String[] parts) {
@@ -401,12 +393,12 @@ public class AdminInterface implements Runnable {
     private void showBlocks() {
         org.jemule.core.DatabaseManager database = server != null ? server.getDatabaseManager() : null;
         if (database == null) {
-            out().println("Persistent hash blocks are unavailable.");
+            out().println("Persistent name bans are unavailable.");
             return;
         }
-        List<String> hashes = database.loadRecentBannedHashes(3);
-        out().println("--- Last 3 Blocked Hashes ---");
-        hashes.forEach(out()::println);
+        List<org.jemule.core.DatabaseManager.BannedName> names = database.loadBannedNames();
+        out().println("--- Banned file names: " + names.size() + " (the 10 most recent) ---");
+        names.stream().limit(10).forEach(n -> out().println(n.name() + (n.reason() == null ? "" : "  (" + n.reason() + ")")));
     }
 
     private void handleSettings(String[] parts) {
@@ -587,7 +579,6 @@ public class AdminInterface implements Runnable {
         KadSearchBridge bridge = node.getSearchBridge();
         KadBootstrapManager bootstrap = node.getBootstrapManager();
         KadMaintenanceService maintenance = node.getMaintenanceService();
-        KadHashBanService bans = node.getHashBanService();
         out().println("--- Kademlia Statistics ---");
         out().println("Searches forked: " + bridge.getSearchesForked());
         out().println("Active searches: " + bridge.getActiveSessionCount());
@@ -597,7 +588,6 @@ public class AdminInterface implements Runnable {
         out().println("Results received: " + bridge.getResultsReceived());
         out().println("Files ingested: " + bridge.getFilesIngested());
         out().println("Illicit files blocked: " + bridge.getIllicitFilesBlocked());
-        out().println("Hashes banned: " + (bans != null ? bans.getTotalBanned() : 0));
         out().println("Bootstrap requests: " + bootstrap.getBootstrapAttempts()
                 + " (answered: " + bootstrap.getBootstrapSuccesses()
                 + ", contacts discovered: " + bootstrap.getContactsDiscovered() + ")");
@@ -618,8 +608,8 @@ public class AdminInterface implements Runnable {
         out().println("  files           - Show file indexing stats");
         out().println("  ingestion       - New files inserted into the database by channel (client push, Kad, servers)");
         out().println("  searches        - Kad and eD2K server search queries and results returned");
-        out().println("  ban <hash> [R]  - Ban a file hash (32 hex chars)");
-        out().println("  unban <hash>    - Remove a hash from the blacklist");
+        out().println("  ban <name>      - Ban a file name (any case) and remove the files indexed under it");
+        out().println("  unban <name>    - Remove a banned file name");
         out().println("  kick <target>   - Disconnect a client by ID, nickname or IP");
         out().println("  events          - Show event counts (total and last minute)");
         out().println("  peers           - List verified server peers and Kad contacts");
@@ -627,7 +617,7 @@ public class AdminInterface implements Runnable {
         out().println("  filters         - Show active IP and fake-file filters");
         out().println("  filters reload  - Reload the IP filter and the child abuse keywords");
         out().println("  bots            - List potential bots by nickname heuristic");
-        out().println("  blocks          - List the 3 most recently blocked file hashes");
+        out().println("  blocks          - List the most recently banned file names");
         out().println("  settings        - Show runtime settings");
         out().println("  settings <key> <value> - Change a configuration parameter");
         out().println("  settings reload - Reload the configuration file without restarting");

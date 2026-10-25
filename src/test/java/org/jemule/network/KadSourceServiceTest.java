@@ -183,4 +183,63 @@ class KadSourceServiceTest {
         assertEquals(3, searches.size(), "then 2 per minute for all clients: the third file is not searched");
         assertEquals(2L, service.stats().get("skippedBudget"));
     }
+
+    @Test
+    void theQuotaIsHalvedWhenKadRefusesAndClimbsBackWithoutRefusal() throws Exception {
+        AtomicLong refusals = new AtomicLong();
+        config = config(true, 10, 40);
+        KadSourceService adaptive = new KadSourceService((hash, size) -> {
+            CompletableFuture<List<KadPacket.KadSource>> search = new CompletableFuture<>();
+            searches.add(search);
+            return search;
+        }, registry, a -> false, () -> config, now::get, refusals::get);
+        int[] n = {0};
+        // A new client and a new file each time: only the global quota limits the searches
+        java.util.function.Supplier<Object> ask = () -> {
+            try {
+                n[0]++;
+                ClientState c = client("82.1.3." + n[0], 0x0303_0152L + n[0], String.format("%032X", 0xA000 + n[0]), null);
+                adaptive.onGetSources(c, hash(5000 + n[0]), SIZE, false, List.of());
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
+            }
+            return adaptive.stats().get("quota");
+        };
+
+        assertEquals(40, ask.get(), "starts at kadSourceSearchesPerMinute");
+        refusals.set(3);
+        now.addAndGet(1_000);
+        assertEquals(20, ask.get(), "halved at the first refusal");
+        refusals.set(4);
+        now.addAndGet(10_000);
+        assertEquals(20, ask.get(), "lowered once a minute at most");
+        refusals.set(5);
+        now.addAndGet(60_000);
+        assertEquals(10, ask.get());
+        now.addAndGet(KadSourceService.RAISE_AFTER_MS - 1);
+        assertEquals(10, ask.get(), "not raised before ten minutes without refusal");
+        now.addAndGet(1);
+        assertEquals(14, ask.get(), "raised by a tenth of the maximum");
+        for (int i = 0; i < 10; i++) {
+            now.addAndGet(KadSourceService.RAISE_AFTER_MS);
+            ask.get();
+        }
+        assertEquals(40, adaptive.stats().get("quota"), "never above the maximum");
+        assertEquals(2L, adaptive.stats().get("quotaLowered"));
+        config = config(true, 10, 6);
+        assertEquals(6, ask.get(), "follows a lower kadSourceSearchesPerMinute at once");
+        config = config(true, 10, 40);
+        now.addAndGet(KadSourceService.RAISE_AFTER_MS * 10);
+        for (int i = 0; i < 9; i++) {
+            now.addAndGet(KadSourceService.RAISE_AFTER_MS);
+            ask.get();
+        }
+
+        // In a new minute, the quota bounds the searches
+        refusals.set(6);
+        now.addAndGet(60_000);
+        int before = searches.size();
+        for (int i = 0; i < 25; i++) ask.get();
+        assertEquals(20, searches.size() - before, "20 searches a minute after the refusal");
+    }
 }

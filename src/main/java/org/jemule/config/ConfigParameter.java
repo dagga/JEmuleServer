@@ -100,7 +100,7 @@ public enum ConfigParameter {
     KAD_SOURCE_SEARCH_MIN_LOCAL("kadSourceSearchMinLocal", Type.INTEGER, Scope.HOT, 1, 255,
             "Kad source search: below this number of local sources, Kad is asked"),
     KAD_SOURCE_SEARCHES_PER_MINUTE("kadSourceSearchesPerMinute", Type.INTEGER, Scope.HOT, 1, 600,
-            "Kad source search: new searches per minute for all clients");
+            "Source search: new searches per minute for all clients at most (adaptive quota)");
 
     /** Value type of a parameter, with its parsing and formatting rules. */
     public enum Type {

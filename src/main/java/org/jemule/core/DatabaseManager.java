@@ -46,7 +46,7 @@ public class DatabaseManager implements AutoCloseable {
     /** Smaller files are not compacted while the server runs: little to gain, and their fill rate is not reliable. */
     static final long ONLINE_MIN_FILE_BYTES = 64L * 1024 * 1024;
     /** Version of the schema written by this code, kept in the stats table. Databases without it are version 1. */
-    static final long SCHEMA_VERSION = 2;
+    static final long SCHEMA_VERSION = 3;
     static final String SCHEMA_VERSION_KEY = "schema_version";
     /** Rows of file_tags read per transaction, so that a migration never holds much memory. */
     private static final int MIGRATION_BATCH_ROWS = 50_000;
@@ -134,7 +134,9 @@ public class DatabaseManager implements AutoCloseable {
         if (version >= SCHEMA_VERSION) return;
         try {
             long start = System.currentTimeMillis();
-            boolean changed = migrateTagsToV2();
+            boolean changed = false;
+            if (version < 2) changed = migrateTagsToV2();
+            if (version < 3) changed |= dropBannedHashes();
             setStatInternal(SCHEMA_VERSION_KEY, SCHEMA_VERSION);
             logger.info("Database migration to schema version {} done in {} s", SCHEMA_VERSION,
                     (System.currentTimeMillis() - start) / 1000);
@@ -143,6 +145,33 @@ public class DatabaseManager implements AutoCloseable {
             logger.error("Database migration to schema version {} failed (retried at the next start): {}",
                     SCHEMA_VERSION, e.getMessage(), e);
         }
+    }
+
+    /**
+     * Version 3: file names are banned instead of hashes (banned_names), and banned_hashes goes. Its hashes cannot
+     * become names: the files banned were deleted. The child abuse filter, which wrote nearly all of them, rejects
+     * the same names anyway.
+     *
+     * @return true if the table held rows
+     */
+    private boolean dropBannedHashes() throws SQLException {
+        try (Statement stmt = connection.createStatement();
+             ResultSet tables = stmt.executeQuery(
+                     "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'BANNED_HASHES'")) {
+            tables.next();
+            if (tables.getLong(1) == 0) return false;
+        }
+        long rows;
+        try (Statement stmt = connection.createStatement()) {
+            try (ResultSet rs = stmt.executeQuery("SELECT COUNT(*) FROM banned_hashes")) {
+                rs.next();
+                rows = rs.getLong(1);
+            }
+            stmt.execute("DROP TABLE banned_hashes");
+        }
+        logger.info("Database migration to schema version 3: banned_hashes dropped ({} banned hashes), file names "
+                + "are banned instead", String.format("%,d", rows));
+        return rows > 0;
     }
 
     /**
@@ -467,10 +496,10 @@ public class DatabaseManager implements AutoCloseable {
                 )
                 """);
 
-            // Table for banned hashes
+            // Banned file names, in lower case: a file published or found under one of them is refused
             stmt.execute("""
-                CREATE TABLE IF NOT EXISTS banned_hashes (
-                    hash VARCHAR(32) PRIMARY KEY,
+                CREATE TABLE IF NOT EXISTS banned_names (
+                    name VARCHAR(1024) PRIMARY KEY,
                     reason VARCHAR(255),
                     added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
@@ -478,105 +507,58 @@ public class DatabaseManager implements AutoCloseable {
         }
     }
 
-    public void addBannedHash(String hash, String reason) {
+    /** A banned file name, as stored: in lower case. */
+    public record BannedName(String name, String reason, java.sql.Timestamp addedAt) {}
+
+    /** Bans a file name (already normalized by the caller). */
+    public void addBannedName(String name, String reason) {
         try {
             locked(() -> {
-                addBannedHashInternal(hash, reason);
-                return null;
-            });
-        } catch (Throwable e) {
-            logger.error("Circuit breaker prevented or caught error during addBannedHash: {}", e.getMessage());
-        }
-    }
-
-    private void addBannedHashInternal(String hash, String reason) throws SQLException {
-        try (PreparedStatement ps = connection.prepareStatement(
-                "MERGE INTO banned_hashes (hash, reason) KEY (hash) VALUES (?, ?)")) {
-            ps.setString(1, hash.toUpperCase());
-            ps.setString(2, reason);
-            ps.executeUpdate();
-        }
-    }
-
-    public void removeBannedHash(String hash) {
-        try {
-            locked(() -> {
-                try (PreparedStatement ps = connection.prepareStatement("DELETE FROM banned_hashes WHERE hash = ?")) {
-                    ps.setString(1, hash.toUpperCase());
+                try (PreparedStatement ps = connection.prepareStatement(
+                        "MERGE INTO banned_names (name, reason) KEY (name) VALUES (?, ?)")) {
+                    ps.setString(1, name);
+                    ps.setString(2, reason);
                     ps.executeUpdate();
                 }
                 return null;
             });
         } catch (Throwable e) {
-            logger.error("Circuit breaker prevented or caught error during removeBannedHash: {}", e.getMessage());
+            logger.error("Circuit breaker prevented or caught error during addBannedName: {}", e.getMessage());
         }
     }
 
-    public List<String> loadBannedHashes() {
+    public void removeBannedName(String name) {
         try {
-            return locked(this::loadBannedHashesInternal);
-        } catch (Throwable e) {
-            logger.error("Circuit breaker prevented or caught error during loadBannedHashes: {}", e.getMessage());
-            return new ArrayList<>();
-        }
-    }
-
-    private List<String> loadBannedHashesInternal() throws SQLException {
-        List<String> hashes = new ArrayList<>();
-        try (Statement stmt = connection.createStatement();
-             ResultSet rs = stmt.executeQuery("SELECT hash FROM banned_hashes")) {
-            while (rs.next()) {
-                hashes.add(rs.getString("hash"));
-            }
-        }
-        return hashes;
-    }
-
-    /** Most recently added banned hashes, newest first; never loads the whole table. */
-    public List<String> loadRecentBannedHashes(int limit) {
-        if (limit < 1) return new ArrayList<>();
-        try {
-            return locked(() -> {
-                List<String> hashes = new ArrayList<>(limit);
-                try (PreparedStatement ps = connection.prepareStatement(
-                        "SELECT hash FROM banned_hashes ORDER BY added_at DESC, _ROWID_ DESC LIMIT ?")) {
-                    ps.setInt(1, limit);
-                    try (ResultSet rs = ps.executeQuery()) {
-                        while (rs.next()) {
-                            hashes.add(rs.getString("hash"));
-                        }
-                    }
+            locked(() -> {
+                try (PreparedStatement ps = connection.prepareStatement("DELETE FROM banned_names WHERE name = ?")) {
+                    ps.setString(1, name);
+                    ps.executeUpdate();
                 }
-                return hashes;
+                return null;
             });
         } catch (Throwable e) {
-            logger.error("Circuit breaker prevented or caught error during loadRecentBannedHashes: {}", e.getMessage());
-            return new ArrayList<>();
+            logger.error("Circuit breaker prevented or caught error during removeBannedName: {}", e.getMessage());
         }
     }
 
-    /** Banned hashes whose reason starts with the given prefix. */
-    public List<String> loadBannedHashes(String reasonPrefix) {
+    /** Every banned file name, the most recent first. */
+    public List<BannedName> loadBannedNames() {
         try {
-            return locked(() -> loadBannedHashesInternal(reasonPrefix));
+            return locked(() -> {
+                List<BannedName> names = new ArrayList<>();
+                try (Statement stmt = connection.createStatement();
+                     ResultSet rs = stmt.executeQuery(
+                             "SELECT name, reason, added_at FROM banned_names ORDER BY added_at DESC, name")) {
+                    while (rs.next()) {
+                        names.add(new BannedName(rs.getString(1), rs.getString(2), rs.getTimestamp(3)));
+                    }
+                }
+                return names;
+            });
         } catch (Throwable e) {
-            logger.error("Circuit breaker prevented or caught error during loadBannedHashes: {}", e.getMessage());
+            logger.error("Circuit breaker prevented or caught error during loadBannedNames: {}", e.getMessage());
             return new ArrayList<>();
         }
-    }
-
-    private List<String> loadBannedHashesInternal(String reasonPrefix) throws SQLException {
-        List<String> hashes = new ArrayList<>();
-        try (PreparedStatement ps = connection.prepareStatement(
-                "SELECT hash FROM banned_hashes WHERE reason LIKE ? ESCAPE '\\'")) {
-            ps.setString(1, reasonPrefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%");
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) {
-                    hashes.add(rs.getString("hash"));
-                }
-            }
-        }
-        return hashes;
     }
 
     /** Deletes a file and its tags. */

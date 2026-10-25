@@ -27,11 +27,12 @@ import java.util.Properties;
  *
  * @param enabled            Whether OP_GETSOURCES may start a Kad source search.
  * @param minLocalSources    Below this number of local sources, Kad is asked.
- * @param searchesPerMinute  New Kad source searches per minute for all clients.
+ * @param searchesPerMinute  New Kad source searches per minute for all clients at most: the quota starts there, is
+ *                           halved when Kad refuses requests and climbs back after ten minutes without refusal.
  */
 public record KadSourcesConfig(boolean enabled, int minLocalSources, int searchesPerMinute) {
 
-    public static final KadSourcesConfig DEFAULT = new KadSourcesConfig(false, 10, 30);
+    public static final KadSourcesConfig DEFAULT = new KadSourcesConfig(false, 10, 60);
 
     public KadSourcesConfig {
         if (minLocalSources < 1 || minLocalSources > 255) {

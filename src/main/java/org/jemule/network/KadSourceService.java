@@ -49,7 +49,11 @@ import java.util.function.Supplier;
  * Kad sources for eD2K clients. When a client asks for the sources of a file (OP_GETSOURCES) and the server knows
  * few, the sources Kad gave for that file in the last 20 minutes are added to the answer; without them, Kad is
  * searched and the new sources are sent in a second OP_FOUNDSOURCES, which eMule and aMule take at any time for a
- * file they download (CServerSocket::ProcessPacket).
+ * file they download (CServerSocket::ProcessPacket). The server's searcher also asks the verified eD2K servers
+ * (ServerSourceSearcher), whose HighID sources arrive here as direct Kad sources.
+ * <p>
+ * The searches started per minute follow an adaptive quota: kadSourceSearchesPerMinute at first, halved when Kad
+ * refuses requests, raised again after ten minutes without refusal.
  * <p>
  * A Kad source that can be contacted directly (types 1 and 4) is sent with its IP as HighID. A firewalled one
  * (types 3, 5 and 6) is useless to an eD2K client, unless that client is connected to this server: it is then sent
@@ -63,11 +67,17 @@ public final class KadSourceService {
     /** Files whose Kad sources are kept, the least recently asked dropped first. */
     static final int MAX_CACHED_FILES = 1000;
     /** Kad sources kept per file, the directly reachable ones first. */
-    static final int MAX_SOURCES_PER_FILE = 50;
+    static final int MAX_SOURCES_PER_FILE = 80;
     /** eMule asks its server for the sources of a file every 15 minutes (SERVERREASKTIME): one Kad search per period. */
     static final long CLIENT_REASK_MS = 15 * 60_000L;
     /** Kad source searches one client may start per hour. */
     static final int CLIENT_SEARCHES_PER_HOUR = 20;
+    /** The adaptive quota never goes below this number of searches per minute. */
+    static final int MIN_SEARCHES_PER_MINUTE = 5;
+    /** The quota is lowered at most once per this period, however many refusals came. */
+    static final long LOWER_INTERVAL_MS = 60_000L;
+    /** Without refusal for this long, the quota is raised one step towards kadSourceSearchesPerMinute. */
+    static final long RAISE_AFTER_MS = 10 * 60_000L;
 
     /** Starts a Kad source search; KadSearchBridge#searchSources in the server. */
     public interface Searcher {
@@ -81,6 +91,8 @@ public final class KadSourceService {
     private final Predicate<InetAddress> blocked;
     private final Supplier<ServerConfig> config;
     private final LongSupplier clock;
+    /** Requests Kad refused since the start (the flood guard of the nodes asked). */
+    private final LongSupplier refusals;
 
     private final Map<String, Cached> cache = new LinkedHashMap<>(16, 0.75f, true) {
         @Override
@@ -90,6 +102,14 @@ public final class KadSourceService {
     };
     private long windowStart;
     private int windowSearches;
+    /** Searches per minute allowed now: kadSourceSearchesPerMinute at most, halved when Kad refuses requests. */
+    private int quota = -1;
+    private long refusalsSeen;
+    private long lastRefusal;
+    private long lastLowered;
+    private long lastRaised;
+    private final AtomicLong quotaLowered = new AtomicLong();
+    private final AtomicLong quotaRaised = new AtomicLong();
 
     private final AtomicLong searches = new AtomicLong();
     private final AtomicLong cacheHits = new AtomicLong();
@@ -102,11 +122,20 @@ public final class KadSourceService {
 
     public KadSourceService(Searcher searcher, ClientRegistry registry, Predicate<InetAddress> blocked,
                             Supplier<ServerConfig> config, LongSupplier clock) {
+        this(searcher, registry, blocked, config, clock, () -> 0);
+    }
+
+    /**
+     * @param refusals requests refused by Kad since the start: each new refusal lowers the quota
+     */
+    public KadSourceService(Searcher searcher, ClientRegistry registry, Predicate<InetAddress> blocked,
+                            Supplier<ServerConfig> config, LongSupplier clock, LongSupplier refusals) {
         this.searcher = searcher;
         this.registry = registry;
         this.blocked = blocked;
         this.config = config;
         this.clock = clock;
+        this.refusals = refusals;
     }
 
     /**
@@ -171,13 +200,47 @@ public final class KadSourceService {
     }
 
     private synchronized boolean takeGlobalBudget(long now, int perMinute) {
+        adaptQuota(now, perMinute);
         if (now - windowStart >= 60_000L) {
             windowStart = now;
             windowSearches = 0;
         }
-        if (windowSearches >= perMinute) return false;
+        if (windowSearches >= quota) return false;
         windowSearches++;
         return true;
+    }
+
+    /**
+     * Starts at {@code ceiling} searches per minute; halves the quota when Kad refused requests since the last
+     * check (once a minute at most), and raises it again by a tenth of the ceiling after
+     * {@link #RAISE_AFTER_MS} without refusal.
+     */
+    private void adaptQuota(long now, int ceiling) {
+        if (quota < 0) {
+            quota = ceiling;
+            refusalsSeen = refusals.getAsLong();
+            lastLowered = now - LOWER_INTERVAL_MS;
+            lastRefusal = now;
+            lastRaised = now;
+        }
+        if (quota > ceiling) quota = ceiling; // kadSourceSearchesPerMinute lowered
+        long refused = refusals.getAsLong();
+        if (refused > refusalsSeen) {
+            refusalsSeen = refused;
+            lastRefusal = now;
+            int lowered = Math.max(Math.min(MIN_SEARCHES_PER_MINUTE, ceiling), quota / 2);
+            if (now - lastLowered >= LOWER_INTERVAL_MS && lowered < quota) {
+                log.info("Kad refused source requests: {} Kad source searches per minute (was {})", lowered, quota);
+                quota = lowered;
+                lastLowered = now;
+                quotaLowered.incrementAndGet();
+            }
+        } else if (quota < ceiling && now - Math.max(lastRefusal, lastRaised) >= RAISE_AFTER_MS) {
+            quota = Math.min(ceiling, quota + Math.max(1, ceiling / 10));
+            lastRaised = now;
+            quotaRaised.incrementAndGet();
+            log.info("No Kad refusal for {} min: {} Kad source searches per minute", RAISE_AFTER_MS / 60_000, quota);
+        }
     }
 
     /** At most {@link #MAX_SOURCES_PER_FILE} sources, the directly reachable ones first; counts them. */
@@ -265,6 +328,13 @@ public final class KadSourceService {
         stats.put("searches", searches.get());
         stats.put("cacheHits", cacheHits.get());
         stats.put("skippedBudget", skippedBudget.get());
+        synchronized (this) {
+            stats.put("quota", quota < 0 ? config.get().kadSources().searchesPerMinute() : quota);
+        }
+        stats.put("quotaMax", config.get().kadSources().searchesPerMinute());
+        stats.put("kadRefusals", refusals.getAsLong());
+        stats.put("quotaLowered", quotaLowered.get());
+        stats.put("quotaRaised", quotaRaised.get());
         stats.put("directFound", directFound.get());
         stats.put("firewalledMatched", firewalledMatched.get());
         stats.put("firewalledDropped", firewalledDropped.get());

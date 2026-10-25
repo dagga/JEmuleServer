@@ -56,7 +56,6 @@ public class KadNode implements AutoCloseable {
     private final KadBootstrapManager bootstrapManager;
     private final KadMaintenanceService maintenanceService;
     private final KadSearchBridge searchBridge;
-    private final KadHashBanService hashBanService;
     private final KadNodesUpdater nodesUpdater;
 
     private volatile boolean running = false;
@@ -64,7 +63,7 @@ public class KadNode implements AutoCloseable {
     /**
      * @param config       Kademlia settings.
      * @param tcpPort      TCP port of the server, used to derive the default Kad UDP port.
-     * @param db           H2 database (node ID, banned hashes, ingested files); may be null.
+     * @param db           H2 database (node ID, ingested files); may be null.
      * @param fileIndex    In-memory index receiving the ingested Kad files; may be null.
      * @param abuseFilter  Child abuse filter applied to every Kad result.
      * @param fakeDetector Fake file detector applied to every Kad result and receiving the Kad bans.
@@ -92,7 +91,6 @@ public class KadNode implements AutoCloseable {
         this.searchBridge = new KadSearchBridge(routingTable, udpService, abuseFilter, fakeDetector, fileIndex, db,
                 KadSearchBridge.DEFAULT_ALPHA_NODES, config.searchTimeoutSeconds() * 1000L,
                 config.autoIngestToH2(), config.minSourcesForIngest());
-        this.hashBanService = db != null ? new KadHashBanService(db, fakeDetector, searchBridge) : null;
         this.nodesUpdater = nodesCache != null && !config.nodesUrls().isBlank()
                 ? new KadNodesUpdater(bootstrapManager, nodesCache, config.nodesSources())
                 : null;
@@ -132,9 +130,6 @@ public class KadNode implements AutoCloseable {
     public synchronized void start() throws SocketException {
         if (running) return;
         udpService.start();
-        if (hashBanService != null) {
-            hashBanService.initialize();
-        }
         bootstrapManager.start();
         if (nodesUpdater != null) {
             nodesUpdater.start();
@@ -208,11 +203,6 @@ public class KadNode implements AutoCloseable {
         return searchBridge;
     }
 
-    /** The hash ban service, or null without a database. */
-    public KadHashBanService getHashBanService() {
-        return hashBanService;
-    }
-
     @Override
     public synchronized void close() {
         if (!running) {
@@ -221,9 +211,6 @@ public class KadNode implements AutoCloseable {
         }
         running = false;
         searchBridge.close();
-        if (hashBanService != null) {
-            hashBanService.shutdown();
-        }
         maintenanceService.close();
         if (nodesUpdater != null) {
             nodesUpdater.close();

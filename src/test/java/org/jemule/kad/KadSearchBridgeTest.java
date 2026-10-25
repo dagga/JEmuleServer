@@ -400,65 +400,21 @@ class KadSearchBridgeTest {
     }
 
     @Test
-    void testAcceptFileRejectsBannedHash() {
-        KadId localId = KadId.random();
-        KadRoutingTable table = new KadRoutingTable(localId);
-
-        try (KadUdpService udp = new KadUdpService(0);
-             KadSearchBridge bridge = new KadSearchBridge(table, udp,
-                     ChildAbuseFilter.defaults(), new FakeFileDetector(), 3, 2000)) {
-
-            String hash = "aabbccddeeff00112233445566778899";
-            bridge.banHash(hash);
-            assertTrue(bridge.isHashBanned(hash));
-
-            FileMetadata file = new FileMetadata(hash, "legitimate-file.avi", 700_000_000L, "Video");
-            assertFalse(bridge.acceptFile(file));
-            assertEquals(1, bridge.getIllicitFilesBlocked());
-        } catch (Exception e) {
-            fail(e);
-        }
-    }
-
-    @Test
-    void theBannedHashesAreSharedWithTheFakeFileDetector() {
+    void testAcceptFileRejectsBannedName() {
         KadRoutingTable table = new KadRoutingTable(KadId.random());
         FakeFileDetector detector = new FakeFileDetector();
+        detector.setEnabled(false); // a banned name is rejected even without the heuristics
 
         try (KadUdpService udp = new KadUdpService(0);
              KadSearchBridge bridge = new KadSearchBridge(table, udp,
                      ChildAbuseFilter.defaults(), detector, 3, 2000)) {
 
-            detector.addBannedHash("00112233445566778899AABBCCDDEEFF");
-            assertTrue(bridge.isHashBanned("00112233445566778899aabbccddeeff"), "banned by the detector");
-            bridge.banHash("FFEEDDCCBBAA99887766554433221100");
-            assertTrue(detector.isBanned("ffeeddccbbaa99887766554433221100"), "banned by Kad");
-            assertEquals(2, detector.bannedHashes().size(), "one set in memory");
-        } catch (Exception e) {
-            fail(e);
-        }
-    }
-
-    @Test
-    void testAcceptFileRejectsBannedHashCaseInsensitive() {
-        KadId localId = KadId.random();
-        KadRoutingTable table = new KadRoutingTable(localId);
-
-        try (KadUdpService udp = new KadUdpService(0);
-             KadSearchBridge bridge = new KadSearchBridge(table, udp,
-                     ChildAbuseFilter.defaults(), new FakeFileDetector(), 3, 2000)) {
-
-            // Ban with lowercase
-            bridge.banHash("aabbccddeeff00112233445566778899");
-
-            // File arrives with uppercase hash
-            FileMetadata file = new FileMetadata("AABBCCDDEEFF00112233445566778899",
-                    "some-file.avi", 700_000_000L, "Video");
-            assertFalse(bridge.acceptFile(file));
-
-            // Verify isHashBanned is case-insensitive too
-            assertTrue(bridge.isHashBanned("AABBCCDDEEFF00112233445566778899"));
-            assertTrue(bridge.isHashBanned("aabbccddeeff00112233445566778899"));
+            detector.ban("Banned Movie.avi", "test");
+            assertFalse(bridge.acceptFile(new FileMetadata("aabbccddeeff00112233445566778899",
+                    "BANNED movie.avi", 700_000_000L, "Video")));
+            assertTrue(bridge.acceptFile(new FileMetadata("aabbccddeeff00112233445566778899",
+                    "renamed movie.avi", 700_000_000L, "Video")), "the hash itself is not banned");
+            assertEquals(1, bridge.getIllicitFilesBlocked());
         } catch (Exception e) {
             fail(e);
         }
@@ -480,9 +436,6 @@ class KadSearchBridgeTest {
 
             assertFalse(bridge.acceptFile(illicit));
             assertEquals(1, bridge.getIllicitFilesBlocked());
-
-            // Verify the hash was automatically added to the in-memory ban set
-            assertTrue(bridge.isHashBanned(illicitHash));
         } catch (Exception e) {
             fail(e);
         }
@@ -536,9 +489,6 @@ class KadSearchBridgeTest {
 
             assertFalse(bridge.acceptFile(fakeFile));
             assertEquals(1, bridge.getIllicitFilesBlocked());
-
-            // Fake files are NOT auto-banned (only rejected by heuristic)
-            assertFalse(bridge.isHashBanned(fakeHash));
         } catch (Exception e) {
             fail(e);
         }
@@ -623,11 +573,6 @@ class KadSearchBridgeTest {
             assertEquals(List.of(cleanHash + " nature-documentary.avi"),
                     results.stream().map(f -> f.hash() + " " + f.name()).toList(),
                     "Only clean file should pass through filters");
-
-            // The illicit hash should be auto-banned
-            assertTrue(bridge.isHashBanned(illicitHash));
-            // The fake hash should NOT be auto-banned (heuristic-only rejection)
-            assertFalse(bridge.isHashBanned(fakeHash));
 
             // IllicitFileListener should have been called for the child abuse file
             assertEquals(1, bannedNotifications.size());

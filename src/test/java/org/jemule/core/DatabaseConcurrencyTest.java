@@ -30,14 +30,14 @@ class DatabaseConcurrencyTest {
                 String hash = String.format("%032x", i);
                 tasks.add(executor.submit(() -> db.saveFile(new FileMetadata(hash, "file " + hash + ".avi", 1000, "Video",
                         List.of(new Tag(Tag.TYPE_STRING, "a", "x"), new Tag(Tag.TYPE_INTEGER, "b", 1))))));
-                tasks.add(executor.submit(() -> db.addBannedHash(hash, "test")));
+                tasks.add(executor.submit(() -> db.addBannedName("name " + hash, "test")));
             }
             for (Future<?> t : tasks) t.get();
 
             List<FileMetadata> loaded = db.loadFiles();
             assertEquals(files, loaded.size());
             loaded.forEach(m -> assertEquals(2, m.tags().size(), m.hash()));
-            assertEquals(files, db.loadBannedHashes().size());
+            assertEquals(files, db.loadBannedNames().size());
         }
     }
 

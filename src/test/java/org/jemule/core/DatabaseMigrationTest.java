@@ -15,6 +15,7 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class DatabaseMigrationTest {
 
@@ -71,6 +72,42 @@ class DatabaseMigrationTest {
         // Already migrated: a new start changes nothing
         try (DatabaseManager db = new DatabaseManager(dbPath)) {
             assertEquals(3, db.loadFiles().size());
+        }
+    }
+
+    @Test
+    void aVersionTwoDatabaseLosesItsBannedHashes() throws Exception {
+        String dbPath = tempDir.resolve("v2db").toString();
+        new DatabaseManager(dbPath).close();
+
+        // As written by version 2 (1.2.23 and before): banned hashes, the files and their tags already migrated
+        try (Connection c = DriverManager.getConnection("jdbc:h2:" + dbPath, "sa", "");
+             Statement stmt = c.createStatement()) {
+            stmt.execute("UPDATE stats SET stat_value = 2 WHERE stat_key = '" + DatabaseManager.SCHEMA_VERSION_KEY + "'");
+            stmt.execute("CREATE TABLE banned_hashes (hash VARCHAR(32) PRIMARY KEY, reason VARCHAR(255), "
+                    + "added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
+            stmt.execute("INSERT INTO banned_hashes (hash, reason) VALUES ('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', 'Child abuse material: x')");
+            stmt.execute("INSERT INTO files VALUES ('BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB', 'song.mp3', 200, 'Audio')");
+            stmt.execute("INSERT INTO file_tags (file_hash, tag_type, tag_name, tag_value_str) "
+                    + "VALUES ('BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB', 2, 'Description', 'kept: version 2 is not migrated again')");
+        }
+
+        try (DatabaseManager db = new DatabaseManager(dbPath)) {
+            assertEquals(3L, db.getStat(DatabaseManager.SCHEMA_VERSION_KEY, 0));
+            assertEquals(1, db.loadFiles().size());
+            assertTrue(db.loadBannedNames().isEmpty());
+        }
+        try (Connection c = DriverManager.getConnection("jdbc:h2:" + dbPath, "sa", "");
+             Statement stmt = c.createStatement()) {
+            try (ResultSet rs = stmt.executeQuery(
+                    "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'BANNED_HASHES'")) {
+                rs.next();
+                assertEquals(0, rs.getInt(1), "banned_hashes is dropped");
+            }
+            try (ResultSet rs = stmt.executeQuery("SELECT COUNT(*) FROM file_tags")) {
+                rs.next();
+                assertEquals(1, rs.getInt(1), "the tags are not migrated a second time");
+            }
         }
     }
 

@@ -49,7 +49,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
-import java.util.regex.Pattern;
 
 /**
  * Loopback-only HTTP dashboard and JSON API for local server administration.
@@ -57,7 +56,6 @@ import java.util.regex.Pattern;
 final class AdminWebPanel implements AutoCloseable {
     private static final Logger log = LoggerFactory.getLogger(AdminWebPanel.class);
     private static final int MAX_BODY_BYTES = 4096;
-    private static final Pattern HASH = Pattern.compile("[0-9A-Fa-f]{32}");
     private static final String PAGE = """
             <!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
             <title>JEmuleServer admin</title>
@@ -166,9 +164,9 @@ final class AdminWebPanel implements AutoCloseable {
               if(view==='overview'){overview();return}
               if(view==='clients'){controls.innerHTML='<input id="query" placeholder="Search nickname, IP, or client ID"><button class="btn" id="search">Search</button>';
                 $('#search').onclick=()=>load(view,$('#query').value);}
-              else if(view==='blocks'){controls.innerHTML='<input id="hash" placeholder="32-character MD4 hash"><input id="reason" placeholder="Reason"><button class="btn" id="ban">Ban hash</button><button class="btn" id="unban">Unban hash</button>';
-                $('#ban').onclick=async()=>{try{await post('/api/blocks',{hash:$('#hash').value,reason:$('#reason').value});notice.textContent='Hash banned.';load(view)}catch(e){notice.textContent=e.message}};
-                $('#unban').onclick=async()=>{try{await post('/api/unblock',{hash:$('#hash').value});notice.textContent='Hash unbanned.';load(view)}catch(e){notice.textContent=e.message}}}
+              else if(view==='blocks'){controls.innerHTML='<input id="name" placeholder="File name (any case)"><input id="reason" placeholder="Reason"><button class="btn" id="ban">Ban name</button><button class="btn" id="unban">Unban name</button><a class="btn" href="/api/blocks/export" download="banned-names.txt">Export</a>';
+                $('#ban').onclick=async()=>{try{const r=await post('/api/blocks',{name:$('#name').value,reason:$('#reason').value});notice.textContent='Name banned; '+r.filesRemoved+' indexed file(s) removed.';load(view)}catch(e){notice.textContent=e.message}};
+                $('#unban').onclick=async()=>{try{const r=await post('/api/unblock',{name:$('#name').value});notice.textContent=r.wasBanned?'Name unbanned.':'This name was not banned.';load(view)}catch(e){notice.textContent=e.message}}}
               else if(view==='settings'){controls.innerHTML='<button class="btn" id="reload">Reload from file</button><button class="btn" id="save">Save changes</button>';
                 $('#reload').onclick=async()=>{try{const r=await post('/api/settings/reload',{});notice.textContent=summarize(r);load(view)}catch(e){notice.textContent=e.message}};
                 $('#save').onclick=()=>saveSettings();}
@@ -194,12 +192,15 @@ final class AdminWebPanel implements AutoCloseable {
               let o;try{o=await getJson('/api/overview')}catch(e){notice.textContent='Request failed: '+e.message;return}
               notice.textContent='';
               meta.textContent='v'+o.version+' · up '+duration(o.uptimeSeconds)+' · updated '+clock(Date.now());
-              const f=o.files,c=o.clients,m=o.memory,s=o.searches,v=o.offerFilesV1,k=o.kadSources||{};
+              const f=o.files,c=o.clients,m=o.memory,s=o.searches,v=o.offerFilesV1,k=o.kadSources||{},ss=o.serverSources||{};
               $('#heroFiles').innerHTML='<div class="label">Indexed files</div><div class="big">'+fmt(f.indexed)+'</div><div class="deltas">'+
                 delta(f.indexed,f.ago24h,'in 24 h')+delta(f.indexed,f.ago7d,'in 7 days')+'</div><div class="sub" style="margin-top:6px">'+fmt(f.newSinceStart)+' new files since the last start</div>';
-              const fill=f.max?f.indexed/f.max:0;
+              // The index is full at maxFiles or when the live heap reaches the guard, whichever comes first
+              const fileFill=f.max?f.indexed/f.max:0,heapFill=m.guardMb?m.liveOldMb/m.guardMb:0,fill=Math.min(1,Math.max(fileFill,heapFill));
               $('#heroCapacity').innerHTML='<div class="label">Index capacity</div><div class="value">'+(fill*100).toFixed(1)+' %</div>'+meter(fill)+
-                state(level(fill),fill>=.9?'Near the limit':fill>=.75?'Filling up':'Room to grow')+'<div class="sub" style="margin-top:6px">'+fmt(f.indexed)+' of '+fmt(f.max)+' files (maxFiles); new files are refused beyond, known files still get sources</div>';
+                state(m.heapFull||fileFill>=1?'critical':level(fill),m.heapFull?'Full: heap':fileFill>=1?'Full: maxFiles':fill>=.9?'Near the limit':fill>=.75?'Filling up':'Room to grow')+
+                '<div class="sub" style="margin-top:6px">'+fmt(f.indexed)+' of '+fmt(f.max)+' files (maxFiles)'+(m.guardMb?' · live heap '+fmt(m.liveOldMb)+' of '+fmt(m.guardMb)+' MB allowed':'')+
+                ' · '+fmt(f.refusedFull||0)+' new files refused since the last start; known files still get sources</div>';
               const heap=m.heapMaxMb?m.heapUsedMb/m.heapMaxMb:0,lowShare=c.connected?Math.round(c.lowId*100/c.connected):0;
               $('#kpis').innerHTML=
                 tile('Connected clients',fmt(c.connected),fmt(c.lowId)+' LowID ('+lowShare+' %) · max '+fmt(c.max))+
@@ -207,9 +208,9 @@ final class AdminWebPanel implements AutoCloseable {
                 tile('Peer eD2K servers',fmt(o.servers.verified),'verified of '+fmt(o.servers.known)+' known')+
                 tile('Remote searches',fmt(s.kad+s.ed2kServers),'Kad '+fmt(s.kad)+' · eD2K servers '+fmt(s.ed2kServers)+' · UDP global received '+fmt(s.udpGlobal))+
                 tile('Files found by searches',fmt(s.filesIngested),'indexed since the last start')+
-                tile('Kad sources for clients',fmt(k.sourcesDelivered||0),'sent in '+fmt(k.answersSent||0)+' answers · '+fmt(k.searches||0)+' Kad searches, '+fmt(k.cacheHits||0)+' from cache · '+fmt(k.firewalledMatched||0)+' firewalled sources reachable through this server',k.enabled?state('good','Enabled'):'<div class="sub">Disabled (kadSourceSearchEnabled)</div>')+
+                tile('Kad and server sources for clients',fmt(k.sourcesDelivered||0),'sent in '+fmt(k.answersSent||0)+' answers · '+fmt(k.searches||0)+' searches, '+fmt(k.cacheHits||0)+' from cache · '+fmt(ss.highIdSources||0)+' HighID sources from other servers · '+fmt(k.firewalledMatched||0)+' firewalled Kad sources reachable through this server · quota '+fmt(k.quota||0)+' of '+fmt(k.quotaMax||0)+' searches a minute ('+fmt(k.kadRefusals||0)+' Kad refusals)',k.enabled?state('good','Enabled'):'<div class="sub">Disabled (kadSourceSearchEnabled)</div>')+
                 tile('OFFERFILES v1',fmt(v.newFiles),'new files from fast-publishing clients since the last start · '+fmt(v.newFilesLegacy)+' from legacy clients · '+fmt(v.sessionsAdvertised)+' of '+fmt(v.loginsAsked)+' asking logins answered',v.enabled?state('good','Enabled'):'<div class="sub">Disabled (offerFilesV1Enabled)</div>')+
-                tile('Banned hashes',compact(o.protection.bannedHashes),fmt(o.protection.bannedHashes)+' hashes · '+fmt(o.protection.ipFilterRanges)+' IP filter ranges')+
+                tile('Banned names',compact(o.protection.bannedNames),fmt(o.protection.bannedNames)+' file names · '+fmt(o.protection.childAbuseRejected)+' files refused by the child abuse filter and Kad screening since the last start · '+fmt(o.protection.ipFilterRanges)+' IP filter ranges')+
                 tile('Database',o.database.sizeMb==null?'–':fmt(o.database.sizeMb)+' MB',o.database.reopens?state('critical','Reopened '+o.database.reopens+' times after a fatal error'):state('good','No fatal error'))+
                 tile('Uptime',duration(o.uptimeSeconds),'version '+esc(o.version));
             }
@@ -387,6 +388,12 @@ final class AdminWebPanel implements AutoCloseable {
                 case "/api/filters" -> json(exchange, 200, filters());
                 case "/api/bots" -> json(exchange, 200, bots());
                 case "/api/blocks" -> json(exchange, 200, blocks());
+                case "/api/blocks/export" -> {
+                    // One banned name per line, to keep or to load on another server
+                    exchange.getResponseHeaders().set("Content-Disposition", "attachment; filename=\"banned-names.txt\"");
+                    String names = String.join("\n", server.getFakeFileDetector().bannedNames());
+                    send(exchange, 200, "text/plain; charset=utf-8", names.isEmpty() ? "" : names + "\n");
+                }
                 case "/api/settings" -> json(exchange, 200, settings());
                 default -> sendError(exchange, 404, "Not found");
             }
@@ -404,23 +411,21 @@ final class AdminWebPanel implements AutoCloseable {
         Map<String, String> form = readForm(exchange);
         switch (path) {
             case "/api/blocks" -> {
-                String hash = form.getOrDefault("hash", "").trim();
-                if (!HASH.matcher(hash).matches())
-                    throw new IllegalArgumentException("Hash must contain 32 hexadecimal characters");
-                String reason = form.getOrDefault("reason", "Admin web panel").trim();
+                String name = form.getOrDefault("name", "");
+                if (FakeFileDetector.normalize(name) == null)
+                    throw new IllegalArgumentException("Name must hold 1 to " + FakeFileDetector.MAX_NAME_LENGTH + " characters");
+                String reason = form.getOrDefault("reason", "").trim();
                 if (reason.length() > 240) throw new IllegalArgumentException("Reason is too long");
-                String normalized = hash.toUpperCase(Locale.ROOT);
-                server.getFakeFileDetector().ban(normalized, "Admin web panel" + (reason.isEmpty() ? "" : ": " + reason));
-                server.getFileIndex().removeFile(normalized);
-                json(exchange, 200, Map.of("banned", normalized));
+                String banned = server.getFakeFileDetector().ban(name, "Admin web panel" + (reason.isEmpty() ? "" : ": " + reason));
+                int removed = server.getFileIndex().removeFilesNamed(banned);
+                json(exchange, 200, Map.of("banned", banned, "filesRemoved", removed));
             }
             case "/api/unblock" -> {
-                String hash = form.getOrDefault("hash", "").trim();
-                if (!HASH.matcher(hash).matches())
-                    throw new IllegalArgumentException("Hash must contain 32 hexadecimal characters");
-                String normalized = hash.toUpperCase(Locale.ROOT);
-                boolean wasBanned = server.getFakeFileDetector().unban(normalized);
-                json(exchange, 200, Map.of("unbanned", normalized, "wasBanned", wasBanned));
+                String name = form.getOrDefault("name", "");
+                if (FakeFileDetector.normalize(name) == null)
+                    throw new IllegalArgumentException("Name must hold 1 to " + FakeFileDetector.MAX_NAME_LENGTH + " characters");
+                boolean wasBanned = server.getFakeFileDetector().unban(name);
+                json(exchange, 200, Map.of("unbanned", FakeFileDetector.normalize(name), "wasBanned", wasBanned));
             }
             case "/api/settings" -> json(exchange, 200, configResult(server.updateConfig(form)));
             case "/api/settings/reload" -> json(exchange, 200, configResult(server.reloadConfig()));
@@ -477,6 +482,7 @@ final class AdminWebPanel implements AutoCloseable {
         files.put("indexed", index.fileCount());
         files.put("max", config == null ? null : config.maxFiles());
         files.put("newSinceStart", index.totalNewFiles());
+        files.put("refusedFull", index.refusedFullCount());
         files.put("ago24h", filesAt(history, now - 24 * 3_600_000L));
         files.put("ago7d", filesAt(history, now - 7 * 24 * 3_600_000L));
         MetricsHistory.Sample oldest = history == null ? null : history.oldest();
@@ -490,6 +496,13 @@ final class AdminWebPanel implements AutoCloseable {
         Map<String, Object> memory = new java.util.LinkedHashMap<>();
         memory.put("heapUsedMb", (runtime.totalMemory() - runtime.freeMemory()) / 1024 / 1024);
         memory.put("heapMaxMb", runtime.maxMemory() / 1024 / 1024);
+        org.jemule.core.HeapGuard guard = server.getHeapGuard();
+        if (guard != null && guard.maxBytes() > 0) {
+            memory.put("liveOldMb", guard.liveBytes() / 1024 / 1024);
+            memory.put("oldMaxMb", guard.maxBytes() / 1024 / 1024);
+            memory.put("guardMb", (long) (guard.maxBytes() * org.jemule.core.HeapGuard.MAX_LIVE_RATIO) / 1024 / 1024);
+            memory.put("heapFull", guard.full());
+        }
         double load = java.lang.management.ManagementFactory.getOperatingSystemMXBean().getSystemLoadAverage();
         memory.put("systemLoad", Double.isFinite(load) ? load : null);
 
@@ -509,9 +522,10 @@ final class AdminWebPanel implements AutoCloseable {
                 + (serverBridge == null ? 0L : serverBridge.getFilesIngested()));
 
         Map<String, Object> protection = new java.util.LinkedHashMap<>();
-        org.jemule.core.Md4Set banned = server.getFakeFileDetector() == null ? null
-                : server.getFakeFileDetector().bannedHashes();
-        protection.put("bannedHashes", banned == null ? 0 : banned.size());
+        protection.put("bannedNames", server.getFakeFileDetector() == null ? 0
+                : server.getFakeFileDetector().bannedNameCount());
+        protection.put("childAbuseRejected", server.getFileIndex().childAbuseRejectedCount()
+                + (server.getKadSearchBridge() == null ? 0 : server.getKadSearchBridge().getIllicitFilesBlocked()));
         protection.put("ipFilterRanges", server.getIPFilter().getFilterCount());
 
         Map<String, Object> db = new java.util.LinkedHashMap<>();
@@ -538,6 +552,7 @@ final class AdminWebPanel implements AutoCloseable {
         overview.put("offerFilesV1", offerFiles);
         KadSourceService kadSources = server.getKadSourceService();
         overview.put("kadSources", kadSources == null ? Map.of() : kadSources.stats());
+        overview.put("serverSources", server.serverSourceStats());
         return overview;
     }
 
@@ -741,9 +756,17 @@ final class AdminWebPanel implements AutoCloseable {
         return result;
     }
 
-    private List<String> blocks() {
+    /** The 200 most recently banned names. */
+    private List<Map<String, Object>> blocks() {
         DatabaseManager database = server.getDatabaseManager();
-        return database == null ? List.of() : database.loadRecentBannedHashes(3);
+        if (database == null) return List.of();
+        return database.loadBannedNames().stream().limit(200).map(n -> {
+            Map<String, Object> row = new java.util.LinkedHashMap<>();
+            row.put("name", n.name());
+            row.put("reason", n.reason() == null ? "" : n.reason());
+            row.put("bannedAt", n.addedAt() == null ? "" : n.addedAt().toString());
+            return row;
+        }).toList();
     }
 
     private List<Map<String, Object>> settings() {

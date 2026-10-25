@@ -127,14 +127,11 @@ class PublishValidationTest {
     }
 
     @Test
-    void testChildAbuseFileIsRejectedAndBanned() throws Exception {
+    void testChildAbuseFileIsRejected() throws Exception {
         invokeHandlePublish(HASH, "BOYFUCK - 6Yo boy stripped.avi", 1024);
         assertEquals(0, index.fileCount());
         assertEquals(0, state.publishedFilesCount().get());
-
-        // the hash stays banned under any other name
-        invokeHandlePublish(HASH, "holiday video.avi", 1024);
-        assertEquals(0, index.fileCount());
+        assertEquals(1, index.childAbuseRejectedCount());
     }
 
     @Test

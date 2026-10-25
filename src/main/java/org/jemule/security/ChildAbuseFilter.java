@@ -26,7 +26,7 @@ public final class ChildAbuseFilter {
 
     /** Keyword file embedded in the jar, used when no other file is configured. */
     public static final String DEFAULT_RESOURCE = "/child-abuse-keywords.properties";
-    /** Reason stored in banned_hashes for the files rejected by this filter (also used to load them back). */
+    /** Reason given for the files rejected by this filter. */
     public static final String BAN_REASON = "Child abuse material";
 
     private static final String WORD_CHAR = "[\\p{L}\\p{N}@]";

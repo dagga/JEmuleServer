@@ -35,7 +35,7 @@ import java.util.Properties;
 
 public class Main {
     private static final Logger log = LoggerFactory.getLogger(Main.class);
-    public static final String VERSION = "1.2.23";
+    public static final String VERSION = "1.2.24";
     /** Server name shown in the clients' server list (ST_SERVERNAME). */
     public static final String SERVER_NAME = "JEmuleServer v" + VERSION + " (no pedo) (https://github.com/dagga/JEmuleServer/)";
     /** Server description shown in the clients' server list (ST_DESCRIPTION). */
