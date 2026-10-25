@@ -5,7 +5,17 @@
   servers. Until 1.2.25 a client's search was forwarded to Kad and to the servers as is (only its results were
   screened). These searches are counted on the Overview.
 - **Last check before the client.** Every batch of search results is checked against the filter before it is sent,
-  whatever brought the files; the local search also skips a file indexed before the keywords were reloaded.
+  whatever brought the files, including a file indexed before the keywords were reloaded (UDP global search answers
+  too). The filter costs about 4.5 µs per name instead of 13: the terms starting with '*' are tested word by word, and
+  the regular expression only runs on names having a word that starts like one of its terms.
+
+- **Java 25.** The code is compiled for Java 25 (Gradle toolchain, downloaded when missing; CI and release on
+  Temurin 25), which the release packages already bundled. The JAR now needs Java 25: on Java 21, a client thread
+  blocked in a `synchronized` block held its carrier thread, which on one CPU stalled every client (fixed in Java 24,
+  JEP 491). Mockito 5.20.0 for the tests.
+- **Reference server sizing.** `-Xmx650m`, `-XX:+UseCompactObjectHeaders` (341 MB instead of 355 MB of live heap for
+  the 1,521,140 files of production) and `-XX:MarkSweepDeadRatio=0` (the heap guard no longer counts the dead space a
+  full collection leaves), and `maxFiles=1850000`, the heap guard's estimated capacity.
 
 The names the filter rejects are still recorded in `banned_names` (1.2.25) and never sent to a client. No database
 change.

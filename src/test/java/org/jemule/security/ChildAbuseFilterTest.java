@@ -125,4 +125,21 @@ class ChildAbuseFilterTest {
     void emptyListsMatchNothing() {
         assertFalse(ChildAbuseFilter.fromProperties(new Properties()).matches("pthc 6yo xxx.avi"));
     }
+
+    @Test
+    void wildcardTermsKeepTheirMeaningOutsideTheExpression() {
+        Properties props = new Properties();
+        props.setProperty("banned", "*endx, *partx*, headx*, two words, *spaced out*, ab");
+        ChildAbuseFilter filter = ChildAbuseFilter.fromProperties(props);
+
+        assertTrue(filter.matches("movie myendx.avi"), "*x: a word ending with x");
+        assertFalse(filter.matches("movie myendxs.avi"));
+        assertTrue(filter.matches("a-AApartxBB.avi"), "*x*: a word containing x");
+        assertTrue(filter.matches("headxyz 2019.mkv"), "x*: a word starting with x");
+        assertFalse(filter.matches("noheadx.mkv"));
+        assertTrue(filter.matches("Two.Words.avi"), "a term of two words");
+        assertTrue(filter.matches("xxspaced out.avi"), "a term with '*' and a space stays in the expression");
+        assertTrue(filter.matches("ab.avi"), "a short term");
+        assertFalse(filter.matches("abc.avi"));
+    }
 }

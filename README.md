@@ -21,7 +21,7 @@ whose content is filtered by the server before any client sees it (see [Kademlia
 
 ## Compilation
 
-Building requires a JDK 21 (Gradle toolchain). To compile the project and generate the executable JAR file (Fat JAR):
+Building requires a JDK 25 (Gradle toolchain; Gradle downloads it when the machine has none). To compile the project and generate the executable JAR file (Fat JAR):
 
 ```bash
 ./gradlew build
@@ -44,7 +44,7 @@ plain JAR and a systemd unit (`packaging/jemuleserver.service`).
 - On macOS, the server is a console program: start it from a terminal with
   `/Applications/JEmuleServer.app/Contents/MacOS/JEmuleServer`. The package is not signed: after copying the
   application, run `xattr -dr com.apple.quarantine /Applications/JEmuleServer.app` once, or macOS refuses to open it.
-  Intel Macs can run the JAR with Java 21 or later.
+  Intel Macs can run the JAR with Java 25 or later.
 - Started with a configuration file argument (as the systemd unit does), relative paths are relative to the
   working directory.
 
@@ -65,7 +65,8 @@ the JAR for IPv6.
 
 ### Manual JAR Launch
 
-Once the project is compiled, you can start the server with the following command:
+Once the project is compiled, you can start the server with the following command (Java 25 or later; on Java 21 a
+client thread blocked in a `synchronized` block holds its carrier thread, which on one CPU stalls every client):
 
 ```bash
 java -XX:MaxRAMPercentage=75 -XX:ThreadPriorityPolicy=1 --add-modules=jdk.httpserver -jar build/libs/JEmuleServer-1.2.26.jar [config_file] [port]
@@ -90,6 +91,8 @@ JVM options used by the server:
 | `-Xmx<size>` | Maximum heap, replaces `MaxRAMPercentage`. | Small server: sized from `maxFiles` (see Memory sizing). |
 | `-Xmn48m` | Young generation of 48 MB instead of a third of the heap. | With `-Xmx` on a small server. |
 | `-XX:MinHeapFreeRatio=10 -XX:MaxHeapFreeRatio=30` | After a full collection, the JVM gives back to the system the heap beyond 30% above what is in use, and grows it again when needed. | Small server whose RAM is short. |
+| `-XX:+UseCompactObjectHeaders` | Object headers of 8 bytes instead of 12 (Java 25). | Any server: about 4% less live heap for the index. |
+| `-XX:MarkSweepDeadRatio=0` | A full collection of the serial collector compacts every dead object instead of leaving up to 5% of the old generation as dead space. | One CPU (serial collector), so that the heap guard measures the live heap only. |
 | `-Djava.net.preferIPv4Stack=true` | Do not use: it disables the IPv6 listener. | Never. |
 
 - Note: The server binds to the IPv6 wildcard when available, so IPv6 clients can connect. Avoid forcing the JVM to
@@ -118,8 +121,8 @@ The production server runs with this calibration:
 | Memory | 947 MB of RAM, 512 MB swap file |
 | Disk | 9.8 GB |
 | System | Fedora Linux 43 Server, OpenJDK 25 |
-| Launch | `java --add-modules=jdk.httpserver -Xmx600m -Xmn48m -XX:MinHeapFreeRatio=10 -XX:MaxHeapFreeRatio=30 -XX:ThreadPriorityPolicy=1 -jar JEmuleServer-<version>.jar server.properties` |
-| `server.properties` | `maxFiles=3000000` (the heap guard stops the index first, see below) |
+| Launch | `java --add-modules=jdk.httpserver -Xmx650m -Xmn48m -XX:MinHeapFreeRatio=10 -XX:MaxHeapFreeRatio=30 -XX:MarkSweepDeadRatio=0 -XX:+UseCompactObjectHeaders -XX:ThreadPriorityPolicy=1 -jar JEmuleServer-<version>.jar server.properties` |
+| `server.properties` | `maxFiles=1850000` (the heap guard's estimated capacity, see below) |
 
 Measured with 1.2.19, 706,165 files and 196,532 banned hashes:
 
@@ -152,27 +155,36 @@ Why these settings:
 - `-Xmn48m`: on one CPU the JVM uses the serial collector, which gives a third of the heap to the young generation
   (218 MB out of 688 MB). That memory stays committed although it is almost empty after each collection; 48 MB is
   enough for the allocation rate of the server and leaves the rest to the old generation, where the index lives.
-- `-Xmx600m`: 552 MB of old generation for about 430 MB of index at 1,200,000 files and the room the index arrays
-  keep to grow, with about 100 MB of margin for the connections, the searches and the garbage of the startup load. The
-  process then takes at most about 700 MB and the system and kernel about 150 MB: on 947 MB of RAM, the swap file
-  takes the cold pages. `./gradlew benchmark -Pfiles=1200000 -Pheap=600m -Pcpus=1` loads 1,200,000 files in this
-  heap. For 1,000,000 files, `-Xmx520m` is enough.
+- `-Xmx650m`: 602 MB of old generation, of which the heap guard lets the live data fill 482 MB. The Java process
+  needs about 150 MB besides the heap (metaspace, code, threads): with 600 MB of heap it took 757 MB, 554 MB resident
+  and 203 MB in swap, while the system and the other processes need about 180 MB of the 947 MB of RAM. 650 MB is the
+  most this server can give without swapping the live index: the cold pages already go to the swap file.
+  `./gradlew benchmark -Pfiles=1200000 -Pheap=600m -Pcpus=1` loads 1,200,000 files in 600 MB.
 - `-XX:MinHeapFreeRatio=10 -XX:MaxHeapFreeRatio=30`: the serial collector keeps the old generation at the largest size
   it ever reached, i.e. after the garbage of the startup load. With these ratios, each full collection shrinks it to
   the live heap plus 30% (503 MB to 419 MB at 825,542 files) and gives about 70 MB back to the system; the heap still
   grows up to `-Xmx` as the index grows. Full collections are rare with a small young generation, so the gain shows
   after the first one.
-- `maxFiles=3000000`: bounds the index. Beyond it, new files are refused, whatever brings them (clients, Kad, other
+- `-XX:MarkSweepDeadRatio=0`: by default a full collection of the serial collector leaves up to 5% of the old
+  generation as dead objects (filler arrays) to avoid moving the live ones. The heap guard reads the old generation
+  after a collection, so it counted that dead space as live data: in production on October 25, 2026, 16 MB of the
+  405 MB it saw at 1,526,803 files were filler arrays, and up to 28 MB can be. With 0, every full collection compacts
+  everything, which takes slightly longer but is rare here.
+- `-XX:+UseCompactObjectHeaders` (Java 25): object headers of 8 bytes instead of 12. Loaded from the production
+  database copy of October 25, 2026 (1,521,140 files) with the options above, the index takes 341 MB of live heap
+  instead of 355 MB.
+- `maxFiles=1850000`: bounds the index. Beyond it, new files are refused, whatever brings them (clients, Kad, other
   servers); files already known still get their new sources. It applies at once from the Settings view of the web
-  panel, without a restart.
+  panel, without a restart. 1,850,000 is the estimated capacity of the heap guard here: about 370 MB of live heap in
+  production at 1,530,000 files, about 250 bytes per new file, and 25 MB for the next growth of the index arrays by
+  1/8, within the 482 MB the guard allows.
 - **Heap guard** (always on): new files are also refused while the live data, measured after the last collection of
-  the old generation, fills 80% of it: 441 MB of the 552 MB here, which 1.2.24 reaches at about 1,600,000 files. The
-  index then stops growing instead of running out of memory; the Overview's index capacity shows the fuller of the two
-  limits and the files refused. More RAM and a larger `-Xmx` move the guard, not `maxFiles`.
+  the old generation, fills 80% of it (482 MB of the 602 MB here). The index then stops growing instead of running out
+  of memory; the Overview's index capacity shows the fuller of the two limits and the files refused. More RAM and a
+  larger `-Xmx` move the guard, not `maxFiles`.
 
-To size another server: old generation (`-Xmx` minus `-Xmn`) of at least the files wanted × 340 bytes plus 60 MB (the
-heap guard leaves 20% of it free), and RAM
-of at least `-Xmx` plus 250 MB. The Overview of the web panel shows the heap against its maximum and the index against
+To size another server: old generation (`-Xmx` minus `-Xmn`) of at least the files wanted × 320 bytes plus 60 MB (the
+heap guard leaves 20% of it free), and RAM of at least `-Xmx` plus 300 MB. The Overview of the web panel shows the heap against its maximum and the index against
 `maxFiles`. Without these options the JVM takes a quarter of the RAM; on a dedicated server
 `-XX:MaxRAMPercentage=75` (passed by the .deb and .rpm launchers) is a simpler alternative, which leaves a larger
 young generation.
