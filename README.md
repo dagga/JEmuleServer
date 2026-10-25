@@ -1,6 +1,6 @@
 # JEmuleServer
 
-JEmuleServer is an eMule server written in Java (version 1.2.26).
+JEmuleServer is an eMule server written in Java (version 1.2.27).
 
 Downloads (installers and JAR) are on the [releases page](https://github.com/dagga/JEmuleServer/releases); the changes
 of each version are described in `doc/release-notes-v<version>.md` (latest: [1.2.9](doc/release-notes-v1.2.9.md)).
@@ -27,7 +27,7 @@ Building requires a JDK 25 (Gradle toolchain; Gradle downloads it when the machi
 ./gradlew build
 ```
 
-The JAR file will be generated in `build/libs/JEmuleServer-1.2.26.jar`.
+The JAR file will be generated in `build/libs/JEmuleServer-1.2.27.jar`.
 
 ## Installation from the release packages
 
@@ -69,7 +69,7 @@ Once the project is compiled, you can start the server with the following comman
 client thread blocked in a `synchronized` block holds its carrier thread, which on one CPU stalls every client):
 
 ```bash
-java -XX:MaxRAMPercentage=75 -XX:ThreadPriorityPolicy=1 --add-modules=jdk.httpserver -jar build/libs/JEmuleServer-1.2.26.jar [config_file] [port]
+java -XX:MaxRAMPercentage=75 -XX:ThreadPriorityPolicy=1 --add-modules=jdk.httpserver -jar build/libs/JEmuleServer-1.2.27.jar [config_file] [port]
 ```
 
 - `-XX:ThreadPriorityPolicy=1`: on Linux, the JVM ignores thread priorities without it. The server runs its threads
@@ -326,6 +326,28 @@ server that cannot reach Kad answers as fast as without it.
 Searches are also forked to the verified eD2K servers (UDP global search). A server answers it with its first 10 to
 30 matches only, and UDP has no "More" request: when a server returns a full answer, the search is repeated on it once
 per file type (at most 4 times per minute and per server), which returns about five times as many files.
+
+### Index update from eD2K index peers
+
+With `serverIndexUpdateEnabled=true` (off by default), the server logs in to each eD2K index peer (a verified eD2K
+server) as an eMule client (TCP, LowID) and searches there, to index the files these peers know. A TCP search returns up to 300 files,
+where a UDP global search returns about 10.
+
+- **What is searched**: the words indexed under the most files, and the keywords of the clients' searches, without
+  their filters (type, size). A word is searched again on the same server after 7 days at the earliest. Words
+  matching the child abuse filter are never sent.
+- **Refinements**: a search answered with a full page is searched again per file type (Video, Audio, Program, Image,
+  Document, Archive, CD image), and a full type per size (1–900 MB, 900–2000 MB, above 2000 MB). A word and its
+  refinements form a batch of 6 searches at most; the rest waits a day.
+- **Pace**: each server has its own session and schedule, and the servers are searched in parallel. One search at a
+  time per server, 8 to 40 seconds apart within a batch, minutes between batches and hours between active periods,
+  at most `serverIndexUpdateMaxPerHour` (40) an hour and `serverIndexUpdateMaxPerDay` (300) a day per server. Slow
+  answers or a nearly full server double the delays; a server that cuts the session, stops answering or sends a
+  warning is not searched for 6 hours (24 hours the next time).
+- **Indexing**: the files go through the child abuse filter, the banned names and the fake file detector; those with
+  at least `serverIndexUpdateMinSources` (3) sources are indexed (ingestion channel `server index update`). Nothing is
+  sent while the index is full.
+- Kad is never searched this way.
 
 The node listens on UDP port `kadPort` (default: TCP port + 11, i.e. `4672`). Its settings, with their defaults:
 

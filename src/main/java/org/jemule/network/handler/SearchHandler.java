@@ -132,6 +132,9 @@ public class SearchHandler {
                 log.debug("Error initiating the Kad search for {}: {}", query, e.getMessage());
             }
         }
+        // The keywords, without the client's filters, are searched later by the index update
+        org.jemule.network.ServerIndexUpdater updater = context.getServerIndexUpdater();
+        if (updater != null) updater.noteClientSearch(query);
         ServerSearchBridge serverBridge = context.getServerSearchBridge();
         if (serverBridge != null) {
             try {
