@@ -1,6 +1,6 @@
 # JEmuleServer
 
-JEmuleServer is an eMule server written in Java (version 1.2.23).
+JEmuleServer is an eMule server written in Java (version 1.2.24).
 
 Downloads (installers and JAR) are on the [releases page](https://github.com/dagga/JEmuleServer/releases); the changes
 of each version are described in `doc/release-notes-v<version>.md` (latest: [1.2.9](doc/release-notes-v1.2.9.md)).
@@ -27,7 +27,7 @@ Building requires a JDK 21 (Gradle toolchain). To compile the project and genera
 ./gradlew build
 ```
 
-The JAR file will be generated in `build/libs/JEmuleServer-1.2.23.jar`.
+The JAR file will be generated in `build/libs/JEmuleServer-1.2.24.jar`.
 
 ## Installation from the release packages
 
@@ -68,7 +68,7 @@ the JAR for IPv6.
 Once the project is compiled, you can start the server with the following command:
 
 ```bash
-java -XX:MaxRAMPercentage=75 -XX:ThreadPriorityPolicy=1 --add-modules=jdk.httpserver -jar build/libs/JEmuleServer-1.2.23.jar [config_file] [port]
+java -XX:MaxRAMPercentage=75 -XX:ThreadPriorityPolicy=1 --add-modules=jdk.httpserver -jar build/libs/JEmuleServer-1.2.24.jar [config_file] [port]
 ```
 
 - `-XX:ThreadPriorityPolicy=1`: on Linux, the JVM ignores thread priorities without it. The server runs its threads
@@ -103,11 +103,12 @@ JVM options used by the server:
 Every known file is kept in memory for the searches: its MD4 hash, name, size, type, source count and the media tags
 searches filter on, plus its entries in the inverted index of the name words. The files are stored by number in
 arrays of primitive values (the MD4 hash as two 64-bit values) rather than as one object each; only the files with
-online sources or media tags get an object of their own. In production this comes to about 360 bytes of heap per
-file, banned hashes included. Only the tags searches filter on are kept (source count, artist, album, title, length,
+online sources or media tags get an object of their own; the names follow each other in one byte array and the
+inverted index keeps its file numbers as variable-length gaps. This comes to about 270 bytes of heap per file since
+1.2.24 (350 before). Only the tags searches filter on are kept (source count, artist, album, title, length,
 bitrate, codec, rating).
 
-#### Reference server: 1,200,000 files on 1 GB of RAM
+#### Reference server on 1 GB of RAM
 
 The production server runs with this calibration:
 
@@ -118,7 +119,7 @@ The production server runs with this calibration:
 | Disk | 9.8 GB |
 | System | Fedora Linux 43 Server, OpenJDK 25 |
 | Launch | `java --add-modules=jdk.httpserver -Xmx600m -Xmn48m -XX:MinHeapFreeRatio=10 -XX:MaxHeapFreeRatio=30 -XX:ThreadPriorityPolicy=1 -jar JEmuleServer-<version>.jar server.properties` |
-| `server.properties` | `maxFiles=1200000` |
+| `server.properties` | `maxFiles=3000000` (the heap guard stops the index first, see below) |
 
 Measured with 1.2.19, 706,165 files and 196,532 banned hashes:
 
@@ -139,6 +140,10 @@ Measured with 1.2.22, 825,542 files and 232,355 banned hashes, after a full coll
 | Database file (`jemule_db.mv.db`) | 250 MB |
 | Startup (database load) | about 4 minutes 30 |
 
+Measured with 1.2.23 at 1,521,140 files (Kad and server searches then ignored `maxFiles`): 528 MB of live heap, the old
+generation 95% full, with long full collections. Loaded by 1.2.24 from the database copy of 1.2.22 (828,413 files),
+the index takes 224 MB of heap, 24% less than the 293 MB above.
+
 The same server needed 422 MB of live heap for 686,506 files with 1.2.16 (about 615 bytes per file) and swapped:
 1.2.17 shares and compacts the banned hashes, 1.2.18 stores the files in arrays, 1.2.19 shrinks the H2 cache.
 
@@ -157,10 +162,16 @@ Why these settings:
   the live heap plus 30% (503 MB to 419 MB at 825,542 files) and gives about 70 MB back to the system; the heap still
   grows up to `-Xmx` as the index grows. Full collections are rare with a small young generation, so the gain shows
   after the first one.
-- `maxFiles=1200000`: bounds the index, hence the heap. Beyond it, new files are refused; files already known still
-  get their new sources. It applies at once from the Settings view of the web panel, without a restart.
+- `maxFiles=3000000`: bounds the index. Beyond it, new files are refused, whatever brings them (clients, Kad, other
+  servers); files already known still get their new sources. It applies at once from the Settings view of the web
+  panel, without a restart.
+- **Heap guard** (always on): new files are also refused while the live data, measured after the last collection of
+  the old generation, fills 80% of it: 441 MB of the 552 MB here, which 1.2.24 reaches at about 1,600,000 files. The
+  index then stops growing instead of running out of memory; the Overview's index capacity shows the fuller of the two
+  limits and the files refused. More RAM and a larger `-Xmx` move the guard, not `maxFiles`.
 
-To size another server: old generation (`-Xmx` minus `-Xmn`) of at least `maxFiles` × 380 bytes plus 60 MB, and RAM
+To size another server: old generation (`-Xmx` minus `-Xmn`) of at least the files wanted × 340 bytes plus 60 MB (the
+heap guard leaves 20% of it free), and RAM
 of at least `-Xmx` plus 250 MB. The Overview of the web panel shows the heap against its maximum and the index against
 `maxFiles`. Without these options the JVM takes a quarter of the RAM; on a dedicated server
 `-XX:MaxRAMPercentage=75` (passed by the .deb and .rpm launchers) is a simpler alternative, which leaves a larger
@@ -212,9 +223,9 @@ The server refuses files whose name advertises child sexual abuse material, and 
 designating a minor (or an age up to 18, such as `6yo` or `9 ans`) together with a sexual term. A rejected file:
 
 - is never indexed, and the publishing client is warned that some of its files were refused;
-- has its hash banned for good (table `banned_hashes`), so it stays refused under any other name;
-- is deleted from the database at startup if an older version had stored it. Every deleted or banned file is
-  logged with its hash and name.
+- is refused again each time it comes back, from a client, Kad or another server (1.2.23 and before also banned its
+  hash; 1.2.24 bans file names only, see [Banned file names](#banned-file-names));
+- is deleted from the database at startup if an older version had stored it.
 
 Unlike `fakeFileDetectionEnabled`, this filter cannot be disabled. The keywords are read from
 [`child-abuse-keywords.properties`](src/main/resources/child-abuse-keywords.properties), embedded in the jar; the
@@ -225,6 +236,20 @@ childAbuseKeywordsPath=/etc/jemuleserver/child-abuse-keywords.properties
 ```
 
 Your file replaces the embedded list. If it cannot be read, the server logs an error and uses the embedded list.
+
+## Banned file names
+
+The administrator bans file names, not hashes: a file published by a client, or found on Kad or another server, under
+a banned name is refused, whatever its hash and even with `fakeFileDetectionEnabled=false`. Names are compared in
+lower case, without the spaces around them. Banning a name removes the files indexed under it.
+
+The names are kept in the `banned_names` table with their reason and date. The **Blocks** view of the web panel lists
+the latest ones, bans and unbans a name, and its **Export** button downloads `banned-names.txt`, one name per line
+(`GET /api/blocks/export`). The CLI has `ban`, `unban` and `blocks`.
+
+Up to 1.2.23 the server banned hashes (`banned_hashes`), nearly all written by the child abuse filter. 1.2.24 drops
+that table at its first start (database schema version 3): its hashes cannot be turned into names, the banned files
+having been deleted, and the child abuse filter rejects the same names each time they come back.
 
 ## HighID / LowID
 
@@ -251,22 +276,27 @@ that brings this content to its clients without exposing them to illicit files:
   next ones, up to 900.
 - **Flood limits**: the server never sends a Kad node more requests than the node accepts per minute from one IP, so
   that the nodes neither drop its requests nor ban it.
-- **Filtering**: every file returned by Kad goes through the banned hashes, the [child abuse filter](#child-abuse-filter)
-  and the fake file detector. An illicit file is never sent to a client and its hash is banned for good.
+- **Filtering**: every file returned by Kad goes through the [child abuse filter](#child-abuse-filter), the banned
+  file names and the fake file detector. An illicit file is never sent to a client nor stored.
 - **Cache warming**: clean Kad files with at least one source are stored in the H2 database and indexed. The next
   searches on the same terms find them locally, in the first batch of results.
 - **Global searches**: the UDP global searches that clients of other servers send to this server are answered from the
   local index and, with `kadForkGlobalSearches=true`, also searched on Kad in the background to populate the
   database: once per query per 30 minutes, at most 20 per minute (3 per source IP), never for queries matching the
   child abuse filter, and never forwarded to other eD2K servers, which could send them back.
-- **Kad sources** (`kadSourceSearchEnabled`, opt-in): when a client asks for the sources of a file
+- **Kad and server sources** (`kadSourceSearchEnabled`, opt-in): when a client asks for the sources of a file
   (`OP_GETSOURCES`) and the server knows fewer than `kadSourceSearchMinLocal` (10), it answers at once with them, then
-  searches Kad for the file (`KADEMLIA2_SEARCH_SOURCE_REQ` to the nodes closest to its hash) and sends the new sources
-  in a second `OP_FOUNDSOURCES`, which eMule and aMule accept at any time for a file they download. A Kad source that
-  accepts connections is sent with its IP as HighID; a firewalled one is useless to an eD2K client unless it is also
-  connected to this server: it is then sent with its ID here, LowID included, and reached through this server's
-  callback. The sources Kad gave for a file are reused for 20 minutes (1,000 files at most); a client starts at most
-  one search per file every 15 minutes and 20 an hour, and all clients together `kadSourceSearchesPerMinute` (30).
+  searches Kad for the file (`KADEMLIA2_SEARCH_SOURCE_REQ` to the nodes closest to its hash) and asks the verified eD2K
+  servers (`OP_GLOBGETSOURCES2`, as eMule clients do), and sends the new sources in a second `OP_FOUNDSOURCES`, which
+  eMule and aMule accept at any time for a file they download. A Kad source that accepts connections is sent with its
+  IP as HighID; a firewalled one is useless to an eD2K client unless it is also connected to this server: it is then
+  sent with its ID here, LowID included, and reached through this server's callback. Of the other servers' sources,
+  only the HighIDs are kept. The files asked within 3 seconds go in one datagram per server (35 at most). The sources
+  found for a file are reused for 20 minutes (1,000 files, 80 sources each at most); a client starts at most one
+  search per file every 15 minutes and 20 an hour.
+- **Adaptive quota**: all clients together start at most `kadSourceSearchesPerMinute` (60) searches a minute. When
+  the flood limits keep a source request from a Kad node, the quota is halved (once a minute at most, never below 5);
+  after 10 minutes without such a refusal it climbs back by a tenth of the maximum.
 
 The client waits for Kad only when nothing matches locally (cold search), at most `kadSearchTimeoutSeconds`; the files
 found are then paginated by 300 with the "More" button (`OP_QUERY_MORE_RESULT`), up to the 1,800 files an eMule
@@ -292,7 +322,7 @@ kadNodesUrls=https://upd.emule-security.org/nodes.dat,http://www.alldivx.de/node
 kadForkGlobalSearches=true
 kadSourceSearchEnabled=false
 kadSourceSearchMinLocal=10
-kadSourceSearchesPerMinute=30
+kadSourceSearchesPerMinute=60
 ```
 
 The bridge stays compatible with the historical eMule clients: the ed2k client-server protocol is unchanged and the
@@ -308,10 +338,10 @@ JEmuleServer includes a built-in web panel and a command-line interface (CLI). T
 `http://127.0.0.1:8080/` and is bound to loopback only.
 
 It opens on an **Overview**: the number of indexed files with its change over 24 hours and 7 days, the index capacity
-against `maxFiles`, and tiles for the connected clients (with their LowID share), the heap, the verified eD2K servers,
+against `maxFiles` and the heap guard, and tiles for the connected clients (with their LowID share), the heap, the verified eD2K servers,
 the searches sent to Kad and to the servers, the files they found, the new files published by [OFFERFILES
-v1](doc/offerfiles-v1.md) clients next to those of legacy clients, the Kad sources sent to the clients, the banned
-hashes, the database (size, and whether it had to be reopened after a fatal error) and the uptime; a meter or a status
+v1](doc/offerfiles-v1.md) clients next to those of legacy clients, the Kad and server sources sent to the clients with
+the adaptive quota, the banned file names, the database (size, and whether it had to be reopened after a fatal error) and the uptime; a meter or a status
 (icon and label) flags what nears its limit. Two curves follow, over 24 hours, 7 days or 30 days: the indexed files
 and the connected clients, sampled every 5 minutes and kept for a month in the `metrics_history` table, so that they
 survive a restart. Hovering a curve, or the arrow keys once it has the focus, reads the samples; each curve can also
@@ -320,10 +350,10 @@ follows the light or dark theme of the system.
 
 The other views show server status, searchable clients, verified named
 server peers, a monitoring view of every known eD2K server and its state, active filters, potential bot-name matches,
-persistent hash blocks, an ingestion breakdown of new database files by channel, Kad and eD2K server search counters
+the banned file names, an ingestion breakdown of new database files by channel, Kad and eD2K server search counters
 (queries sent and results returned), and runtime settings. The bot list is
 only a nickname heuristic; it does not verify or automatically block clients. From the panel you can disconnect a
-client, ban or unban a hash, reload the IP filter, and edit any `server.properties` parameter. Settings whose scope is
+client, ban or unban a file name, export the banned names, reload the IP filter, and edit any `server.properties` parameter. Settings whose scope is
 `hot` (limits, timeouts, flood protection, fake-file detection) take effect immediately; `admin` settings rebuild the
 admin interfaces; `restart` settings are written to the file and shown as pending until the next restart, the running server keeps
 its current value. Saving updates the
@@ -351,9 +381,9 @@ Available commands:
 - `files`: Shows file indexing statistics and fake file detection status.
 - `events`: Shows the number of events of each type (connections, logins, publications, searches...) since startup
   and during the last minute.
-- `ban <hash> [reason]`: Bans a file hash (32-char hex) for good: it is stored in the database with its reason and the
-  file is removed from the index.
-- `unban <hash>`: Removes a hash from the persistent blacklist.
+- `ban <file name>`: Bans a file name for good, whatever its case and hash (see [Banned file names](#banned-file-names));
+  the files indexed under it are removed.
+- `unban <file name>`: Removes a banned file name.
 - `kick <client ID | nickname | ip>`: Disconnects one client, or every client using that IP, without stopping the server.
 - `peers`: Lists verified server peers and their names.
 - `servers`: Monitors every known eD2K server (configured, server.met, client-reported or gossip-discovered) with its
@@ -366,7 +396,7 @@ Available commands:
 - `filters`: Shows active IP and fake-file filters.
 - `filters reload`: Reloads the IP filter from the configured `ipFilterPath` and the child abuse keywords.
 - `bots`: Lists potential bot matches based on nicknames only.
-- `blocks`: Lists the 3 most recently blocked file hashes (only those rows are read from the database).
+- `blocks`: Lists the number of banned file names and the 10 most recent.
 - `settings`: Shows runtime settings.
 - `settings <key> <value>`: Changes a configuration parameter while the server keeps running. Hot values take effect
   immediately, admin values rebuild the admin interfaces, and restart values are written to the file and listed as
@@ -378,7 +408,7 @@ Available commands:
 - `kad contacts`: Lists the 20 most recently seen Kademlia contacts (ID, address, version, liveness).
 - `kad bootstrap <ip> <port>`: Sends a bootstrap request to a given Kademlia node.
 - `kad stats`: Shows the Kademlia counters (searches forked, results received, files ingested, illicit files blocked,
-  hashes banned, bootstrap and maintenance activity).
+  bootstrap and maintenance activity).
 - `help`: Shows the list of available commands.
 - `stop`: Shuts down the server. `exit` and `quit` close a remote admin session; in the server terminal they also stop
   the server.

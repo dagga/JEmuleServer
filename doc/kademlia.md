@@ -9,7 +9,7 @@ filtering everything it receives. This document describes the module delivered f
 - **Coverage**: an `OP_SEARCHREQUEST` sent to the server is answered from the local index and, at the same time,
   projected onto the Kad network.
 - **Protection**: every file coming from Kad goes through the same filters as published files (child abuse filter,
-  fake file detector, banned hashes). An illicit file never reaches a client and its hash is banned for good.
+  fake file detector, banned file names). An illicit file never reaches a client nor the database.
 - **Cache warming**: clean Kad files with at least one source are stored in H2 and indexed, so that the next searches
   on the same terms find them locally, in the first batch of results, with Kad's retained source count available to
   the client.
@@ -32,7 +32,6 @@ Kad nodes and never relays file data.
 | `KadBootstrapManager` | Fills the routing table from connected HighID clients or from `kad bootstrap`; status `DISCONNECTED` → `BOOTSTRAPPING` → `CONNECTED` (from 5 contacts). |
 | `KadMaintenanceService` | Every minute: liveness pings (`HELLO_REQ`) of contacts idle for 15 minutes, eviction after 3 unanswered pings, refresh (`REQ`) of buckets idle for 1 hour. |
 | `KadSearchBridge` | Forks the searches (`SEARCH_KEY_REQ` to the α = 3 closest contacts), filters the answers, ingests the clean files and returns them to `SearchHandler`. |
-| `KadHashBanService` | Persists the hashes of illicit Kad files in `banned_hashes`, propagates them to `FakeFileDetector` and reloads them at startup. |
 
 ## 3. Flows
 
@@ -68,8 +67,8 @@ Client ──OP_SEARCHREQUEST──▶ SearchHandler ──▶ FileIndex (H2 + m
    session.
 3. A `SEARCH_RES` is only accepted from a contact the search was sent to: an unsolicited answer, from any other
    address, is ignored, so that nobody can fill the database with files of their choice. Each file of an accepted
-   `SEARCH_RES` is checked, in this order: banned hashes, `ChildAbuseFilter`, `FakeFileDetector`.
-   A file rejected by the child abuse filter has its hash banned in memory and in `banned_hashes`.
+   `SEARCH_RES` is checked, in this order: `ChildAbuseFilter`, then `FakeFileDetector` (banned file names, then its
+   heuristics). Rejected files are counted, not remembered: the filters reject them again if they come back.
 4. A clean file with at least `kadMinSourcesForIngest` sources (`FT_SOURCES`) is added to `FileIndex`, which stores it
    in the H2 tables `files` and `file_tags` (when `kadAutoIngestToH2=true`), then becomes a result of the session.
    Its `FT_SOURCES` count is retained and returned in the client's `OP_SEARCHRESULT`; when the same hash is already

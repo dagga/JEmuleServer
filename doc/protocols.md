@@ -83,7 +83,7 @@ JEmuleServer follows modern Java 21+ practices and several software design patte
 - **Circuit Breaker (Resilience4j)**: Protects the server from cascading failures if the H2 database becomes slow or unresponsive.
 - **Non-blocking Anti-Flood**: Implements a lock-free Token Bucket algorithm using `AtomicLong` for high-performance rate limiting per IP.
 - **IP Filtering (IPFilter)**: High-performance IP blocking using binary search on pre-sorted `ipfilter.dat` ranges (O(log N)).
-- **Fake File Detection**: Heuristic-based detection of malicious files (multiple extensions, suspicious keywords) with automatic persistence of banned hashes in H2 database.
+- **Fake File Detection**: Heuristic-based detection of malicious files (multiple extensions, suspicious keywords) and file names banned by the administrator (table `banned_names`).
 
 ## 7. Security Features
 
@@ -106,7 +106,7 @@ The server embeds a Kademlia node (package `org.jemule.kad`) that consumes the K
   the contacts of `BOOTSTRAP_RES` fill the routing table. Liveness pings (`HELLO_REQ`) and bucket refreshes (`REQ`)
   keep it up to date.
 - **Forked search**: an `OP_SEARCHREQUEST` is also sent as `SEARCH_KEY_REQ` (MD4 of the first keyword) to the 3
-  closest contacts. The files of `SEARCH_RES` are filtered (banned hashes, child abuse filter, fake file detector),
+  closest contacts. The files of `SEARCH_RES` are filtered (child abuse filter, banned file names, fake file detector),
   then ingested in H2 when they have at least one source. The client waits for Kad only when the local index has no
   result.
 
