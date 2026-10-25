@@ -32,6 +32,9 @@ public interface ClientContext {
     default ServerSearchBridge getServerSearchBridge() {
         return getServer() != null ? getServer().getServerSearchBridge() : null;
     }
+    default org.jemule.network.ServerIndexUpdater getServerIndexUpdater() {
+        return getServer() != null ? getServer().getServerIndexUpdater() : null;
+    }
 
     /** Kad source searches for OP_GETSOURCES, null without a server or a Kad node. */
     default org.jemule.network.KadSourceService getKadSourceService() {

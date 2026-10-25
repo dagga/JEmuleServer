@@ -696,6 +696,42 @@ public class FileIndex {
         return invertedIndex.size();
     }
 
+    /**
+     * The words indexed under the most files, most files first: at least 3 characters, not only digits, and
+     * not matching the child abuse filter.
+     */
+    public List<String> topWords(int limit) {
+        if (limit <= 0) return List.of();
+        record Counted(String word, int files) {}
+        PriorityQueue<Counted> top = new PriorityQueue<>(Comparator.comparingInt(Counted::files));
+        lock.readLock().lock();
+        try {
+            for (Map.Entry<String, Postings> entry : invertedIndex.entrySet()) {
+                String word = entry.getKey();
+                if (word.length() < 3 || word.chars().allMatch(Character::isDigit)) continue;
+                int files = entry.getValue().size();
+                if (top.size() < limit) {
+                    top.add(new Counted(word, files));
+                } else if (files > top.peek().files()) {
+                    top.poll();
+                    top.add(new Counted(word, files));
+                }
+            }
+        } finally {
+            lock.readLock().unlock();
+        }
+        return top.stream()
+                .filter(c -> !abuseFilter.matches(c.word()))
+                .sorted(Comparator.comparingInt(Counted::files).reversed().thenComparing(Counted::word))
+                .map(Counted::word)
+                .toList();
+    }
+
+    /** True when a text (a word to search, for instance) matches the child abuse filter. Not counted. */
+    public boolean matchesChildAbuse(String text) {
+        return abuseFilter.matches(text);
+    }
+
     /** True if a file with this hash is indexed (case ignored for hexadecimal hashes). */
     public boolean contains(String hash) {
         lock.readLock().lock();

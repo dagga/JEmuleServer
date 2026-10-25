@@ -192,7 +192,7 @@ final class AdminWebPanel implements AutoCloseable {
               let o;try{o=await getJson('/api/overview')}catch(e){notice.textContent='Request failed: '+e.message;return}
               notice.textContent='';
               meta.textContent='v'+o.version+' · up '+duration(o.uptimeSeconds)+' · updated '+clock(Date.now());
-              const f=o.files,c=o.clients,m=o.memory,s=o.searches,v=o.offerFilesV1,k=o.kadSources||{},ss=o.serverSources||{};
+              const f=o.files,c=o.clients,m=o.memory,s=o.searches,v=o.offerFilesV1,k=o.kadSources||{},ss=o.serverSources||{},iu=o.serverIndexUpdate||{};
               $('#heroFiles').innerHTML='<div class="label">Indexed files</div><div class="big">'+fmt(f.indexed)+'</div><div class="deltas">'+
                 delta(f.indexed,f.ago24h,'in 24 h')+delta(f.indexed,f.ago7d,'in 7 days')+'</div><div class="sub" style="margin-top:6px">'+fmt(f.newSinceStart)+' new files since the last start</div>';
               // The index is full at maxFiles or when the live heap reaches the guard, whichever comes first
@@ -211,6 +211,7 @@ final class AdminWebPanel implements AutoCloseable {
                 tile('Remote searches',fmt(s.kad+s.ed2kServers),'Kad '+fmt(s.kad)+' · eD2K servers '+fmt(s.ed2kServers)+' · UDP global received '+fmt(s.udpGlobal))+
                 tile('Files found by searches',fmt(s.filesIngested),'indexed since the last start')+
                 tile('Kad and server sources for clients',fmt(k.sourcesDelivered||0),'sent in '+fmt(k.answersSent||0)+' answers · '+fmt(k.searches||0)+' searches, '+fmt(k.cacheHits||0)+' from cache · '+fmt(ss.highIdSources||0)+' HighID sources from other servers · '+fmt(k.firewalledMatched||0)+' firewalled Kad sources reachable through this server · quota '+fmt(k.quota||0)+' of '+fmt(k.quotaMax||0)+' searches a minute ('+fmt(k.kadRefusals||0)+' Kad refusals)',k.enabled?state('good','Enabled'):'<div class="sub">Disabled (kadSourceSearchEnabled)</div>')+
+                tile('Index update from eD2K index peers',fmt(iu.newFiles||0),'new files since the last start · '+fmt(iu.searches||0)+' searches ('+fmt(iu.refinements||0)+' refinements, '+fmt(iu.fullPages||0)+' full pages) on '+fmt(iu.servers||0)+' peers · '+fmt(iu.accepted||0)+' of '+fmt(iu.results||0)+' results kept · '+fmt(iu.incidents||0)+' pauses after an incident',iu.enabled?state('good','Enabled'):'<div class="sub">Disabled (serverIndexUpdateEnabled)</div>')+
                 tile('OFFERFILES v1',fmt(v.newFiles),'new files from fast-publishing clients since the last start · '+fmt(v.newFilesLegacy)+' from legacy clients · '+fmt(v.sessionsAdvertised)+' of '+fmt(v.loginsAsked)+' asking logins answered',v.enabled?state('good','Enabled'):'<div class="sub">Disabled (offerFilesV1Enabled)</div>')+
                 tile('Banned names',compact(o.protection.bannedNames),fmt(o.protection.bannedNames)+' file names, from the administrator and the child abuse filter · '+fmt(o.protection.childAbuseRejected)+' files and '+fmt(o.protection.childAbuseQueries||0)+' searches refused by the child abuse filter since the last start · '+fmt(o.protection.ipFilterRanges)+' IP filter ranges')+
                 tile('Database',o.database.sizeMb==null?'–':fmt(o.database.sizeMb)+' MB',o.database.reopens?state('critical','Reopened '+o.database.reopens+' times after a fatal error'):state('good','No fatal error'))+
@@ -551,6 +552,8 @@ final class AdminWebPanel implements AutoCloseable {
         KadSourceService kadSources = server.getKadSourceService();
         overview.put("kadSources", kadSources == null ? Map.of() : kadSources.stats());
         overview.put("serverSources", server.serverSourceStats());
+        ServerIndexUpdater updater = server.getServerIndexUpdater();
+        overview.put("serverIndexUpdate", updater == null ? Map.of() : updater.stats());
         return overview;
     }
 
