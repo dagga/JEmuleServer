@@ -20,6 +20,7 @@ package org.jemule.core;
 
 import org.jemule.protocol.Tag;
 
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
@@ -34,6 +35,10 @@ import java.util.function.IntConsumer;
  * its own ({@link Extra}) for what most files do not have: online sources, media tags, a hash that is not 32
  * hexadecimal digits in one case.
  * <p>
+ * The names follow one another in one byte array, one byte per character when they are all Latin-1 and two
+ * otherwise, as inside a {@link String}, without the 40 bytes of the string and its array: a name is a string
+ * again only when it is read. The bytes of the names replaced or removed are released by a compaction.
+ * <p>
  * The hash is looked up case-insensitively, through an open addressing table of file numbers; it is given back in
  * the form it was stored in, which is the key of the file in the database. {@link #view} builds the
  * {@link FileMetadata} of a file on demand; its source map is the live one.
@@ -46,6 +51,8 @@ final class FileTable {
     /** The hash is kept as given in {@link Extra#hash} (another case mix, or not a hexadecimal MD4 hash). */
     private static final byte RAW = 2;
     private static final int INITIAL_CAPACITY = 1024;
+    /** Offset of a file without name in {@link #nameOffsets}. */
+    private static final int NO_NAME = -1;
 
     /** What only some files have; null for most of them. */
     private static final class Extra {
@@ -64,7 +71,16 @@ final class FileTable {
     private long[] high = new long[INITIAL_CAPACITY];
     private long[] low = new long[INITIAL_CAPACITY];
     private byte[] hashForm = new byte[INITIAL_CAPACITY];
-    private String[] names = new String[INITIAL_CAPACITY];
+    /**
+     * Names: the length in bytes, shifted left by one and flagged in the lowest bit when the characters take two
+     * bytes, as a variable-length integer, then the characters (big-endian when two bytes).
+     */
+    private byte[] nameBytes = new byte[INITIAL_CAPACITY * 64];
+    private int nameEnd;
+    /** Bytes of {@link #nameBytes} held by the names replaced or removed, until the next compaction. */
+    private int nameGarbage;
+    /** Offset of the name of each file in {@link #nameBytes}, {@link #NO_NAME} without name. */
+    private int[] nameOffsets = new int[INITIAL_CAPACITY];
     private long[] sizes = new long[INITIAL_CAPACITY];
     private String[] types = new String[INITIAL_CAPACITY];
     /** Value of the FT_SOURCES tag (unsigned); its tag type in {@link #sourceTagTypes}, 0 without such a tag. */
@@ -128,6 +144,7 @@ final class FileTable {
             insertSlot(id);
         }
         extras[id] = extra;
+        nameOffsets[id] = NO_NAME;
         setContent(id, meta);
         return id;
     }
@@ -145,7 +162,7 @@ final class FileTable {
             removeSlot(id);
         }
         used[id] = false;
-        names[id] = null;
+        dropName(id);
         types[id] = null;
         extras[id] = null;
         count--;
@@ -162,7 +179,17 @@ final class FileTable {
     }
 
     String name(int id) {
-        return names[id];
+        int offset = nameOffsets[id];
+        if (offset == NO_NAME) return null;
+        int header = nameHeader(offset);
+        int pos = offset + headerLength(header);
+        int length = header >>> 1;
+        if ((header & 1) == 0) return new String(nameBytes, pos, length, StandardCharsets.ISO_8859_1);
+        char[] chars = new char[length / 2];
+        for (int i = 0; i < chars.length; i++, pos += 2) {
+            chars[i] = (char) ((nameBytes[pos] & 0xFF) << 8 | nameBytes[pos + 1] & 0xFF);
+        }
+        return new String(chars);
     }
 
     /** The live source map of a file, or null if no client ever published it. */
@@ -184,8 +211,8 @@ final class FileTable {
         }
         ConcurrentHashMap<String, ClientState> sources = extra == null ? null : extra.sources;
         return sources == null
-                ? FileMetadata.withoutSources(hash(id), names[id], sizes[id], types[id], tags)
-                : new FileMetadata(hash(id), names[id], sizes[id], types[id], tags, sources);
+                ? FileMetadata.withoutSources(hash(id), name(id), sizes[id], types[id], tags)
+                : new FileMetadata(hash(id), name(id), sizes[id], types[id], tags, sources);
     }
 
     /** Calls {@code action} with the number of every file. */
@@ -198,10 +225,12 @@ final class FileTable {
     /** Releases the free slots of the arrays, once the files are loaded. */
     void trim() {
         if (used.length > end + INITIAL_CAPACITY) grow(end + INITIAL_CAPACITY);
+        if (nameBytes.length > nameEnd - nameGarbage + INITIAL_CAPACITY * 64) compactNames(INITIAL_CAPACITY * 64);
     }
 
     private void setContent(int id, FileMetadata meta) {
-        names[id] = meta.name();
+        // Set again at each change of the source count: the same name is not stored twice
+        if (!hasName(id, meta.name())) setName(id, meta.name());
         sizes[id] = meta.size();
         types[id] = meta.type() == null ? null : typeNames.computeIfAbsent(meta.type(), t -> t);
         List<Tag> tags = meta.tags() == null ? List.of() : meta.tags();
@@ -222,6 +251,96 @@ final class FileTable {
             extra.sources = sources;
             extras[id] = extra.isEmpty() ? null : extra;
         }
+    }
+
+    private void setName(int id, String name) {
+        dropName(id);
+        if (name == null) return;
+        boolean latin1 = true;
+        for (int i = 0; i < name.length() && latin1; i++) latin1 = name.charAt(i) < 256;
+        int length = latin1 ? name.length() : name.length() * 2;
+        int header = length << 1 | (latin1 ? 0 : 1);
+        int needed = headerLength(header) + length;
+        if (nameEnd + needed > nameBytes.length) {
+            int growth = Math.max(needed, nameBytes.length >= 1 << 22 ? nameBytes.length >> 3 : nameBytes.length >> 1);
+            // Rather than growing an array of which a quarter is held by old names, it is compacted
+            if (nameGarbage > nameEnd / 4) compactNames(growth);
+            else nameBytes = Arrays.copyOf(nameBytes, nameBytes.length + growth);
+        }
+        nameOffsets[id] = nameEnd;
+        int pos = nameEnd;
+        while ((header & ~0x7F) != 0) {
+            nameBytes[pos++] = (byte) ((header & 0x7F) | 0x80);
+            header >>>= 7;
+        }
+        nameBytes[pos++] = (byte) header;
+        for (int i = 0; i < name.length(); i++) {
+            char c = name.charAt(i);
+            if (!latin1) nameBytes[pos++] = (byte) (c >>> 8);
+            nameBytes[pos++] = (byte) c;
+        }
+        nameEnd = pos;
+    }
+
+    /** True if the stored name of a file is {@code name}, compared without building a string. */
+    private boolean hasName(int id, String name) {
+        if (nameOffsets[id] == NO_NAME) return name == null;
+        if (name == null) return false;
+        int header = nameHeader(nameOffsets[id]);
+        int pos = nameOffsets[id] + headerLength(header);
+        boolean latin1 = (header & 1) == 0;
+        if ((header >>> 1) != (latin1 ? name.length() : name.length() * 2)) return false;
+        for (int i = 0; i < name.length(); i++) {
+            int c = latin1 ? nameBytes[pos++] & 0xFF : (nameBytes[pos++] & 0xFF) << 8 | nameBytes[pos++] & 0xFF;
+            if (c != name.charAt(i)) return false;
+        }
+        return true;
+    }
+
+    private void dropName(int id) {
+        if (nameOffsets[id] == NO_NAME) return;
+        nameGarbage += nameRecordLength(nameOffsets[id]);
+        nameOffsets[id] = NO_NAME;
+    }
+
+    /** Length of the header and characters of the name stored at {@code offset}. */
+    private int nameRecordLength(int offset) {
+        int header = nameHeader(offset);
+        return headerLength(header) + (header >>> 1);
+    }
+
+    /** The header of the name stored at {@code offset}: its length in bytes and its two-byte flag. */
+    private int nameHeader(int offset) {
+        int header = 0;
+        for (int shift = 0; ; shift += 7) {
+            byte b = nameBytes[offset++];
+            header |= (b & 0x7F) << shift;
+            if (b >= 0) return header;
+        }
+    }
+
+    /** Bytes taken by a header: 7 bits per byte. */
+    private static int headerLength(int header) {
+        int bytes = 1;
+        while ((header >>>= 7) != 0) bytes++;
+        return bytes;
+    }
+
+    /** Copies the names in use to a new array with {@code slack} free bytes, dropping the replaced ones. */
+    private void compactNames(int slack) {
+        byte[] compacted = new byte[nameEnd - nameGarbage + slack];
+        int pos = 0;
+        for (int id = 0; id < end; id++) {
+            int offset = nameOffsets[id];
+            if (!used[id] || offset == NO_NAME) continue;
+            int length = nameRecordLength(offset);
+            System.arraycopy(nameBytes, offset, compacted, pos, length);
+            nameOffsets[id] = pos;
+            pos += length;
+        }
+        nameBytes = compacted;
+        nameEnd = pos;
+        nameGarbage = 0;
     }
 
     private Object sourceTagValue(int id) {
@@ -269,7 +388,7 @@ final class FileTable {
         high = Arrays.copyOf(high, capacity);
         low = Arrays.copyOf(low, capacity);
         hashForm = Arrays.copyOf(hashForm, capacity);
-        names = Arrays.copyOf(names, capacity);
+        nameOffsets = Arrays.copyOf(nameOffsets, capacity);
         sizes = Arrays.copyOf(sizes, capacity);
         types = Arrays.copyOf(types, capacity);
         sourceCounts = Arrays.copyOf(sourceCounts, capacity);
