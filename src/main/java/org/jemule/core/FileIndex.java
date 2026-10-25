@@ -557,10 +557,10 @@ public class FileIndex {
         } finally {
             lock.readLock().unlock();
         }
-        // A file indexed before the keywords were reloaded may match them now: it is never returned
+        // A file indexed before the keywords were reloaded may match them now: the senders of the results check
+        // every file once more (SearchHandler, Server's UDP global search)
         return results.stream()
                 .sorted(SOURCE_COUNT_ORDER)
-                .filter(meta -> !abuseFilter.matches(meta.name()))
                 .limit(limit)
                 .toList();
     }

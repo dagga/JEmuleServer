@@ -1245,6 +1245,7 @@ public class Server {
         java.io.ByteArrayOutputStream datagram = new java.io.ByteArrayOutputStream();
         for (FileMetadata m : results) {
             if (!largeFiles && m.size() > 0xFFFFFFFFL) continue; // the requester cannot handle files > 4 GB
+            if (fileIndex.isChildAbuse(m.hash(), m.name())) continue; // indexed before a keyword reload
             byte[] item = org.jemule.network.handler.SearchHandler.encodeSearchResult(m);
             if (datagram.size() > 0 && datagram.size() + 2 + item.length > MAX_UDP_PAYLOAD) {
                 sendUdp(reply, datagram.toByteArray(), "SEARCH");
