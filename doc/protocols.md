@@ -75,7 +75,7 @@ To reduce bandwidth, some packets can be compressed.
 
 ## 6. Architecture & Design Patterns
 
-JEmuleServer follows modern Java 21+ practices and several software design patterns:
+JEmuleServer follows modern Java 25 practices and several software design patterns:
 - **Virtual Threads (Project Loom)**: The server uses `Executors.newVirtualThreadPerTaskExecutor()` to handle a high number of concurrent connections (50k+) with a simple, synchronous thread-per-client model.
 - **Factory Pattern**: Centralized creation of `ClientState` objects via `ClientFactory`, ensuring validation of IP addresses and ports before instantiating client sessions.
 - **Builder Pattern**: Uses `SearchQueryBuilder` for fluent and validated construction of complex Boolean search queries.
