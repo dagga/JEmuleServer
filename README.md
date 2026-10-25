@@ -1,6 +1,6 @@
 # JEmuleServer
 
-JEmuleServer is an eMule server written in Java (version 1.2.25).
+JEmuleServer is an eMule server written in Java (version 1.2.26).
 
 Downloads (installers and JAR) are on the [releases page](https://github.com/dagga/JEmuleServer/releases); the changes
 of each version are described in `doc/release-notes-v<version>.md` (latest: [1.2.9](doc/release-notes-v1.2.9.md)).
@@ -27,7 +27,7 @@ Building requires a JDK 21 (Gradle toolchain). To compile the project and genera
 ./gradlew build
 ```
 
-The JAR file will be generated in `build/libs/JEmuleServer-1.2.25.jar`.
+The JAR file will be generated in `build/libs/JEmuleServer-1.2.26.jar`.
 
 ## Installation from the release packages
 
@@ -68,7 +68,7 @@ the JAR for IPv6.
 Once the project is compiled, you can start the server with the following command:
 
 ```bash
-java -XX:MaxRAMPercentage=75 -XX:ThreadPriorityPolicy=1 --add-modules=jdk.httpserver -jar build/libs/JEmuleServer-1.2.25.jar [config_file] [port]
+java -XX:MaxRAMPercentage=75 -XX:ThreadPriorityPolicy=1 --add-modules=jdk.httpserver -jar build/libs/JEmuleServer-1.2.26.jar [config_file] [port]
 ```
 
 - `-XX:ThreadPriorityPolicy=1`: on Linux, the JVM ignores thread priorities without it. The server runs its threads
@@ -224,9 +224,16 @@ The server refuses files whose name advertises child sexual abuse material, and 
 designating a minor (or an age up to 18, such as `6yo` or `9 ans`) together with a sexual term. A rejected file:
 
 - is never indexed, and the publishing client is warned that some of its files were refused;
+- is never sent to a client, whatever brought it: the local search skips it (even indexed before the keywords were
+  reloaded) and every batch of search results is checked once more before it leaves;
 - is refused again each time it comes back, from a client, Kad or another server (1.2.23 and before also banned its
   hash; 1.2.24 bans file names only, see [Banned file names](#banned-file-names));
 - is deleted from the database at startup if an older version had stored it.
+
+A search whose terms match the filter (client search, or UDP global search from another server's client) gets no
+result and is sent neither to Kad nor to the other eD2K servers; the Overview counts these searches. The names of the
+files the filter rejects are recorded in `banned_names` (see [Banned file names](#banned-file-names)), never sent to a
+client.
 
 Unlike `fakeFileDetectionEnabled`, this filter cannot be disabled. The keywords are read from
 [`child-abuse-keywords.properties`](src/main/resources/child-abuse-keywords.properties), embedded in the jar; the

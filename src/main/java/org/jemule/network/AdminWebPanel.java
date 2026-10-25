@@ -212,7 +212,7 @@ final class AdminWebPanel implements AutoCloseable {
                 tile('Files found by searches',fmt(s.filesIngested),'indexed since the last start')+
                 tile('Kad and server sources for clients',fmt(k.sourcesDelivered||0),'sent in '+fmt(k.answersSent||0)+' answers · '+fmt(k.searches||0)+' searches, '+fmt(k.cacheHits||0)+' from cache · '+fmt(ss.highIdSources||0)+' HighID sources from other servers · '+fmt(k.firewalledMatched||0)+' firewalled Kad sources reachable through this server · quota '+fmt(k.quota||0)+' of '+fmt(k.quotaMax||0)+' searches a minute ('+fmt(k.kadRefusals||0)+' Kad refusals)',k.enabled?state('good','Enabled'):'<div class="sub">Disabled (kadSourceSearchEnabled)</div>')+
                 tile('OFFERFILES v1',fmt(v.newFiles),'new files from fast-publishing clients since the last start · '+fmt(v.newFilesLegacy)+' from legacy clients · '+fmt(v.sessionsAdvertised)+' of '+fmt(v.loginsAsked)+' asking logins answered',v.enabled?state('good','Enabled'):'<div class="sub">Disabled (offerFilesV1Enabled)</div>')+
-                tile('Banned names',compact(o.protection.bannedNames),fmt(o.protection.bannedNames)+' file names, from the administrator and the child abuse filter · '+fmt(o.protection.childAbuseRejected)+' files refused by the child abuse filter and Kad screening since the last start · '+fmt(o.protection.ipFilterRanges)+' IP filter ranges')+
+                tile('Banned names',compact(o.protection.bannedNames),fmt(o.protection.bannedNames)+' file names, from the administrator and the child abuse filter · '+fmt(o.protection.childAbuseRejected)+' files and '+fmt(o.protection.childAbuseQueries||0)+' searches refused by the child abuse filter since the last start · '+fmt(o.protection.ipFilterRanges)+' IP filter ranges')+
                 tile('Database',o.database.sizeMb==null?'–':fmt(o.database.sizeMb)+' MB',o.database.reopens?state('critical','Reopened '+o.database.reopens+' times after a fatal error'):state('good','No fatal error'))+
                 tile('Uptime',duration(o.uptimeSeconds),'version '+esc(o.version));
             }
@@ -521,6 +521,7 @@ final class AdminWebPanel implements AutoCloseable {
         Map<String, Object> protection = new java.util.LinkedHashMap<>();
         protection.put("bannedNames", database != null ? database.countBannedNames()
                 : server.getFakeFileDetector() == null ? 0 : server.getFakeFileDetector().bannedNameCount());
+        protection.put("childAbuseQueries", server.getFileIndex().childAbuseQueryCount());
         protection.put("childAbuseRejected", server.getFileIndex().childAbuseRejectedCount()
                 + (server.getKadSearchBridge() == null ? 0 : server.getKadSearchBridge().getIllicitFilesBlocked()));
         protection.put("ipFilterRanges", server.getIPFilter().getFilterCount());

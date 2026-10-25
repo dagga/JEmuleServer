@@ -45,6 +45,13 @@ public class SearchHandler {
         SearchQuery query;
         try {
             query = SearchQuery.parse(ByteBuffer.wrap(data));
+            if (context.getFileIndex().isChildAbuseQuery(query)) {
+                // No result, and never sent to Kad or to other servers
+                log.info("Search refused by the child abuse filter from client {}", context.getState().clientId());
+                context.getState().initializePendingSearch(searchGeneration, List.of(), false);
+                sendSearchResults(context, List.of(), false, out);
+                return;
+            }
             localResults = context.getFileIndex().searchComplex(query, context.getConfig().maxSearchResults());
             log.debug("Search {} -> {} local results", query, localResults.size());
         } catch (RuntimeException e) {
@@ -184,6 +191,9 @@ public class SearchHandler {
      * OP_QUERY_MORE_RESULT (CSearchList::ProcessSearchAnswer).
      */
     private void sendSearchResults(ClientContext context, List<FileMetadata> results, boolean moreAvailable, OutputStream out) throws IOException {
+        // Last check before the client: whatever channel a file came from, a name matching the child abuse filter
+        // is never sent
+        results = results.stream().filter(m -> !context.getFileIndex().isChildAbuse(m.hash(), m.name())).toList();
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         // <count 4> is little-endian like every ed2k integer (CSearchList::ProcessSearchAnswer)
         baos.writeBytes(ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(results.size()).array());

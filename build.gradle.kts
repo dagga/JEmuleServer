@@ -7,7 +7,7 @@ plugins {
 }
 
 group = "org.jemule"
-version = "1.2.25"
+version = "1.2.26"
 
 configure<JavaPluginExtension> {
     toolchain {

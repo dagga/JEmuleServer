@@ -187,6 +187,29 @@ public interface SearchQuery extends Predicate<FileMetadata> {
      *
      * @throws RuntimeException if the tree is malformed
      */
+    /** Every term of the query, the file name words and the meta tag values, separated by spaces. */
+    static String terms(SearchQuery query) {
+        StringBuilder text = new StringBuilder();
+        appendTerms(query, text);
+        return text.toString();
+    }
+
+    private static void appendTerms(SearchQuery query, StringBuilder text) {
+        switch (query) {
+            case TermQuery t -> text.append(t.term()).append(' ');
+            case AndQuery and -> {
+                appendTerms(and.left(), text);
+                appendTerms(and.right(), text);
+            }
+            case OrQuery or -> {
+                appendTerms(or.left(), text);
+                appendTerms(or.right(), text);
+            }
+            case NotQuery not -> appendTerms(not.left(), text);
+            case null, default -> { }
+        }
+    }
+
     static SearchQuery parse(ByteBuffer buf) {
         buf.order(ByteOrder.LITTLE_ENDIAN);
         return parse(buf, 0);

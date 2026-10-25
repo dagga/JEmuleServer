@@ -56,6 +56,8 @@ public class FileIndex {
     private final ChildAbuseFilter abuseFilter;
     /** Files the child abuse filter rejected since the start. */
     private final LongAdder childAbuseRejected = new LongAdder();
+    /** Searches refused since the start because their terms match the child abuse filter. */
+    private final LongAdder childAbuseQueries = new LongAdder();
     /** Names recorded lately: a file that comes back with every search is written once. */
     private final Map<String, Boolean> recentAbuseNames = new LinkedHashMap<>(256, 0.75f, true) {
         @Override
@@ -159,6 +161,21 @@ public class FileIndex {
             if (recentAbuseNames.put(normalized, Boolean.TRUE) != null) return;
         }
         persistence.execute(() -> db.addBannedNameIfAbsent(normalized, ChildAbuseFilter.BAN_REASON));
+    }
+
+    /**
+     * True when the terms of a search match the child abuse filter: such a search gets no result and is sent
+     * neither to Kad nor to other servers. Counted.
+     */
+    public boolean isChildAbuseQuery(SearchQuery query) {
+        if (query == null || !abuseFilter.matches(SearchQuery.terms(query))) return false;
+        childAbuseQueries.increment();
+        return true;
+    }
+
+    /** Searches refused since the start because their terms match the child abuse filter. */
+    public long childAbuseQueryCount() {
+        return childAbuseQueries.sum();
     }
 
     /** Files the child abuse filter rejected since the start. */
@@ -540,8 +557,10 @@ public class FileIndex {
         } finally {
             lock.readLock().unlock();
         }
+        // A file indexed before the keywords were reloaded may match them now: it is never returned
         return results.stream()
                 .sorted(SOURCE_COUNT_ORDER)
+                .filter(meta -> !abuseFilter.matches(meta.name()))
                 .limit(limit)
                 .toList();
     }
