@@ -17,7 +17,7 @@ class ChildAbuseIndexTest {
     Path tempDir;
 
     @Test
-    void filesOfTheDatabaseArePurgedAndBannedAtStartup() throws Exception {
+    void filesOfTheDatabaseArePurgedAtStartup() throws Exception {
         String dbPath = tempDir.resolve("db").toString();
         try (DatabaseManager db = new DatabaseManager(dbPath)) {
             // stored by an older version, without the filter
@@ -30,22 +30,9 @@ class ChildAbuseIndexTest {
             assertEquals(1, index.fileCount());
             assertTrue(index.search("boy", 10).isEmpty());
             assertEquals(1, db.loadFiles().size(), "the file must be deleted from the database");
-            assertTrue(db.loadBannedHashes(ChildAbuseFilter.BAN_REASON).contains(ABUSE_HASH.toUpperCase()));
-        }
-
-        try (DatabaseManager db = new DatabaseManager(dbPath)) {
-            FileIndex index = new FileIndex(db, null, ChildAbuseFilter.defaults());
-            assertTrue(index.isChildAbuse(ABUSE_HASH, "renamed innocent.avi"), "the ban survives a restart and a rename");
+            assertTrue(index.isChildAbuse(ABUSE_HASH, "BOYFUCK - 6Yo boy stripped.avi"));
             assertFalse(index.isChildAbuse(LEGIT_HASH, "holiday video.avi"));
-        }
-    }
-
-    @Test
-    void otherBansAreNotChildAbuseBans() throws Exception {
-        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("db2").toString())) {
-            db.addBannedHash(LEGIT_HASH, "Auto-banned: Multiple extensions");
-            FileIndex index = new FileIndex(db, null, ChildAbuseFilter.defaults());
-            assertFalse(index.isChildAbuse(LEGIT_HASH, "movie.avi"));
+            assertEquals(1, index.childAbuseRejectedCount());
         }
     }
 }

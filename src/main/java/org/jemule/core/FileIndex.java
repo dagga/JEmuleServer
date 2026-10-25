@@ -54,8 +54,8 @@ public class FileIndex {
     private volatile java.util.concurrent.Executor persistence = Runnable::run;
     private final EventManager eventManager;
     private final ChildAbuseFilter abuseFilter;
-    /** Hashes banned by the child abuse filter (upper case), loaded from the database and completed at runtime. */
-    private final Md4Set abuseBannedHashes = new Md4Set();
+    /** Files the child abuse filter rejected since the start. */
+    private final LongAdder childAbuseRejected = new LongAdder();
     /** Most files indexed: new hashes beyond it are refused (Integer.MAX_VALUE: no limit). */
     private volatile java.util.function.IntSupplier maxFiles = () -> Integer.MAX_VALUE;
     /** True when the heap cannot take more files: new hashes are refused too. */
@@ -75,7 +75,7 @@ public class FileIndex {
 
     /**
      * Constructs a FileIndex, optionally loading existing files from the database. Files of the database that the
-     * child abuse filter rejects are deleted from it and banned instead of being loaded.
+     * child abuse filter rejects are deleted from it instead of being loaded.
      *
      * @param db           The database manager for persistence.
      * @param eventManager The event manager for broadcasting file events.
@@ -87,19 +87,17 @@ public class FileIndex {
         this.abuseFilter = abuseFilter;
         if (db != null) {
             try {
-                db.loadBannedHashes(ChildAbuseFilter.BAN_REASON).forEach(h -> abuseBannedHashes.add(h.toUpperCase(Locale.ROOT)));
-                // The files are indexed while they are read; the child abuse files are banned and deleted afterwards,
-                // the database being locked during the read
+                // The files are indexed while they are read; the child abuse files are deleted afterwards, the
+                // database being locked during the read
                 List<FileMetadata> rejected = new ArrayList<>();
                 db.forEachFile(meta -> {
-                    if (abuseBannedHashes.contains(meta.hash().toUpperCase(Locale.ROOT)) || abuseFilter.matches(meta.name())) {
+                    if (abuseFilter.matches(meta.name())) {
                         rejected.add(meta);
                     } else {
                         indexInMemory(meta);
                     }
                 });
                 for (FileMetadata meta : rejected) {
-                    isChildAbuse(meta.hash(), meta.name());
                     db.deleteFile(meta.hash());
                 }
                 if (!rejected.isEmpty()) {
@@ -129,22 +127,20 @@ public class FileIndex {
     }
 
     /**
-     * Checks a file against the child abuse filter. A file whose name matches has its hash banned for good
-     * (banned_hashes in the database), so that it stays rejected whatever name it is published under.
+     * Checks a file name against the child abuse filter.
      *
      * @return true if the file must be rejected
      */
     public boolean isChildAbuse(String hash, String name) {
-        String key = hash.toUpperCase(Locale.ROOT);
-        if (abuseBannedHashes.contains(key)) return true;
         if (!abuseFilter.matches(name)) return false;
-        abuseBannedHashes.add(key);
-        log.warn("Child abuse file banned: hash={} name='{}'", hash, name);
-        if (db != null) {
-            String reason = ChildAbuseFilter.BAN_REASON + ": " + name;
-            db.addBannedHash(key, reason.length() > 255 ? reason.substring(0, 255) : reason);
-        }
+        childAbuseRejected.increment();
+        log.debug("Child abuse file rejected: hash={} name='{}'", hash, name);
         return true;
+    }
+
+    /** Files the child abuse filter rejected since the start. */
+    public long childAbuseRejectedCount() {
+        return childAbuseRejected.sum();
     }
 
     /**
@@ -342,6 +338,33 @@ public class FileIndex {
             persistence.execute(() -> db.deleteFile(hashToDelete)); // after any queued write of this file
         }
         return true;
+    }
+
+    /**
+     * Removes the files indexed under a name, compared in lower case without the spaces around it (a banned name).
+     *
+     * @return the number of files removed
+     */
+    public int removeFilesNamed(String name) {
+        String wanted = name == null ? "" : name.strip().toLowerCase(Locale.ROOT);
+        if (wanted.isEmpty()) return 0;
+        List<String> hashes = new ArrayList<>();
+        lock.readLock().lock();
+        try {
+            table.forEach(id -> {
+                String indexed = table.name(id);
+                if (indexed.length() >= wanted.length() && indexed.strip().toLowerCase(Locale.ROOT).equals(wanted)) {
+                    hashes.add(table.hash(id));
+                }
+            });
+        } finally {
+            lock.readLock().unlock();
+        }
+        int removed = 0;
+        for (String hash : hashes) {
+            if (removeFile(hash)) removed++;
+        }
+        return removed;
     }
 
     /**

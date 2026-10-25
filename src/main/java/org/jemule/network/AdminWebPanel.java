@@ -49,7 +49,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
-import java.util.regex.Pattern;
 
 /**
  * Loopback-only HTTP dashboard and JSON API for local server administration.
@@ -57,7 +56,6 @@ import java.util.regex.Pattern;
 final class AdminWebPanel implements AutoCloseable {
     private static final Logger log = LoggerFactory.getLogger(AdminWebPanel.class);
     private static final int MAX_BODY_BYTES = 4096;
-    private static final Pattern HASH = Pattern.compile("[0-9A-Fa-f]{32}");
     private static final String PAGE = """
             <!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
             <title>JEmuleServer admin</title>
@@ -166,9 +164,9 @@ final class AdminWebPanel implements AutoCloseable {
               if(view==='overview'){overview();return}
               if(view==='clients'){controls.innerHTML='<input id="query" placeholder="Search nickname, IP, or client ID"><button class="btn" id="search">Search</button>';
                 $('#search').onclick=()=>load(view,$('#query').value);}
-              else if(view==='blocks'){controls.innerHTML='<input id="hash" placeholder="32-character MD4 hash"><input id="reason" placeholder="Reason"><button class="btn" id="ban">Ban hash</button><button class="btn" id="unban">Unban hash</button>';
-                $('#ban').onclick=async()=>{try{await post('/api/blocks',{hash:$('#hash').value,reason:$('#reason').value});notice.textContent='Hash banned.';load(view)}catch(e){notice.textContent=e.message}};
-                $('#unban').onclick=async()=>{try{await post('/api/unblock',{hash:$('#hash').value});notice.textContent='Hash unbanned.';load(view)}catch(e){notice.textContent=e.message}}}
+              else if(view==='blocks'){controls.innerHTML='<input id="name" placeholder="File name (any case)"><input id="reason" placeholder="Reason"><button class="btn" id="ban">Ban name</button><button class="btn" id="unban">Unban name</button><a class="btn" href="/api/blocks/export" download="banned-names.txt">Export</a>';
+                $('#ban').onclick=async()=>{try{const r=await post('/api/blocks',{name:$('#name').value,reason:$('#reason').value});notice.textContent='Name banned; '+r.filesRemoved+' indexed file(s) removed.';load(view)}catch(e){notice.textContent=e.message}};
+                $('#unban').onclick=async()=>{try{const r=await post('/api/unblock',{name:$('#name').value});notice.textContent=r.wasBanned?'Name unbanned.':'This name was not banned.';load(view)}catch(e){notice.textContent=e.message}}}
               else if(view==='settings'){controls.innerHTML='<button class="btn" id="reload">Reload from file</button><button class="btn" id="save">Save changes</button>';
                 $('#reload').onclick=async()=>{try{const r=await post('/api/settings/reload',{});notice.textContent=summarize(r);load(view)}catch(e){notice.textContent=e.message}};
                 $('#save').onclick=()=>saveSettings();}
@@ -212,7 +210,7 @@ final class AdminWebPanel implements AutoCloseable {
                 tile('Files found by searches',fmt(s.filesIngested),'indexed since the last start')+
                 tile('Kad and server sources for clients',fmt(k.sourcesDelivered||0),'sent in '+fmt(k.answersSent||0)+' answers · '+fmt(k.searches||0)+' searches, '+fmt(k.cacheHits||0)+' from cache · '+fmt(ss.highIdSources||0)+' HighID sources from other servers · '+fmt(k.firewalledMatched||0)+' firewalled Kad sources reachable through this server · quota '+fmt(k.quota||0)+' of '+fmt(k.quotaMax||0)+' searches a minute ('+fmt(k.kadRefusals||0)+' Kad refusals)',k.enabled?state('good','Enabled'):'<div class="sub">Disabled (kadSourceSearchEnabled)</div>')+
                 tile('OFFERFILES v1',fmt(v.newFiles),'new files from fast-publishing clients since the last start · '+fmt(v.newFilesLegacy)+' from legacy clients · '+fmt(v.sessionsAdvertised)+' of '+fmt(v.loginsAsked)+' asking logins answered',v.enabled?state('good','Enabled'):'<div class="sub">Disabled (offerFilesV1Enabled)</div>')+
-                tile('Banned hashes',compact(o.protection.bannedHashes),fmt(o.protection.bannedHashes)+' hashes · '+fmt(o.protection.ipFilterRanges)+' IP filter ranges')+
+                tile('Banned names',compact(o.protection.bannedNames),fmt(o.protection.bannedNames)+' file names · '+fmt(o.protection.childAbuseRejected)+' files refused by the child abuse filter and Kad screening since the last start · '+fmt(o.protection.ipFilterRanges)+' IP filter ranges')+
                 tile('Database',o.database.sizeMb==null?'–':fmt(o.database.sizeMb)+' MB',o.database.reopens?state('critical','Reopened '+o.database.reopens+' times after a fatal error'):state('good','No fatal error'))+
                 tile('Uptime',duration(o.uptimeSeconds),'version '+esc(o.version));
             }
@@ -390,6 +388,12 @@ final class AdminWebPanel implements AutoCloseable {
                 case "/api/filters" -> json(exchange, 200, filters());
                 case "/api/bots" -> json(exchange, 200, bots());
                 case "/api/blocks" -> json(exchange, 200, blocks());
+                case "/api/blocks/export" -> {
+                    // One banned name per line, to keep or to load on another server
+                    exchange.getResponseHeaders().set("Content-Disposition", "attachment; filename=\"banned-names.txt\"");
+                    String names = String.join("\n", server.getFakeFileDetector().bannedNames());
+                    send(exchange, 200, "text/plain; charset=utf-8", names.isEmpty() ? "" : names + "\n");
+                }
                 case "/api/settings" -> json(exchange, 200, settings());
                 default -> sendError(exchange, 404, "Not found");
             }
@@ -407,23 +411,21 @@ final class AdminWebPanel implements AutoCloseable {
         Map<String, String> form = readForm(exchange);
         switch (path) {
             case "/api/blocks" -> {
-                String hash = form.getOrDefault("hash", "").trim();
-                if (!HASH.matcher(hash).matches())
-                    throw new IllegalArgumentException("Hash must contain 32 hexadecimal characters");
-                String reason = form.getOrDefault("reason", "Admin web panel").trim();
+                String name = form.getOrDefault("name", "");
+                if (FakeFileDetector.normalize(name) == null)
+                    throw new IllegalArgumentException("Name must hold 1 to " + FakeFileDetector.MAX_NAME_LENGTH + " characters");
+                String reason = form.getOrDefault("reason", "").trim();
                 if (reason.length() > 240) throw new IllegalArgumentException("Reason is too long");
-                String normalized = hash.toUpperCase(Locale.ROOT);
-                server.getFakeFileDetector().ban(normalized, "Admin web panel" + (reason.isEmpty() ? "" : ": " + reason));
-                server.getFileIndex().removeFile(normalized);
-                json(exchange, 200, Map.of("banned", normalized));
+                String banned = server.getFakeFileDetector().ban(name, "Admin web panel" + (reason.isEmpty() ? "" : ": " + reason));
+                int removed = server.getFileIndex().removeFilesNamed(banned);
+                json(exchange, 200, Map.of("banned", banned, "filesRemoved", removed));
             }
             case "/api/unblock" -> {
-                String hash = form.getOrDefault("hash", "").trim();
-                if (!HASH.matcher(hash).matches())
-                    throw new IllegalArgumentException("Hash must contain 32 hexadecimal characters");
-                String normalized = hash.toUpperCase(Locale.ROOT);
-                boolean wasBanned = server.getFakeFileDetector().unban(normalized);
-                json(exchange, 200, Map.of("unbanned", normalized, "wasBanned", wasBanned));
+                String name = form.getOrDefault("name", "");
+                if (FakeFileDetector.normalize(name) == null)
+                    throw new IllegalArgumentException("Name must hold 1 to " + FakeFileDetector.MAX_NAME_LENGTH + " characters");
+                boolean wasBanned = server.getFakeFileDetector().unban(name);
+                json(exchange, 200, Map.of("unbanned", FakeFileDetector.normalize(name), "wasBanned", wasBanned));
             }
             case "/api/settings" -> json(exchange, 200, configResult(server.updateConfig(form)));
             case "/api/settings/reload" -> json(exchange, 200, configResult(server.reloadConfig()));
@@ -520,9 +522,10 @@ final class AdminWebPanel implements AutoCloseable {
                 + (serverBridge == null ? 0L : serverBridge.getFilesIngested()));
 
         Map<String, Object> protection = new java.util.LinkedHashMap<>();
-        org.jemule.core.Md4Set banned = server.getFakeFileDetector() == null ? null
-                : server.getFakeFileDetector().bannedHashes();
-        protection.put("bannedHashes", banned == null ? 0 : banned.size());
+        protection.put("bannedNames", server.getFakeFileDetector() == null ? 0
+                : server.getFakeFileDetector().bannedNameCount());
+        protection.put("childAbuseRejected", server.getFileIndex().childAbuseRejectedCount()
+                + (server.getKadSearchBridge() == null ? 0 : server.getKadSearchBridge().getIllicitFilesBlocked()));
         protection.put("ipFilterRanges", server.getIPFilter().getFilterCount());
 
         Map<String, Object> db = new java.util.LinkedHashMap<>();
@@ -753,9 +756,17 @@ final class AdminWebPanel implements AutoCloseable {
         return result;
     }
 
-    private List<String> blocks() {
+    /** The 200 most recently banned names. */
+    private List<Map<String, Object>> blocks() {
         DatabaseManager database = server.getDatabaseManager();
-        return database == null ? List.of() : database.loadRecentBannedHashes(3);
+        if (database == null) return List.of();
+        return database.loadBannedNames().stream().limit(200).map(n -> {
+            Map<String, Object> row = new java.util.LinkedHashMap<>();
+            row.put("name", n.name());
+            row.put("reason", n.reason() == null ? "" : n.reason());
+            row.put("bannedAt", n.addedAt() == null ? "" : n.addedAt().toString());
+            return row;
+        }).toList();
     }
 
     private List<Map<String, Object>> settings() {

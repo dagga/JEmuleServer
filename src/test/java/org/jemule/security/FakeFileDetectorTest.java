@@ -2,7 +2,9 @@ package org.jemule.security;
 
 import org.junit.jupiter.api.Test;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class FakeFileDetectorTest {
@@ -26,12 +28,16 @@ public class FakeFileDetectorTest {
     }
 
     @Test
-    public void testBlacklist() {
+    public void testBannedNames() {
         FakeFileDetector detector = new FakeFileDetector();
-        String badHash = "ABCDEF1234567890ABCDEF1234567890";
-        detector.addBannedHash(badHash);
-        assertTrue(detector.isFake(badHash, "legit_name.txt", 1000));
-        assertFalse(detector.isFake("00000000000000000000000000000000", "legit_name.txt", 1000));
+        assertEquals("bad name.avi", detector.ban("  Bad Name.AVI ", "test"));
+        assertTrue(detector.isFake("ABCDEF1234567890ABCDEF1234567890", "bad name.avi", 1000));
+        assertTrue(detector.isFake("00000000000000000000000000000000", "BAD NAME.avi", 1000), "whatever the hash");
+        assertFalse(detector.isFake("00000000000000000000000000000000", "bad name 2.avi", 1000));
+        assertNull(detector.ban("   ", "blank"));
+        assertNull(detector.ban("x".repeat(FakeFileDetector.MAX_NAME_LENGTH + 1), "too long"));
+        assertTrue(detector.unban("Bad name.avi"));
+        assertFalse(detector.isFake("00000000000000000000000000000000", "bad name.avi", 1000));
     }
 
     @Test

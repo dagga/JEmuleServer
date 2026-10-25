@@ -8,10 +8,11 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-/** A ban from the admin console survives a restart, removes the file and applies with the heuristics disabled. */
+/** A name ban from the admin console survives a restart, removes the files and applies with the heuristics disabled. */
 class BanPersistenceTest {
 
     private static final String HASH = "0123456789abcdef0123456789abcdef";
@@ -20,42 +21,48 @@ class BanPersistenceTest {
     Path tempDir;
 
     @Test
-    void adminBanIsStoredAndRemovesTheFile() throws Exception {
+    void adminBanIsStoredAndRemovesTheFiles() throws Exception {
         String dbPath = tempDir.resolve("db").toString();
         try (DatabaseManager db = new DatabaseManager(dbPath)) {
             FileIndex index = new FileIndex(db);
-            index.addFile(new FileMetadata(HASH, "some file.avi", 1000, "Video"));
+            index.addFile(new FileMetadata(HASH, "Some Bad File.avi", 1000, "Video"));
+            index.addFile(new FileMetadata("ffffffffffffffffffffffffffffffff", "some good file.avi", 1000, "Video"));
             FakeFileDetector detector = new FakeFileDetector();
             detector.setDatabaseManager(db);
 
-            new AdminInterface(null, null, index, new IPFilter(), detector).handleCommand("ban " + HASH + " bad file");
+            new AdminInterface(null, null, index, new IPFilter(), detector).handleCommand("ban   some BAD file.avi ");
 
-            assertEquals(0, index.fileCount());
-            assertTrue(index.search("some", 10).isEmpty());
-            assertTrue(db.loadFiles().isEmpty());
+            assertEquals(1, index.fileCount());
+            assertTrue(index.search("bad", 10).isEmpty());
+            assertEquals(1, db.loadFiles().size());
         }
 
         try (DatabaseManager db = new DatabaseManager(dbPath)) {
             FakeFileDetector detector = new FakeFileDetector();
             detector.setEnabled(false);
-            db.loadBannedHashes().forEach(detector::addBannedHash);
-            assertTrue(detector.isFake(HASH, "renamed.avi", 1000), "the ban survives a restart, heuristics disabled");
+            detector.setDatabaseManager(db);
+            db.loadBannedNames().forEach(n -> detector.addBannedName(n.name()));
+            assertEquals(List.of("some bad file.avi"), detector.bannedNames());
+            assertTrue(detector.isFake("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", " SOME bad FILE.avi", 1000),
+                    "the ban survives a restart, any hash and case, heuristics disabled");
+            assertFalse(detector.isFake(HASH, "renamed.avi", 1000), "the hash is not banned");
             assertFalse(detector.isFake("ffffffffffffffffffffffffffffffff", "movie.mp4.exe", 1000));
+
+            new AdminInterface(null, null, new FileIndex(db), new IPFilter(), detector).handleCommand("unban Some Bad File.avi");
+            assertTrue(detector.bannedNames().isEmpty());
+            assertTrue(db.loadBannedNames().isEmpty());
         }
     }
 
     @Test
-    void recentBansReturnsOnlyTheNewestRows() throws Exception {
-        String dbPath = tempDir.resolve("db").toString();
-        try (DatabaseManager db = new DatabaseManager(dbPath)) {
-            for (int i = 1; i <= 5; i++) {
-                db.addBannedHash(String.format("%032d", i), "test");
-            }
-            var recent = db.loadRecentBannedHashes(3);
-            assertEquals(3, recent.size());
-            assertTrue(recent.contains(String.format("%032d", 3)));
-            assertTrue(recent.contains(String.format("%032d", 4)));
-            assertTrue(recent.contains(String.format("%032d", 5)));
+    void bannedNamesAreListedTheMostRecentFirst() throws Exception {
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("db").toString())) {
+            db.addBannedName("first.avi", "test");
+            Thread.sleep(5);
+            db.addBannedName("second.avi", null);
+            var names = db.loadBannedNames();
+            assertEquals(List.of("second.avi", "first.avi"), names.stream().map(DatabaseManager.BannedName::name).toList());
+            assertEquals("test", names.get(1).reason());
         }
     }
 }

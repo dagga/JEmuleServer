@@ -83,7 +83,6 @@ class KadNodeTest {
             assertEquals(3000, node.getSearchBridge().getSearchTimeoutMs());
             assertFalse(node.getSearchBridge().isAutoIngestToH2());
             assertEquals(2, node.getSearchBridge().getMinSourcesForIngest());
-            assertNotNull(node.getHashBanService());
             assertEquals(KadBootstrapManager.Status.DISCONNECTED, node.status());
             assertFalse(node.isRunning());
         }

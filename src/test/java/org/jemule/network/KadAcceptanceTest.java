@@ -233,7 +233,7 @@ class KadAcceptanceTest {
     }
 
     @Test
-    void tc05_illicitKadFileIsNeverSentAndItsHashIsBannedForGood() throws Exception {
+    void tc05_illicitKadFileIsNeverSentNorStored() throws Exception {
         String clean = "cccccccccccccccccccccccccccccccc";
         String illicit = "dddddddddddddddddddddddddddddddd";
         peerCatalog.put(KadId.fromKeyword("collection"), List.of(
@@ -243,16 +243,10 @@ class KadAcceptanceTest {
 
         SearchAnswer a = search(client("10.1.1.1"), "collection");
         assertEquals(List.of(clean), hashes(a), "the illicit file never reaches the client");
-        await(() -> db.loadBannedHashes().contains(illicit.toUpperCase()), "the illicit hash is recorded in 'banned_hashes'");
+        await(() -> storedHashes().contains(clean), "the clean file is stored");
         assertFalse(storedHashes().contains(illicit), "the illicit file is never stored");
         assertFalse(index.contains(illicit), "the illicit file is never indexed");
         assertEquals(1, node.getSearchBridge().getIllicitFilesBlocked());
-
-        // The banned hash stays rejected, even announced later under an innocent name
-        peerCatalog.put(KadId.fromKeyword("garden"), List.of(kadFile(illicit, "garden party.avi", 5)));
-        SearchAnswer later = search(client("10.2.2.2"), "garden");
-        assertTrue(later.results().isEmpty(), "a banned hash is rejected whatever its name");
-        assertFalse(index.contains(illicit));
     }
 
     @Test

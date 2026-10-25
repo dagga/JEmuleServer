@@ -22,7 +22,6 @@ import org.jemule.core.DatabaseManager;
 import org.jemule.core.FileIndex;
 import org.jemule.core.FileSource;
 import org.jemule.core.IngestionExecutor;
-import org.jemule.core.Md4Set;
 import org.jemule.core.RecentQueries;
 import org.jemule.core.ServerThreads;
 import org.jemule.core.FileMetadata;
@@ -45,7 +44,6 @@ import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -111,8 +109,6 @@ public class KadSearchBridge implements AutoCloseable {
     private final ConcurrentHashMap<KadId, ClosestNodes> closestNodes = new ConcurrentHashMap<>();
     /** Source searches in progress, by file hash: their answers are read as sources, never ingested as files. */
     private final ConcurrentHashMap<KadId, SourceSession> sourceSessions = new ConcurrentHashMap<>();
-    /** The banned hashes of the FakeFileDetector: one set in memory for both. */
-    private final Md4Set bannedHashes;
     private final List<IllicitFileListener> illicitListeners = new CopyOnWriteArrayList<>();
 
     private final AtomicLong searchesForked = new AtomicLong(0);
@@ -256,8 +252,6 @@ public class KadSearchBridge implements AutoCloseable {
         this.udpService = Objects.requireNonNull(udpService, "udpService cannot be null");
         this.abuseFilter = abuseFilter != null ? abuseFilter : ChildAbuseFilter.defaults();
         this.fakeDetector = fakeDetector != null ? fakeDetector : new FakeFileDetector();
-        Md4Set shared = this.fakeDetector.bannedHashes();
-        this.bannedHashes = shared != null ? shared : new Md4Set(); // null for a mocked detector
         this.fileIndex = fileIndex;
         this.databaseManager = databaseManager;
         this.alphaNodes = Math.max(1, alphaNodes);
@@ -710,25 +704,15 @@ public class KadSearchBridge implements AutoCloseable {
             return false;
         }
 
-        String upperHash = file.hash().toUpperCase(Locale.ROOT);
-
-        // 1. Check banned hashes
-        if (bannedHashes.contains(upperHash)) {
-            log.debug("Kad file rejected (blacklisted hash): {} ({})", file.name(), file.hash());
-            illicitFilesBlocked.incrementAndGet();
-            return false;
-        }
-
-        // 2. ChildAbuseFilter screening
+        // 1. ChildAbuseFilter screening (the same files come back with every search: debug only)
         if (abuseFilter != null && abuseFilter.matches(file.name())) {
-            log.warn("Kad file rejected by ChildAbuseFilter: {} ({})", file.name(), file.hash());
+            log.debug("Kad file rejected by ChildAbuseFilter: {} ({})", file.name(), file.hash());
             illicitFilesBlocked.incrementAndGet();
-            bannedHashes.add(upperHash);
             notifyIllicitFile(file, ChildAbuseFilter.BAN_REASON);
             return false;
         }
 
-        // 3. FakeFileDetector screening
+        // 2. FakeFileDetector screening: banned names, then the heuristics
         if (fakeDetector != null && fakeDetector.isFake(file.hash(), file.name(), file.size())) {
             log.info("Kad file rejected by FakeFileDetector: {} ({})", file.name(), file.hash());
             illicitFilesBlocked.incrementAndGet();
@@ -746,16 +730,6 @@ public class KadSearchBridge implements AutoCloseable {
                 log.error("Error notifying illicit file listener for {}: {}", file.hash(), e.getMessage());
             }
         }
-    }
-
-    public void banHash(String hash) {
-        if (hash != null) {
-            bannedHashes.add(hash.toUpperCase(Locale.ROOT));
-        }
-    }
-
-    public boolean isHashBanned(String hash) {
-        return hash != null && bannedHashes.contains(hash.toUpperCase(Locale.ROOT));
     }
 
     public void addIllicitFileListener(IllicitFileListener listener) {

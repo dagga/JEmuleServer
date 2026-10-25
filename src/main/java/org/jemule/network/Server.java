@@ -265,9 +265,9 @@ public class Server {
             );
             this.fakeFileDetector.setDatabaseManager(dbMgr);
             // Bans apply even when the fake file heuristics are disabled
-            List<String> banned = dbMgr.loadBannedHashes();
-            banned.forEach(this.fakeFileDetector::addBannedHash);
-            log.info("Loaded {} banned hashes from database", banned.size());
+            List<DatabaseManager.BannedName> banned = dbMgr.loadBannedNames();
+            banned.forEach(n -> this.fakeFileDetector.addBannedName(n.name()));
+            log.info("Loaded {} banned file names from database", banned.size());
         } catch (SQLException e) {
             log.error("Failed to initialize database: {}", e.getMessage());
         }

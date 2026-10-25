@@ -1,18 +1,21 @@
 package org.jemule.security;
 
 import org.jemule.core.DatabaseManager;
-import org.jemule.core.Md4Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.jemule.core.Keywords;
 
+import java.util.List;
+import java.util.Locale;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
 
 /**
- * Heuristics-based detector for fake or malicious files. A file matching a heuristic is rejected, but its hash is
- * not banned: a heuristic can be wrong, and the same file must be accepted under a legitimate name. Only the
- * hashes explicitly banned stay rejected under any name.
+ * Heuristics-based detector for fake or malicious files, and the banned file names. A file matching a heuristic is
+ * rejected without being banned: a heuristic can be wrong. A banned name is rejected for good, whatever the hash and
+ * even with the heuristics disabled; names are compared in lower case, without the spaces around them.
  */
 public class FakeFileDetector {
     private static final Logger log = LoggerFactory.getLogger(FakeFileDetector.class);
@@ -25,8 +28,11 @@ public class FakeFileDetector {
             "password list", "account hacker", "credit card", "cheat engine", "private video"
     };
 
-    // Written by the admin console and read by every client thread; shared with the Kad search bridge
-    private final Md4Set bannedHashes = new Md4Set();
+    /** Longest banned name: the files table keeps names of up to 1024 characters. */
+    public static final int MAX_NAME_LENGTH = 1024;
+
+    // Written by the admin console and read by every client thread, the Kad and the server search bridges
+    private final Set<String> bannedNames = ConcurrentHashMap.newKeySet();
     private volatile DatabaseManager db;
     private volatile boolean enabled = true;
 
@@ -51,11 +57,9 @@ public class FakeFileDetector {
      * @return True if the file is detected as fake/malicious.
      */
     public boolean isFake(String hash, String name, long size) {
-        String upperHash = hash.toUpperCase();
-
-        // 1. Check Blacklist: banned hashes are rejected even when the heuristics are disabled
-        if (bannedHashes.contains(upperHash)) {
-            log.debug("File rejected: Hash {} is blacklisted", hash);
+        // 1. Banned names are rejected even when the heuristics are disabled
+        if (isBanned(name)) {
+            log.debug("File rejected: name '{}' is banned (hash={})", name, hash);
             return true;
         }
         if (!enabled) return false;
@@ -108,43 +112,64 @@ public class FakeFileDetector {
         return count;
     }
 
-    /** Bans a hash for good: kept in memory and stored in the database, so that the ban survives a restart. */
-    public void ban(String hash, String reason) {
-        addBannedHash(hash);
+    /** A name as compared and stored: lower case, without the spaces around it; null when blank or too long. */
+    public static String normalize(String name) {
+        if (name == null) return null;
+        String normalized = name.strip().toLowerCase(Locale.ROOT);
+        return normalized.isEmpty() || normalized.length() > MAX_NAME_LENGTH ? null : normalized;
+    }
+
+    /**
+     * Bans a file name for good: kept in memory and stored in the database, so that the ban survives a restart.
+     *
+     * @return the name as banned, null when the name is blank or too long
+     */
+    public String ban(String name, String reason) {
+        String normalized = normalize(name);
+        if (normalized == null) return null;
+        bannedNames.add(normalized);
         DatabaseManager database = db;
         if (database != null) {
-            database.addBannedHash(hash.toUpperCase(), reason.length() > 255 ? reason.substring(0, 255) : reason);
+            database.addBannedName(normalized, reason == null || reason.length() <= 255 ? reason : reason.substring(0, 255));
         }
+        return normalized;
     }
 
-    /** The banned hashes, shared by the components that check them (one copy in memory). */
-    public Md4Set bannedHashes() {
-        return bannedHashes;
+    /** Loads a name banned earlier (from the database), without storing it again. */
+    public void addBannedName(String name) {
+        String normalized = normalize(name);
+        if (normalized != null) bannedNames.add(normalized);
     }
 
-    public void addBannedHash(String hash) {
-        if (hash != null && hash.length() == 32) {
-            bannedHashes.add(hash.toUpperCase());
-        }
-    }
-
-    /** Removes a ban, in memory and in the database. Returns true when the hash was banned. */
-    public boolean unban(String hash) {
-        if (hash == null || hash.length() != 32) return false;
-        boolean removed = bannedHashes.remove(hash.toUpperCase());
+    /** Removes a ban, in memory and in the database. Returns true when the name was banned. */
+    public boolean unban(String name) {
+        String normalized = normalize(name);
+        if (normalized == null) return false;
+        boolean removed = bannedNames.remove(normalized);
         DatabaseManager database = db;
         if (database != null) {
-            database.removeBannedHash(hash.toUpperCase());
+            database.removeBannedName(normalized);
         }
         return removed;
     }
 
-    /** True when the hash is banned (independently of the heuristics switch). */
-    public boolean isBanned(String hash) {
-        return hash != null && hash.length() == 32 && bannedHashes.contains(hash.toUpperCase());
+    /** True when the name is banned (independently of the heuristics switch). */
+    public boolean isBanned(String name) {
+        if (bannedNames.isEmpty()) return false;
+        String normalized = normalize(name);
+        return normalized != null && bannedNames.contains(normalized);
     }
-    
+
+    /** The banned names, sorted. */
+    public List<String> bannedNames() {
+        return bannedNames.stream().sorted().toList();
+    }
+
+    public int bannedNameCount() {
+        return bannedNames.size();
+    }
+
     public void clearBlacklist() {
-        bannedHashes.clear();
+        bannedNames.clear();
     }
 }

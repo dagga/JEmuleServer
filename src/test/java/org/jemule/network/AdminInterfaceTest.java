@@ -52,18 +52,19 @@ public class AdminInterfaceTest {
 
     @Test
     void testBanCommand() {
-        String hash = "1234567890ABCDEF1234567890ABCDEF";
-        admin.handleCommand("ban " + hash + " SpamFile");
-        verify(fakeFileDetector).ban(hash, "Manual ban: SpamFile");
-        verify(fileIndex).removeFile(hash);
-        assertTrue(outContent.toString().contains("added to blacklist"));
+        org.mockito.Mockito.when(fakeFileDetector.ban("Spam File.avi", "Admin console")).thenReturn("spam file.avi");
+        org.mockito.Mockito.when(fileIndex.removeFilesNamed("spam file.avi")).thenReturn(2);
+        admin.handleCommand("ban Spam File.avi");
+        verify(fakeFileDetector).ban("Spam File.avi", "Admin console");
+        verify(fileIndex).removeFilesNamed("spam file.avi");
+        assertTrue(outContent.toString().contains("Name 'spam file.avi' banned; 2 file(s) removed"), outContent.toString());
     }
 
     @Test
-    void testBanRejectsInvalidHash() {
-        admin.handleCommand("ban 1234567890ABCDEF1234567890ABCDEZ");
+    void testBanWithoutName() {
+        admin.handleCommand("ban   ");
         verifyNoInteractions(fakeFileDetector, fileIndex);
-        assertTrue(outContent.toString().contains("Error"));
+        assertTrue(outContent.toString().contains("Usage: ban <file name>"));
     }
 
     @Test
@@ -176,7 +177,6 @@ public class AdminInterfaceTest {
             assertTrue(out.contains("Searches forked: 0"), out);
             assertTrue(out.contains("Results received: 0"), out);
             assertTrue(out.contains("Files ingested: 0"), out);
-            assertTrue(out.contains("Hashes banned: 0"), out);
 
             outContent.reset();
             admin.handleCommand("kad unknown");
@@ -300,13 +300,12 @@ public class AdminInterfaceTest {
     }
 
     @Test
-    void unbanRemovesAHashFromTheBlacklist() {
-        String hash = "1234567890ABCDEF1234567890ABCDEF";
-        org.mockito.Mockito.when(fakeFileDetector.unban(hash)).thenReturn(true);
+    void unbanRemovesABannedName() {
+        org.mockito.Mockito.when(fakeFileDetector.unban("Spam File.avi")).thenReturn(true);
 
-        admin.handleCommand("unban " + hash);
+        admin.handleCommand("unban Spam File.avi");
 
-        verify(fakeFileDetector).unban(hash);
-        assertTrue(outContent.toString().contains("removed from the blacklist"), outContent.toString());
+        verify(fakeFileDetector).unban("Spam File.avi");
+        assertTrue(outContent.toString().contains("Name 'spam file.avi' no longer banned"), outContent.toString());
     }
 }

@@ -280,12 +280,11 @@ class AdminWebPanelTest {
     }
 
     @Test
-    void sameOriginCanUnbanAHash() throws Exception {
+    void sameOriginCanUnbanAName() throws Exception {
         Server server = mock(Server.class);
         FakeFileDetector detector = mock(FakeFileDetector.class);
         when(server.getFakeFileDetector()).thenReturn(detector);
-        String hash = "0123456789ABCDEF0123456789ABCDEF";
-        when(detector.unban(hash)).thenReturn(true);
+        when(detector.unban("Bad File.avi")).thenReturn(true);
 
         try (AdminWebPanel panel = new AdminWebPanel(server)) {
             panel.start(0);
@@ -293,23 +292,24 @@ class AdminWebPanelTest {
             HttpRequest request = HttpRequest.newBuilder(uri)
                     .header("Origin", "http://127.0.0.1:" + panel.port())
                     .header("Content-Type", "application/x-www-form-urlencoded")
-                    .POST(HttpRequest.BodyPublishers.ofString("hash=" + hash))
+                    .POST(HttpRequest.BodyPublishers.ofString("name=Bad+File.avi"))
                     .build();
             HttpResponse<String> response = HttpClient.newHttpClient().send(request, HttpResponse.BodyHandlers.ofString());
             assertEquals(200, response.statusCode());
-            assertTrue(response.body().contains("\"unbanned\":\"" + hash + "\""), response.body());
-            verify(detector).unban(hash);
+            assertTrue(response.body().contains("\"unbanned\":\"bad file.avi\""), response.body());
+            assertTrue(response.body().contains("\"wasBanned\":true"), response.body());
+            verify(detector).unban("Bad File.avi");
         }
     }
 
     @Test
-    void sameOriginCanPersistentlyBanAValidFileHash() throws Exception {
+    void sameOriginCanPersistentlyBanAFileNameAndExportTheBannedNames() throws Exception {
         Server server = mock(Server.class);
-        FakeFileDetector detector = mock(FakeFileDetector.class);
+        FakeFileDetector detector = new FakeFileDetector();
         FileIndex index = mock(FileIndex.class);
         when(server.getFakeFileDetector()).thenReturn(detector);
         when(server.getFileIndex()).thenReturn(index);
-        String hash = "0123456789ABCDEF0123456789ABCDEF";
+        when(index.removeFilesNamed("bad file.avi")).thenReturn(3);
 
         try (AdminWebPanel panel = new AdminWebPanel(server)) {
             panel.start(0);
@@ -317,13 +317,27 @@ class AdminWebPanelTest {
             HttpRequest request = HttpRequest.newBuilder(uri)
                     .header("Origin", "http://127.0.0.1:" + panel.port())
                     .header("Content-Type", "application/x-www-form-urlencoded")
-                    .POST(HttpRequest.BodyPublishers.ofString("hash=" + hash + "&reason=test"))
+                    .POST(HttpRequest.BodyPublishers.ofString("name=+Bad+File.avi&reason=test"))
                     .build();
             HttpResponse<String> response = HttpClient.newHttpClient().send(request, HttpResponse.BodyHandlers.ofString());
             assertEquals(200, response.statusCode());
-            assertTrue(response.body().contains("\"banned\":\"" + hash + "\""), response.body());
-            verify(detector).ban(hash, "Admin web panel: test");
-            verify(index).removeFile(hash);
+            assertTrue(response.body().contains("\"banned\":\"bad file.avi\""), response.body());
+            assertTrue(response.body().contains("\"filesRemoved\":3"), response.body());
+            verify(index).removeFilesNamed("bad file.avi");
+            detector.ban("Another.mp3", "test");
+
+            HttpResponse<String> export = HttpClient.newHttpClient().send(HttpRequest.newBuilder(
+                    URI.create("http://127.0.0.1:" + panel.port() + "/api/blocks/export")).build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, export.statusCode());
+            assertEquals("another.mp3\nbad file.avi\n", export.body());
+            assertTrue(export.headers().firstValue("Content-Disposition").orElse("").contains("banned-names.txt"));
+
+            HttpResponse<String> blank = HttpClient.newHttpClient().send(HttpRequest.newBuilder(uri)
+                    .header("Origin", "http://127.0.0.1:" + panel.port())
+                    .header("Content-Type", "application/x-www-form-urlencoded")
+                    .POST(HttpRequest.BodyPublishers.ofString("name=+++")).build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(400, blank.statusCode());
         }
     }
 
