@@ -1,6 +1,6 @@
 # JEmuleServer
 
-JEmuleServer is an eMule server written in Java (version 1.2.24).
+JEmuleServer is an eMule server written in Java (version 1.2.25).
 
 Downloads (installers and JAR) are on the [releases page](https://github.com/dagga/JEmuleServer/releases); the changes
 of each version are described in `doc/release-notes-v<version>.md` (latest: [1.2.9](doc/release-notes-v1.2.9.md)).
@@ -27,7 +27,7 @@ Building requires a JDK 21 (Gradle toolchain). To compile the project and genera
 ./gradlew build
 ```
 
-The JAR file will be generated in `build/libs/JEmuleServer-1.2.24.jar`.
+The JAR file will be generated in `build/libs/JEmuleServer-1.2.25.jar`.
 
 ## Installation from the release packages
 
@@ -68,7 +68,7 @@ the JAR for IPv6.
 Once the project is compiled, you can start the server with the following command:
 
 ```bash
-java -XX:MaxRAMPercentage=75 -XX:ThreadPriorityPolicy=1 --add-modules=jdk.httpserver -jar build/libs/JEmuleServer-1.2.24.jar [config_file] [port]
+java -XX:MaxRAMPercentage=75 -XX:ThreadPriorityPolicy=1 --add-modules=jdk.httpserver -jar build/libs/JEmuleServer-1.2.25.jar [config_file] [port]
 ```
 
 - `-XX:ThreadPriorityPolicy=1`: on Linux, the JVM ignores thread priorities without it. The server runs its threads
@@ -177,8 +177,9 @@ of at least `-Xmx` plus 250 MB. The Overview of the web panel shows the heap aga
 `-XX:MaxRAMPercentage=75` (passed by the .deb and .rpm launchers) is a simpler alternative, which leaves a larger
 young generation.
 
-The startup log gives the maximum heap and warns when it is too small for the indexed files (about 160 MB plus 360
-bytes per file); the Status view of the web panel shows `heapUsedMb` and `heapMaxMb`. An OutOfMemoryError makes H2
+The startup log gives the maximum heap and warns when its old generation is too small for the indexed files (about
+250 bytes of live heap per file, which the heap guard lets fill 80% of it), with the number of files the guard will
+let in; the Status view of the web panel shows `heapUsedMb` and `heapMaxMb`. An OutOfMemoryError makes H2
 close the database: the server then reopens it at the next database operation and logs it, so that writes resume
 without a restart (`databaseReopens` in the Status view), but the heap must be enlarged.
 
