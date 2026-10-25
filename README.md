@@ -327,10 +327,10 @@ Searches are also forked to the verified eD2K servers (UDP global search). A ser
 30 matches only, and UDP has no "More" request: when a server returns a full answer, the search is repeated on it once
 per file type (at most 4 times per minute and per server), which returns about five times as many files.
 
-### Index update from the eD2K servers
+### Index update from eD2K index peers
 
-With `serverIndexUpdateEnabled=true` (off by default), the server logs in to each verified eD2K server as an eMule
-client (TCP, LowID) and searches there, to index the files these servers know. A TCP search returns up to 300 files,
+With `serverIndexUpdateEnabled=true` (off by default), the server logs in to each eD2K index peer (a verified eD2K
+server) as an eMule client (TCP, LowID) and searches there, to index the files these peers know. A TCP search returns up to 300 files,
 where a UDP global search returns about 10.
 
 - **What is searched**: the words indexed under the most files, and the keywords of the clients' searches, without

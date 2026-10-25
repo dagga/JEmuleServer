@@ -52,11 +52,11 @@ import java.util.function.Supplier;
 import java.util.random.RandomGenerator;
 
 /**
- * Updates the index from the verified eD2K servers: logged in to each of them as a client, it searches there the
- * words its index holds most often, and the keywords of the clients' searches without their filters, then indexes
- * the files found. A search answered with a full page is searched again per file type, and a full type per size
- * (1–900 MB, 900–2000 MB, above 2000 MB). Each server has its own session, thread and {@link UpdateSchedule}; Kad is
- * never searched this way.
+ * Updates the index from the eD2K index peers (the verified eD2K servers): logged in to each of them as a client,
+ * it searches there the words its index holds most often, and the keywords of the clients' searches without their
+ * filters, then indexes the files found. A search answered with a full page is searched again per file type, and a
+ * full type per size (1–900 MB, 900–2000 MB, above 2000 MB). Each peer has its own session, thread and
+ * {@link UpdateSchedule}; Kad is never searched this way.
  */
 public final class ServerIndexUpdater implements AutoCloseable {
     private static final Logger log = LoggerFactory.getLogger(ServerIndexUpdater.class);

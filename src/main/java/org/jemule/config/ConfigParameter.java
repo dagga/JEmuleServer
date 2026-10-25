@@ -102,7 +102,7 @@ public enum ConfigParameter {
     KAD_SOURCE_SEARCHES_PER_MINUTE("kadSourceSearchesPerMinute", Type.INTEGER, Scope.HOT, 1, 600,
             "Source search: new searches per minute for all clients at most (adaptive quota)"),
     SERVER_INDEX_UPDATE_ENABLED("serverIndexUpdateEnabled", Type.BOOLEAN, Scope.HOT, 0, 0,
-            "Index update from the verified eD2K servers"),
+            "Index update from the eD2K index peers"),
     SERVER_INDEX_UPDATE_MAX_PER_HOUR("serverIndexUpdateMaxPerHour", Type.INTEGER, Scope.HOT, 1, 120,
             "Index update: searches per server and per hour at most"),
     SERVER_INDEX_UPDATE_MAX_PER_DAY("serverIndexUpdateMaxPerDay", Type.INTEGER, Scope.HOT, 1, 2000,

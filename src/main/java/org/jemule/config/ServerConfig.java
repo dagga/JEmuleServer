@@ -46,7 +46,7 @@ import java.util.Properties;
  * @param adminAllowedMacs          Allowed MAC addresses (comma-separated, empty: disabled).
  * @param offerFiles                OFFERFILES v1 publication pace announced to the clients asking for it, and enforced.
  * @param kadSources                Kad source searches started by the clients' OP_GETSOURCES.
- * @param serverIndexUpdate         Index update from the verified eD2K servers.
+ * @param serverIndexUpdate         Index update from the eD2K index peers.
  */
 public record ServerConfig(
         int port,
@@ -112,7 +112,7 @@ public record ServerConfig(
         // Kad source searches for the clients' OP_GETSOURCES (null means KadSourcesConfig.DEFAULT)
         KadSourcesConfig kadSources,
 
-        // Index update from the verified eD2K servers (null means ServerIndexUpdateConfig.DEFAULT)
+        // Index update from the eD2K index peers (null means ServerIndexUpdateConfig.DEFAULT)
         ServerIndexUpdateConfig serverIndexUpdate
 ) {
     /**

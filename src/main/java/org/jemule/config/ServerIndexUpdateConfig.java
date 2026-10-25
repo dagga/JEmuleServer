@@ -22,10 +22,10 @@ package org.jemule.config;
 import java.util.Properties;
 
 /**
- * Index update from the verified eD2K servers: the server logs in to each of them as a client and searches there the
+ * Index update from the eD2K index peers (the verified eD2K servers): the server logs in to each of them as a client and searches there the
  * words of its index, to index the files they know.
  *
- * @param enabled     Whether the index is updated from the other servers.
+ * @param enabled     Whether the index is updated from the eD2K index peers.
  * @param maxPerHour  Searches per server and per hour at most.
  * @param maxPerDay   Searches per server and per day at most.
  * @param minSources  Sources a file found this way needs to be indexed.

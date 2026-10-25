@@ -73,7 +73,7 @@ public class Server {
     private final ServerSearchBridge serverSearchBridge;
     /** Source searches on the verified eD2K servers, beside Kad, for the clients' OP_GETSOURCES. */
     private final ServerSourceSearcher serverSourceSearcher;
-    /** Index update from the verified eD2K servers (off unless serverIndexUpdateEnabled). */
+    /** Index update from the eD2K index peers (off unless serverIndexUpdateEnabled). */
     private final ServerIndexUpdater serverIndexUpdater;
     private final ClientRegistry registry = new ClientRegistry();
     private final java.util.Set<Socket> clientSockets = java.util.concurrent.ConcurrentHashMap.newKeySet();
@@ -432,7 +432,7 @@ public class Server {
     }
 
     /** The configuration currently in effect, for the admin interfaces of other packages. */
-    /** The index update from the verified eD2K servers. */
+    /** The index update from the eD2K index peers. */
     public ServerIndexUpdater getServerIndexUpdater() {
         return serverIndexUpdater;
     }
