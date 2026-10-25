@@ -122,6 +122,8 @@ public class KadSearchBridge implements AutoCloseable {
     private final AtomicLong filesIngested = new AtomicLong(0);
     private final AtomicLong sourceSearches = new AtomicLong(0);
     private final AtomicLong sourcesReceived = new AtomicLong(0);
+    /** Source requests the Kad flood guard did not send: the node would have dropped them. */
+    private final AtomicLong sourceRequestsRefused = new AtomicLong(0);
 
     /** Indexes and stores the files found, after the searches and client connections (ingestion tier). */
     private volatile IngestionExecutor ingestion = IngestionExecutor.direct();
@@ -416,6 +418,9 @@ public class KadSearchBridge implements AutoCloseable {
                     try {
                         udpService.send(req, contact.address(), contact.udpPort());
                         sent++;
+                    } catch (KadUdpService.FloodLimitException e) {
+                        created.queried.remove(node);
+                        sourceRequestsRefused.incrementAndGet();
                     } catch (IOException e) {
                         created.queried.remove(node);
                         log.debug("Failed to send source search to {}: {}", contact, e.getMessage());
@@ -817,6 +822,11 @@ public class KadSearchBridge implements AutoCloseable {
     /** Sources received from Kad, of any type. */
     public long getSourcesReceived() {
         return sourcesReceived.get();
+    }
+
+    /** Source requests not sent since the start because the node had had its share: Kad pushed back. */
+    public long getSourceRequestsRefused() {
+        return sourceRequestsRefused.get();
     }
 
     public long getFilesIngested() {

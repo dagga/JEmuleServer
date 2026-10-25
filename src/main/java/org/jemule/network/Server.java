@@ -71,6 +71,8 @@ public class Server {
     private volatile ConfigFile configFile;
     private final ServerGossip serverGossip;
     private final ServerSearchBridge serverSearchBridge;
+    /** Source searches on the verified eD2K servers, beside Kad, for the clients' OP_GETSOURCES. */
+    private final ServerSourceSearcher serverSourceSearcher;
     private final ClientRegistry registry = new ClientRegistry();
     private final java.util.Set<Socket> clientSockets = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private final FileIndex fileIndex;
@@ -144,11 +146,22 @@ public class Server {
         if (service == null) {
             synchronized (this) {
                 if (kadSourceService == null) {
+                    // Kad and the verified eD2K servers are asked at once; Kad's sources come first (they carry
+                    // the user hash and crypt options)
                     kadSourceService = new KadSourceService((hash, size) -> {
                         KadSearchBridge bridge = kadSearchBridge;
-                        return bridge == null ? java.util.concurrent.CompletableFuture.completedFuture(java.util.List.of())
-                                : bridge.searchSources(hash, size);
-                    }, registry, ipFilter::isBlocked, this::configSnapshot, System::currentTimeMillis);
+                        java.util.concurrent.CompletableFuture<java.util.List<org.jemule.kad.KadPacket.KadSource>> kad =
+                                bridge == null ? java.util.concurrent.CompletableFuture.completedFuture(java.util.List.of())
+                                        : bridge.searchSources(hash, size);
+                        return kad.thenCombine(serverSourceSearcher.search(hash, size), (fromKad, fromServers) -> {
+                            java.util.List<org.jemule.kad.KadPacket.KadSource> all = new java.util.ArrayList<>(fromKad);
+                            all.addAll(fromServers);
+                            return all;
+                        });
+                    }, registry, ipFilter::isBlocked, this::configSnapshot, System::currentTimeMillis, () -> {
+                        KadSearchBridge bridge = kadSearchBridge;
+                        return bridge == null ? 0 : bridge.getSourceRequestsRefused();
+                    });
                 }
                 service = kadSourceService;
             }
@@ -275,6 +288,8 @@ public class Server {
         }
         this.globalSearchForwarder = new GlobalSearchForwarder(() -> kadSearchBridge, abuseFilter,
                 config.kad().enabled() && config.kad().forkSearchEnabled() && config.kad().forkGlobalSearches());
+        this.serverSourceSearcher = new ServerSourceSearcher(serverGossip::verifiedPeers,
+                () -> boundUdpSockets.get(config.port() + 4));
         this.serverSearchBridge = new ServerSearchBridge(serverGossip::verifiedPeers,
                 () -> boundUdpSockets.get(config.port() + 4), fileIndex, fakeFileDetector);
         this.serverSearchBridge.setIngestionExecutor(ingestion);
@@ -403,6 +418,11 @@ public class Server {
     }
 
     /** The configuration currently in effect, for the admin interfaces of other packages. */
+    /** Counters of the source searches on the other eD2K servers. */
+    public java.util.Map<String, Object> serverSourceStats() {
+        return serverSourceSearcher.stats();
+    }
+
     /** Tells when the heap cannot take more indexed files. */
     public org.jemule.core.HeapGuard getHeapGuard() {
         return heapGuard;
@@ -1107,6 +1127,8 @@ public class Server {
                 reply.serverObfuscated(), publicIp, config.port(), System.currentTimeMillis())) {
             return;
         } else if (serverSearchBridge.handle(reply.address(), reply.port(), recv)) {
+            return;
+        } else if (serverSourceSearcher.handle(reply.address(), reply.port(), recv)) {
             return;
         } else if (opcode == (byte) 0x98 || opcode == (byte) 0x92 || opcode == (byte) 0x90) {
             handleGlobalSearch(reply, opcode, recv);
