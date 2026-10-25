@@ -27,6 +27,7 @@ import org.jemule.core.RecentQueries;
 import org.jemule.core.ServerThreads;
 import org.jemule.core.FileMetadata;
 import org.jemule.core.SearchQuery;
+import org.jemule.network.handler.HandlerUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -695,6 +696,12 @@ public class KadSearchBridge implements AutoCloseable {
      */
     protected boolean acceptFile(FileMetadata file) {
         if (file == null || file.hash() == null) {
+            return false;
+        }
+        // Same name rule as the files published by clients: Kad results may carry empty or oversized names
+        if (!HandlerUtils.isValidFilename(file.name())) {
+            log.debug("Kad file rejected (invalid name, {} chars): {}",
+                    file.name() == null ? 0 : file.name().length(), file.hash());
             return false;
         }
 
