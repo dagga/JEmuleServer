@@ -102,6 +102,18 @@ class GlobalSearchCompatibilityTest {
     }
 
     @Test
+    void aChildAbuseGlobalSearchGetsNoAnswerAndIsNotSearchedOnKad() throws Exception {
+        org.jemule.kad.KadSearchBridge kad = mock(org.jemule.kad.KadSearchBridge.class);
+        server.setKadSearchBridge(kad);
+
+        assertTrue(udpSearch(withHeader(0x98, new SearchTree().keyword("pthc").toBytes())).isEmpty());
+        assertTrue(udpSearch(withHeader(0x98, new SearchTree().and().keyword("linux").keyword("pthc").toBytes())).isEmpty(),
+                "one term is enough, whatever the others");
+        org.mockito.Mockito.verifyNoInteractions(kad);
+        assertEquals(2, server.getFileIndex().childAbuseQueryCount());
+    }
+
+    @Test
     void globSearchReq2() throws Exception {
         assertEquals(1, udpSearch(withHeader(0x92, new SearchTree().keyword("other").toBytes())).size());
     }

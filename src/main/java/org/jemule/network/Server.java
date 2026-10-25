@@ -1231,6 +1231,11 @@ public class Server {
                 }
             }
             query = SearchQuery.parse(buf.slice());
+            if (fileIndex.isChildAbuseQuery(query)) {
+                // No answer, and not searched on Kad
+                log.info("UDP global search from {} refused by the child abuse filter", reply.address().getHostAddress());
+                return;
+            }
             results = fileIndex.searchComplex(query, Math.min(config.maxSearchResults(), MAX_GLOBAL_SEARCH_RESULTS));
         } catch (RuntimeException e) {
             log.debug("Malformed UDP search request from {}: {}", reply.address(), e.getMessage());

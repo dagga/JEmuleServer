@@ -89,4 +89,32 @@ class SearchFanOutTest {
         verify(servers, times(1)).forkSearch(any(SearchQuery.class), any(byte[].class));
         assertEquals(List.of(FROM_SERVERS), hashes(answer));
     }
+
+    @Test
+    void aChildAbuseSearchGetsNoResultAndIsSentNeitherToKadNorToTheServers() throws Exception {
+        index.addFile(new FileMetadata(LOCAL, "stamp collection.avi", 100, "Video"));
+
+        SearchAnswer answer = search(client(), new SearchTree().and().keyword("pthc").keyword("collection").toBytes());
+
+        assertEquals(List.of(), hashes(answer));
+        org.mockito.Mockito.verifyNoInteractions(kad, servers);
+        assertEquals(1, index.childAbuseQueryCount());
+    }
+
+    @Test
+    void aFileMatchingTheFilterNeverReachesTheClientWhateverItsChannel() throws Exception {
+        // Indexed before the keywords were reloaded, or returned by a channel that did not screen it
+        index.addFile(new FileMetadata(LOCAL, "collection 1 pthc.avi", 100, "Video"));
+        index.addFile(new FileMetadata("44444444444444444444444444444444", "collection 2.avi", 100, "Video"));
+        when(kad.forkSearch(any(SearchQuery.class))).thenReturn(CompletableFuture.completedFuture(
+                List.of(FileMetadata.withoutSources(FROM_KAD, "collection 3 pthc.avi", 200, "Video", List.of()))));
+        when(servers.forkSearch(any(SearchQuery.class), any(byte[].class))).thenReturn(CompletableFuture.completedFuture(
+                List.of(FileMetadata.withoutSources(FROM_SERVERS, "collection 4.avi", 300, "Video", List.of()))));
+
+        SearchAnswer answer = search(client(), new SearchTree().keyword("collection").toBytes());
+
+        assertEquals(List.of(FROM_SERVERS, "44444444444444444444444444444444"), hashes(answer),
+                "neither the local file nor the Kad file matching the filter");
+        assertEquals(0, index.childAbuseQueryCount(), "the search itself is clean");
+    }
 }

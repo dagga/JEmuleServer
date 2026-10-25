@@ -87,7 +87,7 @@ public final class GlobalSearchForwarder {
         KadSearchBridge kad = bridge.get();
         if (!enabled || kad == null) return count(Outcome.DISABLED);
         if (query == null || KadSearchTerms.keyword(query) == null) return count(Outcome.NO_KEYWORD);
-        if (abuseFilter != null && abuseFilter.matches(terms(query))) return count(Outcome.CHILD_ABUSE);
+        if (abuseFilter != null && abuseFilter.matches(SearchQuery.terms(query))) return count(Outcome.CHILD_ABUSE);
 
         String key = query.toString().toLowerCase(Locale.ROOT);
         synchronized (this) {
@@ -123,29 +123,6 @@ public final class GlobalSearchForwarder {
             default -> skipped.incrementAndGet();
         }
         return outcome;
-    }
-
-    /** Every term of the query, so that the abuse filter sees the words and the meta tag values. */
-    private static String terms(SearchQuery query) {
-        StringBuilder text = new StringBuilder();
-        appendTerms(query, text);
-        return text.toString();
-    }
-
-    private static void appendTerms(SearchQuery query, StringBuilder text) {
-        switch (query) {
-            case SearchQuery.TermQuery t -> text.append(t.term()).append(' ');
-            case SearchQuery.AndQuery and -> {
-                appendTerms(and.left(), text);
-                appendTerms(and.right(), text);
-            }
-            case SearchQuery.OrQuery or -> {
-                appendTerms(or.left(), text);
-                appendTerms(or.right(), text);
-            }
-            case SearchQuery.NotQuery not -> appendTerms(not.left(), text);
-            case null, default -> { }
-        }
     }
 
     public boolean isEnabled() {
