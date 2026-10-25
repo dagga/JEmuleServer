@@ -362,6 +362,26 @@ class KadSearchBridgeTest {
     }
 
     @Test
+    void testAcceptFileRejectsInvalidNames() {
+        KadId localId = KadId.random();
+        KadRoutingTable table = new KadRoutingTable(localId);
+
+        try (KadUdpService udp = new KadUdpService(0);
+             KadSearchBridge bridge = new KadSearchBridge(table, udp,
+                     ChildAbuseFilter.defaults(), new FakeFileDetector(), 3, 2000)) {
+
+            String hash = "aabbccddeeff00112233445566778899";
+            assertFalse(bridge.acceptFile(new FileMetadata(hash, "", 1000, "Text")));
+            assertFalse(bridge.acceptFile(new FileMetadata(hash, "a".repeat(2000) + ".avi", 1000, "Video")));
+            assertFalse(bridge.acceptFile(new FileMetadata(hash, "bad\nname.avi", 1000, "Video")));
+            assertTrue(bridge.acceptFile(new FileMetadata(hash, "a".repeat(251) + ".avi", 1000, "Video")));
+            assertEquals(0, bridge.getIllicitFilesBlocked());
+        } catch (Exception e) {
+            fail(e);
+        }
+    }
+
+    @Test
     void testAcceptFileAllowsCleanFile() {
         KadId localId = KadId.random();
         KadRoutingTable table = new KadRoutingTable(localId);
