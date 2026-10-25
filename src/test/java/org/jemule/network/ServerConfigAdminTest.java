@@ -54,6 +54,28 @@ class ServerConfigAdminTest {
     }
 
     @Test
+    void aNewMaxFilesAppliesToTheIndexAtOnce() throws Exception {
+        // 1.2.24 kept the maxFiles of the start: raised from 1,200,000 to 3,000,000 with 1,521,140 files indexed,
+        // the index still refused every new file
+        Path file = tempDir.resolve("server.properties");
+        Files.writeString(file, "maxFiles=2\n");
+        Server server = server(file);
+        try {
+            assertTrue(server.updateConfig(Map.of("maxFiles", "2")).success());
+            server.getFileIndex().addFile(new org.jemule.core.FileMetadata("a".repeat(32), "one.avi", 1, "Video"));
+            server.getFileIndex().addFile(new org.jemule.core.FileMetadata("b".repeat(32), "two.avi", 1, "Video"));
+            assertTrue(server.getFileIndex().isFull());
+
+            assertTrue(server.updateConfig(Map.of("maxFiles", "3")).success());
+            assertFalse(server.getFileIndex().isFull(), "the index follows the new maxFiles");
+            assertTrue(server.getFileIndex().addFile(new org.jemule.core.FileMetadata("c".repeat(32), "three.avi", 1,
+                    "Video")) != null);
+        } finally {
+            server.stop();
+        }
+    }
+
+    @Test
     void invalidValueLeavesTheConfigurationUntouched() {
         Server server = server(null);
         try {

@@ -174,23 +174,29 @@ public class Server {
     }
 
     private static final long MB = 1024 * 1024;
-    /** Heap for everything but the index: young generation, Kad, searches, client sessions, H2 cache. */
-    private static final long BASE_HEAP_BYTES = 160 * MB;
-    /** Heap per indexed file measured in production with 1.2.19: 252 MB for 706,165 files, banned hashes included. */
-    private static final long HEAP_BYTES_PER_FILE = 360;
+    /**
+     * Live heap per indexed file, everything included (Kad, clients, H2 cache): 365 MB of old generation for 1,521,140
+     * files in production with 1.2.24.
+     */
+    static final long HEAP_BYTES_PER_FILE = 250;
 
     /**
-     * Warns when the maximum heap is too small for the indexed files. The JVM only takes a quarter of the RAM by
-     * default: on a 1 GB server, that is about 240 MB, and an OutOfMemoryError makes H2 close the database.
+     * Warns when the old generation is too small for the indexed files: the heap guard then refuses new files soon,
+     * or already. The JVM only takes a quarter of the RAM by default, a third of it for the young generation: on a
+     * 1 GB server, about 160 MB of old generation.
      *
+     * @param oldGenBytes size the old generation may grow to, 0 when unknown (the whole heap is counted then)
      * @return the warning, or null if the heap is large enough
      */
-    static String heapWarning(long maxHeapBytes, long files) {
-        long recommended = BASE_HEAP_BYTES + files * HEAP_BYTES_PER_FILE;
-        if (maxHeapBytes >= recommended) return null;
-        return String.format("Heap: %d MB at most for %d indexed files, about %d MB recommended. Start the JVM with "
-                + "-XX:MaxRAMPercentage=75 (or -Xmx) to avoid an OutOfMemoryError, which closes the database",
-                maxHeapBytes / MB, files, recommended / MB);
+    static String heapWarning(long maxHeapBytes, long oldGenBytes, long files) {
+        long old = oldGenBytes > 0 ? oldGenBytes : maxHeapBytes;
+        long needed = (long) (files * HEAP_BYTES_PER_FILE / org.jemule.core.HeapGuard.MAX_LIVE_RATIO);
+        if (old >= needed) return null;
+        long capacity = (long) (old * org.jemule.core.HeapGuard.MAX_LIVE_RATIO / HEAP_BYTES_PER_FILE);
+        long recommended = maxHeapBytes - old + needed;
+        return String.format("Heap: %d MB at most (%d MB of old generation) for %d indexed files: new files are refused "
+                + "beyond about %d files (heap guard). About %d MB of heap recommended: start the JVM with -Xmx (or "
+                + "-XX:MaxRAMPercentage=75)", maxHeapBytes / MB, old / MB, files, capacity, recommended / MB);
     }
 
     /**
@@ -264,10 +270,12 @@ public class Server {
                     config.cbWaitDurationInSeconds()
             );
             this.fakeFileDetector.setDatabaseManager(dbMgr);
-            // Bans apply even when the fake file heuristics are disabled
-            List<DatabaseManager.BannedName> banned = dbMgr.loadBannedNames();
+            // Bans apply even when the fake file heuristics are disabled. The names the child abuse filter rejected
+            // stay in the database: the filter rejects them anyway
+            List<DatabaseManager.BannedName> banned = dbMgr.loadBannedNames(ChildAbuseFilter.BAN_REASON);
             banned.forEach(n -> this.fakeFileDetector.addBannedName(n.name()));
-            log.info("Loaded {} banned file names from database", banned.size());
+            log.info("Loaded {} banned file names from database ({} in all with the child abuse filter's)",
+                    banned.size(), dbMgr.countBannedNames());
         } catch (SQLException e) {
             log.error("Failed to initialize database: {}", e.getMessage());
         }
@@ -278,9 +286,10 @@ public class Server {
         this.fileIndex.setPersistenceExecutor(ingestion);
         // Every channel (clients, Kad, other servers) stops bringing new files at maxFiles or when the heap is full
         this.heapGuard = org.jemule.core.HeapGuard.jvm();
-        this.fileIndex.setCapacity(() -> config.maxFiles(), heapGuard::full);
+        // this.config: the field, which a settings change replaces, not the constructor parameter
+        this.fileIndex.setCapacity(() -> this.config.maxFiles(), heapGuard::full);
         this.metricsHistory = new org.jemule.core.MetricsHistory(db);
-        String heapWarning = heapWarning(Runtime.getRuntime().maxMemory(), fileIndex.fileCount());
+        String heapWarning = heapWarning(Runtime.getRuntime().maxMemory(), heapGuard.maxBytes(), fileIndex.fileCount());
         if (heapWarning != null) {
             log.warn(heapWarning);
         } else {

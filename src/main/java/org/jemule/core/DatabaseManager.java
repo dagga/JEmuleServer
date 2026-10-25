@@ -541,16 +541,38 @@ public class DatabaseManager implements AutoCloseable {
         }
     }
 
-    /** Every banned file name, the most recent first. */
-    public List<BannedName> loadBannedNames() {
+    /**
+     * Records a banned name unless it is already there: a name the child abuse filter rejects again keeps its first
+     * date, and a ban of the administrator keeps its reason.
+     */
+    public void addBannedNameIfAbsent(String name, String reason) {
+        try {
+            locked(() -> {
+                try (PreparedStatement ps = connection.prepareStatement("INSERT INTO banned_names (name, reason) "
+                        + "SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM banned_names WHERE name = ?)")) {
+                    ps.setString(1, name);
+                    ps.setString(2, reason);
+                    ps.setString(3, name);
+                    ps.executeUpdate();
+                }
+                return null;
+            });
+        } catch (Throwable e) {
+            logger.error("Circuit breaker prevented or caught error during addBannedNameIfAbsent: {}", e.getMessage());
+        }
+    }
+
+    /** The banned names whose reason is not {@code excludedReason} (null: all of them), the most recent first. */
+    public List<BannedName> loadBannedNames(String excludedReason) {
         try {
             return locked(() -> {
                 List<BannedName> names = new ArrayList<>();
-                try (Statement stmt = connection.createStatement();
-                     ResultSet rs = stmt.executeQuery(
-                             "SELECT name, reason, added_at FROM banned_names ORDER BY added_at DESC, name")) {
-                    while (rs.next()) {
-                        names.add(new BannedName(rs.getString(1), rs.getString(2), rs.getTimestamp(3)));
+                try (PreparedStatement ps = connection.prepareStatement("SELECT name, reason, added_at FROM banned_names "
+                        + "WHERE ? IS NULL OR reason IS NULL OR reason <> ? ORDER BY added_at DESC, name")) {
+                    ps.setString(1, excludedReason);
+                    ps.setString(2, excludedReason);
+                    try (ResultSet rs = ps.executeQuery()) {
+                        while (rs.next()) names.add(new BannedName(rs.getString(1), rs.getString(2), rs.getTimestamp(3)));
                     }
                 }
                 return names;
@@ -558,6 +580,67 @@ public class DatabaseManager implements AutoCloseable {
         } catch (Throwable e) {
             logger.error("Circuit breaker prevented or caught error during loadBannedNames: {}", e.getMessage());
             return new ArrayList<>();
+        }
+    }
+
+    /** Every banned file name, the most recent first. */
+    public List<BannedName> loadBannedNames() {
+        return loadBannedNames(null);
+    }
+
+    /** The {@code limit} most recently banned names. */
+    public List<BannedName> loadRecentBannedNames(int limit) {
+        try {
+            return locked(() -> {
+                List<BannedName> names = new ArrayList<>(Math.max(0, limit));
+                try (PreparedStatement ps = connection.prepareStatement(
+                        "SELECT name, reason, added_at FROM banned_names ORDER BY added_at DESC, name LIMIT ?")) {
+                    ps.setInt(1, limit);
+                    try (ResultSet rs = ps.executeQuery()) {
+                        while (rs.next()) names.add(new BannedName(rs.getString(1), rs.getString(2), rs.getTimestamp(3)));
+                    }
+                }
+                return names;
+            });
+        } catch (Throwable e) {
+            logger.error("Circuit breaker prevented or caught error during loadRecentBannedNames: {}", e.getMessage());
+            return new ArrayList<>();
+        }
+    }
+
+    /** Up to {@code limit} banned names after {@code after} in name order (null: from the first). */
+    public List<String> bannedNamesAfter(String after, int limit) {
+        try {
+            return locked(() -> {
+                List<String> names = new ArrayList<>(Math.max(0, limit));
+                try (PreparedStatement ps = connection.prepareStatement(
+                        "SELECT name FROM banned_names WHERE ? IS NULL OR name > ? ORDER BY name LIMIT ?")) {
+                    ps.setString(1, after);
+                    ps.setString(2, after);
+                    ps.setInt(3, limit);
+                    try (ResultSet rs = ps.executeQuery()) {
+                        while (rs.next()) names.add(rs.getString(1));
+                    }
+                }
+                return names;
+            });
+        } catch (Throwable e) {
+            logger.error("Circuit breaker prevented or caught error during bannedNamesAfter: {}", e.getMessage());
+            return new ArrayList<>();
+        }
+    }
+
+    public long countBannedNames() {
+        try {
+            return locked(() -> {
+                try (Statement stmt = connection.createStatement();
+                     ResultSet rs = stmt.executeQuery("SELECT COUNT(*) FROM banned_names")) {
+                    return rs.next() ? rs.getLong(1) : 0L;
+                }
+            });
+        } catch (Throwable e) {
+            logger.error("Circuit breaker prevented or caught error during countBannedNames: {}", e.getMessage());
+            return 0;
         }
     }
 

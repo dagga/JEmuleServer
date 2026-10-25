@@ -342,6 +342,28 @@ class AdminWebPanelTest {
     }
 
     @Test
+    void theExportStreamsEveryBannedNameOfTheDatabase(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir)
+            throws Exception {
+        Server server = mock(Server.class);
+        try (org.jemule.core.DatabaseManager db = new org.jemule.core.DatabaseManager(dir.resolve("db").toString());
+             AdminWebPanel panel = new AdminWebPanel(server)) {
+            when(server.getDatabaseManager()).thenReturn(db);
+            for (int i = 0; i < 12_000; i++) db.addBannedNameIfAbsent(String.format("name %05d.avi", i), "Child abuse material");
+            db.addBannedName("admin ban.avi", "Admin web panel");
+            panel.start(0);
+
+            HttpResponse<String> export = HttpClient.newHttpClient().send(HttpRequest.newBuilder(
+                    URI.create("http://127.0.0.1:" + panel.port() + "/api/blocks/export")).build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, export.statusCode());
+            String[] lines = export.body().split("\n");
+            assertEquals(12_001, lines.length, "every name, over several pages");
+            assertEquals("admin ban.avi", lines[0]);
+            assertEquals("name 11999.avi", lines[12_000]);
+        }
+    }
+
+    @Test
     void rejectsRequestsFromDeniedIpAddress() throws Exception {
         Server server = mock(Server.class);
         org.jemule.security.AdminAccessFilter filter = new org.jemule.security.AdminAccessFilter("192.168.1.10", "");
