@@ -36,6 +36,8 @@ final class ServerGossip {
     private static final long PROBE_INTERVAL_MILLIS = 60_000;
     private static final long TRANSACTION_TIMEOUT_MILLIS = 10_000;
     private static final int MAX_PEERS = 512;
+    /** A rejected server is probed again after this delay: its answer may have been refused by mistake. */
+    static final long REJECT_RETRY_MILLIS = 6 * 60 * 60_000L;
     private static final SecureRandom RANDOM = new SecureRandom();
     /** OP_GLOBSERVSTATRES up to the maximum users, the first field the plausibility check needs. */
     private static final int MIN_STATUS_LENGTH = 2 + 4 * 4;
@@ -89,7 +91,8 @@ final class ServerGossip {
     private final Map<Endpoint, Pending> pending = new ConcurrentHashMap<>();
     private final Map<Endpoint, VerifiedPeer> verified = new ConcurrentHashMap<>();
     private final Map<Endpoint, Boolean> candidates = new ConcurrentHashMap<>();
-    private final Map<Endpoint, Boolean> rejected = new ConcurrentHashMap<>();
+    /** Rejected servers and when they were rejected. */
+    private final Map<Endpoint, Long> rejected = new ConcurrentHashMap<>();
     private final Map<Endpoint, Integer> missedStatusProbes = new ConcurrentHashMap<>();
     private final Map<Endpoint, ServerSource> sources = new ConcurrentHashMap<>();
     private final Map<Endpoint, ServerStatus> serverStatuses = new ConcurrentHashMap<>();
@@ -185,6 +188,11 @@ final class ServerGossip {
     // poll (maintenance thread) and handle (UDP thread) share the probing state
     synchronized void poll(DatagramSocket socket, long now) {
         expirePending(now);
+        rejected.entrySet().removeIf(entry -> {
+            if (now - entry.getValue() < REJECT_RETRY_MILLIS) return false;
+            if (candidates.size() < MAX_PEERS) candidates.putIfAbsent(entry.getKey(), Boolean.TRUE);
+            return true;
+        });
         if (ipFilter != null) {
             candidates.keySet().removeIf(endpoint -> ipFilter.isBlocked(endpoint.address()));
             verified.keySet().removeIf(endpoint -> ipFilter.isBlocked(endpoint.address()));
@@ -282,9 +290,14 @@ final class ServerGossip {
         Pending transaction = pending.get(endpoint);
         if (transaction == null) return false;
         if (opcode == OP_GLOBSERVSTATRES && transaction.stage() == Stage.STATUS) {
+            if (!hasChallenge(packet, transaction.challenge())) {
+                // The late answer to an earlier probe, e.g. read after a long pause of this server: the answer to
+                // the probe in progress may still come
+                return true;
+            }
             Status status = validateStatus(packet, transaction.challenge());
             if (status == null) {
-                reject(endpoint, "invalid or mismatched server status");
+                reject(endpoint, "invalid server status", now);
                 return true;
             }
             long sentAt = probeSentAt.remove(endpoint);
@@ -299,9 +312,10 @@ final class ServerGossip {
             return true;
         }
         if (opcode == OP_SERVER_DESC_RES && transaction.stage() == Stage.DESCRIPTION) {
+            if (!hasChallenge(packet, transaction.challenge())) return true; // late, as above
             String name = validateDescription(packet, transaction.challenge());
             if (name == null) {
-                reject(endpoint, "invalid, junk, or MLDonkey server description");
+                reject(endpoint, "invalid, junk, or MLDonkey server description", now);
                 return true;
             }
             int remoteKey = extractStatusKey(endpoint);
@@ -317,7 +331,7 @@ final class ServerGossip {
         if (opcode == OP_SERVER_LIST_RES && transaction.stage() == Stage.LIST) {
             List<Endpoint> discovered = decodeServerList(packet);
             if (discovered == null) {
-                reject(endpoint, "malformed server-list response");
+                reject(endpoint, "malformed server-list response", now);
                 return true;
             }
             for (Endpoint discoveredEndpoint : discovered) {
@@ -336,14 +350,14 @@ final class ServerGossip {
         return status == null ? 0 : status.udpKey();
     }
 
-    private void reject(Endpoint endpoint, String reason) {
+    private void reject(Endpoint endpoint, String reason, long now) {
         pending.remove(endpoint);
         verified.remove(endpoint);
         serverStatuses.remove(endpoint);
         probeSentAt.remove(endpoint);
         candidates.remove(endpoint);
         if (rejected.size() >= MAX_PEERS) rejected.clear();
-        rejected.put(endpoint, Boolean.TRUE);
+        rejected.put(endpoint, now);
         System.getLogger(ServerGossip.class.getName()).log(System.Logger.Level.WARNING,
                 "Rejected server peer {0}:{1}: {2}", endpoint.address().getHostAddress(), endpoint.tcpPort(), reason);
     }
@@ -375,6 +389,12 @@ final class ServerGossip {
             data = ServerObfuscation.encode(data, peer.udpKey());
         }
         send(socket, endpoint, data);
+    }
+
+    /** True when the answer starts with {@code challenge}, the one of the request in progress. */
+    private static boolean hasChallenge(byte[] packet, int challenge) {
+        return packet.length >= 6
+                && ByteBuffer.wrap(packet, 2, 4).order(ByteOrder.LITTLE_ENDIAN).getInt() == challenge;
     }
 
     /**
