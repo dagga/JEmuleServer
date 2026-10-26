@@ -276,6 +276,8 @@ public final class ServerIndexUpdater implements AutoCloseable {
         private volatile Thread thread;
         private volatile boolean stopped;
         private volatile String state = "waiting";
+        /** Time and cause of the last incident, for the admin panel. */
+        private volatile String lastIncident = "";
 
         Worker(ServerGossip.Endpoint endpoint) {
             this.endpoint = endpoint;
@@ -392,8 +394,14 @@ public final class ServerIndexUpdater implements AutoCloseable {
             if (search.type() != null) refinements.incrementAndGet();
             try {
                 answer = session.search(search.tree());
+            } catch (ServerUpdateSession.WarningException e) {
+                incident("warning: " + e.getMessage());
+                return;
+            } catch (java.net.SocketTimeoutException e) {
+                incident("no answer within " + ANSWER_TIMEOUT / 1000 + " s");
+                return;
             } catch (IOException e) {
-                incident(e.getMessage());
+                incident("session cut: " + e.getMessage());
                 return;
             }
             List<FileMetadata> files = ServerSearchBridge.decodeSearchResult(answer.payload());
@@ -422,6 +430,7 @@ public final class ServerIndexUpdater implements AutoCloseable {
 
         private void incident(String reason) {
             incidents.incrementAndGet();
+            lastIncident = java.time.Instant.ofEpochMilli(clock.getAsLong()) + " " + reason;
             schedule.incident(clock.getAsLong());
             batch.clear();
             closeSession();
@@ -448,6 +457,7 @@ public final class ServerIndexUpdater implements AutoCloseable {
             view.put("state", state);
             view.put("searchesLastDay", schedule.sentLastDay(clock.getAsLong()));
             view.put("incidents", schedule.incidents());
+            view.put("lastIncident", lastIncident);
             view.put("deferred", deferred.size());
             return view;
         }

@@ -56,8 +56,13 @@ final class ServerUpdateSession implements AutoCloseable {
     /** A port nothing listens on: the session is a LowID, the server never connects back. */
     static final int CLIENT_PORT = 4662;
     private static final int MAX_PACKET = 4 * 1024 * 1024;
-    /** A server message about the load or the behaviour of its clients. */
-    private static final Pattern WARNING = Pattern.compile("flood|ban|limit|too many|too fast|spam|abuse");
+    /**
+     * A server message warning this client: flooding, a ban, too many or too fast searches. General words such as
+     * "limit" are not enough: welcome messages say "No traffic limit. No time limit".
+     */
+    private static final Pattern WARNING = Pattern.compile(
+            "flood|\\bbann(ed|ing)\\b|you (are|have been|will be) banned|too many|too fast|slow down|search limit"
+                    + "|limit (reached|exceeded)|exceeded");
 
     /** What a search returned. */
     record Answer(byte[] payload, long millis) {}
@@ -72,7 +77,8 @@ final class ServerUpdateSession implements AutoCloseable {
     private final Socket socket;
     private final InputStream in;
     private final OutputStream out;
-    private boolean searched;
+    /** True once a search was answered: the messages before it (welcome, rules) are not warnings. */
+    private boolean answered;
 
     private ServerUpdateSession(Socket socket) throws IOException {
         this.socket = socket;
@@ -129,19 +135,21 @@ final class ServerUpdateSession implements AutoCloseable {
     Answer search(byte[] tree) throws IOException {
         long start = System.currentTimeMillis();
         send(OP_SEARCHREQUEST, tree);
-        searched = true;
         while (true) {
             Packet packet = read();
             if (packet.opcode() == OP_SEARCHRESULT) {
+                answered = true;
                 return new Answer(packet.data(), System.currentTimeMillis() - start);
             }
-            if (packet.opcode() == OP_SERVERMESSAGE) {
+            if (packet.opcode() == OP_SERVERMESSAGE && answered) {
                 String message = message(packet.data());
-                if (searched && WARNING.matcher(message.toLowerCase(Locale.ROOT)).find()) {
-                    throw new WarningException(message);
-                }
+                if (isWarning(message)) throw new WarningException(message);
             }
         }
+    }
+
+    static boolean isWarning(String message) {
+        return WARNING.matcher(message.toLowerCase(Locale.ROOT)).find();
     }
 
     /** {@code <length 2><text>}. */
