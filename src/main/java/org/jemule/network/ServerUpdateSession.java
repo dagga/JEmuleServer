@@ -36,14 +36,17 @@ import java.util.Locale;
 import java.util.regex.Pattern;
 
 /**
- * A client session on another eD2K server, used by the index update: login as an eMule client (LowID), then
- * searches, one at a time, each answered by one OP_SEARCHRESULT. Synchronous: the thread of the server's update
+ * A client session on another eD2K server, used by the index update and the relay: login as an eMule client
+ * (LowID), then searches, one at a time, each answered by one OP_SEARCHRESULT. Synchronous: the thread using it
  * drives it.
  */
 final class ServerUpdateSession implements AutoCloseable {
     static final byte OP_LOGINREQUEST = 0x01;
     static final byte OP_OFFERFILES = 0x15;
+    static final byte OP_GETSOURCES = 0x19;
+    static final byte OP_FOUNDSOURCES = 0x42;
     static final byte OP_SEARCHREQUEST = 0x16;
+    static final byte OP_QUERY_MORE_RESULT = 0x21;
     static final byte OP_SEARCHRESULT = 0x33;
     static final byte OP_SERVERMESSAGE = 0x38;
     static final byte OP_IDCHANGE = 0x40;
@@ -133,8 +136,40 @@ final class ServerUpdateSession implements AutoCloseable {
      * @throws IOException      when the session is cut or the answer does not come in time
      */
     Answer search(byte[] tree) throws IOException {
+        return request(OP_SEARCHREQUEST, tree);
+    }
+
+    /**
+     * Asks the next results of the last search (the "More" button of eMule) and waits for their OP_SEARCHRESULT.
+     *
+     * @throws WarningException when the server warns about the session instead
+     * @throws IOException      when the session is cut or the answer does not come in time
+     */
+    Answer more() throws IOException {
+        return request(OP_QUERY_MORE_RESULT, new byte[0]);
+    }
+
+    /**
+     * Asks the sources of a file ({@code <hash 16><size 4>}, or {@code <hash 16><0 4><size 8>} above 4 GB) and waits
+     * for the OP_FOUNDSOURCES of that file; another file's late answer is skipped.
+     *
+     * @return {@code <hash 16><count 1>(<ID 4><port 2>)*}
+     * @throws IOException when the session is cut or the answer does not come in time
+     */
+    byte[] sources(byte[] request) throws IOException {
+        send(OP_GETSOURCES, request);
+        while (true) {
+            Packet packet = read();
+            if (packet.opcode() == OP_FOUNDSOURCES && packet.data().length >= 17
+                    && java.util.Arrays.equals(packet.data(), 0, 16, request, 0, 16)) {
+                return packet.data();
+            }
+        }
+    }
+
+    private Answer request(byte opcode, byte[] payload) throws IOException {
         long start = System.currentTimeMillis();
-        send(OP_SEARCHREQUEST, tree);
+        send(opcode, payload);
         while (true) {
             Packet packet = read();
             if (packet.opcode() == OP_SEARCHRESULT) {

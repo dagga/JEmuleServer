@@ -1,6 +1,6 @@
 # JEmuleServer
 
-JEmuleServer is an eMule server written in Java (version 1.2.28).
+JEmuleServer is an eMule server written in Java (version 1.2.29).
 
 Downloads (installers and JAR) are on the [releases page](https://github.com/dagga/JEmuleServer/releases); the changes
 of each version are described in `doc/release-notes-v<version>.md` (latest: [1.2.9](doc/release-notes-v1.2.9.md)).
@@ -27,7 +27,7 @@ Building requires a JDK 25 (Gradle toolchain; Gradle downloads it when the machi
 ./gradlew build
 ```
 
-The JAR file will be generated in `build/libs/JEmuleServer-1.2.28.jar`.
+The JAR file will be generated in `build/libs/JEmuleServer-1.2.29.jar`.
 
 ## Installation from the release packages
 
@@ -69,7 +69,7 @@ Once the project is compiled, you can start the server with the following comman
 client thread blocked in a `synchronized` block holds its carrier thread, which on one CPU stalls every client):
 
 ```bash
-java -XX:MaxRAMPercentage=75 -XX:ThreadPriorityPolicy=1 --add-modules=jdk.httpserver -jar build/libs/JEmuleServer-1.2.28.jar [config_file] [port]
+java -XX:MaxRAMPercentage=75 -XX:ThreadPriorityPolicy=1 --add-modules=jdk.httpserver -jar build/libs/JEmuleServer-1.2.29.jar [config_file] [port]
 ```
 
 - `-XX:ThreadPriorityPolicy=1`: on Linux, the JVM ignores thread priorities without it. The server runs its threads
@@ -378,6 +378,33 @@ too; the Kad sources reach them as ordinary server sources (`OP_FOUNDSOURCES`). 
 Kad, answers no request from other Kad nodes and never relays file data.
 The packet formats, flows and tests are described in [Kademlia](doc/kademlia.md); interoperability with the eMule
 and aMule Kad nodes has not been validated yet.
+
+## Relay server
+
+A server whose index is full can hand over to a larger one, the relay server, and only act as its proxy:
+
+```properties
+# eD2K server (host:TCP-port) that takes over once the index is full (default: empty, no relay)
+relayServer=54.37.74.32:4661
+```
+
+While the index is full (`maxFiles` reached, or the heap guard), with a relay server set:
+
+- **The clients stay connected here.** At login, each client also gets the relay server in an `OP_SERVERLIST`
+  (added to its list when it accepts server lists from servers), without any "server full" message.
+- **Their searches are played on the relay server**, through client sessions of this server there (TCP, LowID, 4 at
+  the same time), with the pages the "More" button brings: up to 900 results per search, which return to the client
+  first, before the local ones; the client waits for them at most 8 seconds, later ones come with "More". The files
+  go through the child abuse filter, the banned names and the fake file detector, like the Kad ones.
+- **Their source requests too**: the relay server's HighID sources of the file follow in a second
+  `OP_FOUNDSOURCES` (its LowID sources are only reachable through its own callbacks).
+- **The UDP global searches of other servers' clients** get the relay server's first page after the local results
+  (100 files at most in all), except those sent by the relay server itself, which would loop between the two servers.
+- A relay server that cannot be reached, or warns, is left alone for 30 seconds: the requests stay local meanwhile.
+
+The relay server needs nothing special; list it in `serverPeers` too, so that it is searched and asked for sources
+like the other verified servers when the index has room again. `relayServer` applies at once from the Settings view.
+The Overview shows the relayed searches, results, sources and logins.
 
 ## Administration Interface
 

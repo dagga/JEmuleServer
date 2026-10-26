@@ -117,4 +117,23 @@ class SearchFanOutTest {
                 "neither the local file nor the Kad file matching the filter");
         assertEquals(0, index.childAbuseQueryCount(), "the search itself is clean");
     }
+
+    @Test
+    void aFullServerAnswersWithTheRelayServerResultsFirst() throws Exception {
+        String fromRelay = "44444444444444444444444444444444";
+        index.addFile(new FileMetadata(LOCAL, "ubuntu local.iso", 100, "Iso"));
+        ServerRelay relay = mock(ServerRelay.class);
+        when(relay.forkSearch(any(byte[].class), eq(ServerRelay.MAX_PAGES))).thenReturn(CompletableFuture.completedFuture(
+                List.of(FileMetadata.withoutSources(fromRelay, "ubuntu relay.iso", 400, "Iso", List.of()),
+                        FileMetadata.withoutSources(LOCAL, "ubuntu local.iso", 100, "Iso", List.of()))));
+        when(kad.forkSearch(any(SearchQuery.class))).thenReturn(CompletableFuture.completedFuture(List.of()));
+        when(servers.forkSearch(any(SearchQuery.class), any(byte[].class))).thenReturn(CompletableFuture.completedFuture(List.of()));
+        FakeContext ctx = client();
+        ctx.setServerRelay(relay);
+
+        SearchAnswer answer = search(ctx, new SearchTree().keyword("ubuntu").toBytes());
+
+        assertEquals(List.of(fromRelay.toUpperCase(), LOCAL), answer.results().stream().map(r -> r.hash().toUpperCase()).toList(),
+                "the relay server's results first, each file once");
+    }
 }

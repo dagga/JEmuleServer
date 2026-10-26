@@ -44,6 +44,24 @@ public class SourceHandler {
         byte[] response = obfu ? encodeObfu(hashBytes, answer) : encodePlain(hashBytes, answer);
         byte opcode = obfu ? OpCode.SOURCES_RESULT_OBFU.value : OpCode.FOUND_SOURCES.value;
         new Packet(Packet.PROTOCOL_ED2K, opcode, response).write(out, context.getState().isZlibSupported());
+        relaySources(context, data, hashBytes, obfu, answer);
+    }
+
+    /** Index full: the relay server's HighID sources of the file follow in a second answer. */
+    private static void relaySources(ClientContext context, byte[] request, byte[] hashBytes, boolean obfu,
+                                     List<FoundSource> sent) {
+        org.jemule.network.ServerRelay relay = context.getServerRelay();
+        var relayed = relay == null || relay.isRelayServer(context.getSocket().getInetAddress())
+                ? null : relay.forkSources(request);
+        if (relayed == null) return;
+        int connectionId = context.getState().connectionId();
+        relayed.thenAccept(found -> {
+            List<FoundSource> extra = found.stream().filter(s -> sent.stream().noneMatch(s::sameEndpoint)).toList();
+            if (extra.isEmpty()) return;
+            byte[] payload = obfu ? encodeObfu(hashBytes, extra) : encodePlain(hashBytes, extra);
+            context.getRegistry().sendToConnection(connectionId, new Packet(Packet.PROTOCOL_ED2K,
+                    obfu ? OpCode.SOURCES_RESULT_OBFU.value : OpCode.FOUND_SOURCES.value, payload));
+        });
     }
 
     /** File size of an OP_GETSOURCES: <code>&lt;size 4&gt;</code>, or <code>&lt;0 4&gt;&lt;size 8&gt;</code> above 4 GB; 0 if absent. */

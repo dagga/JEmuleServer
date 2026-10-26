@@ -75,6 +75,7 @@ public class Server {
     private final ServerSourceSearcher serverSourceSearcher;
     /** Index update from the eD2K index peers (off unless serverIndexUpdateEnabled). */
     private final ServerIndexUpdater serverIndexUpdater;
+    private final ServerRelay serverRelay;
     private final ClientRegistry registry = new ClientRegistry();
     private final java.util.Set<Socket> clientSockets = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private final FileIndex fileIndex;
@@ -307,6 +308,8 @@ public class Server {
         this.serverIndexUpdater = new ServerIndexUpdater(serverGossip::verifiedPeers, fileIndex, fakeFileDetector,
                 () -> this.config.serverIndexUpdate(), this::nearlyFull);
         this.serverIndexUpdater.setIngestionExecutor(ingestion);
+        // Once the index is full, the searches are played on the relay server and the new logins sent there
+        this.serverRelay = new ServerRelay(() -> this.config.relayServer(), fileIndex::isFull, fileIndex, fakeFileDetector);
         this.kadNode = config.kad().enabled()
                 ? new KadNode(config.kad(), config.port(), db, fileIndex, abuseFilter, fakeFileDetector,
                         kadNodesCachePath(config))
@@ -435,6 +438,10 @@ public class Server {
     /** The index update from the eD2K index peers. */
     public ServerIndexUpdater getServerIndexUpdater() {
         return serverIndexUpdater;
+    }
+
+    public ServerRelay getServerRelay() {
+        return serverRelay;
     }
 
     /** True when a server announces at least 90% of its maximum users. */
@@ -1243,31 +1250,8 @@ public class Server {
      * Each result is sent as an OP_GLOBSEARCHRES (0x99) block; several blocks, each with its own E3/99 header,
      * may share one datagram (CUDPSocket::ProcessPacket).
      */
-    private void handleGlobalSearch(UdpReply reply, byte opcode, byte[] recv) throws IOException {
-        ByteBuffer buf = ByteBuffer.wrap(recv, 2, recv.length - 2).slice().order(ByteOrder.LITTLE_ENDIAN);
-        boolean largeFiles = false;
-        List<FileMetadata> results;
-        SearchQuery query;
-        try {
-            if (opcode == (byte) 0x90) {
-                for (Tag t : Tag.readList(buf)) {
-                    if (t.name().equals("\u000E") && t.isInt() && (t.unsignedValue() & 0x01) != 0) { // SRVCAP_UDP_NEWTAGS_LARGEFILES
-                        largeFiles = true;
-                    }
-                }
-            }
-            query = SearchQuery.parse(buf.slice());
-            if (fileIndex.isChildAbuseQuery(query)) {
-                // No answer, and not searched on Kad
-                log.info("UDP global search from {} refused by the child abuse filter", reply.address().getHostAddress());
-                return;
-            }
-            results = fileIndex.searchComplex(query, Math.min(config.maxSearchResults(), MAX_GLOBAL_SEARCH_RESULTS));
-        } catch (RuntimeException e) {
-            log.debug("Malformed UDP search request from {}: {}", reply.address(), e.getMessage());
-            return;
-        }
-
+    /** One OP_GLOBSEARCHRES block per file, several per datagram. */
+    private void sendGlobalSearchResults(UdpReply reply, List<FileMetadata> results, boolean largeFiles) throws IOException {
         java.io.ByteArrayOutputStream datagram = new java.io.ByteArrayOutputStream();
         for (FileMetadata m : results) {
             if (!largeFiles && m.size() > 0xFFFFFFFFL) continue; // the requester cannot handle files > 4 GB
@@ -1283,6 +1267,56 @@ public class Server {
         }
         if (datagram.size() > 0) {
             sendUdp(reply, datagram.toByteArray(), "SEARCH");
+        }
+    }
+
+    private void handleGlobalSearch(UdpReply reply, byte opcode, byte[] recv) throws IOException {
+        ByteBuffer buf = ByteBuffer.wrap(recv, 2, recv.length - 2).slice().order(ByteOrder.LITTLE_ENDIAN);
+        boolean largeFiles = false;
+        List<FileMetadata> results;
+        SearchQuery query;
+        byte[] tree;
+        try {
+            if (opcode == (byte) 0x90) {
+                for (Tag t : Tag.readList(buf)) {
+                    if (t.name().equals("\u000E") && t.isInt() && (t.unsignedValue() & 0x01) != 0) { // SRVCAP_UDP_NEWTAGS_LARGEFILES
+                        largeFiles = true;
+                    }
+                }
+            }
+            tree = new byte[buf.remaining()];
+            buf.slice().get(tree);
+            query = SearchQuery.parse(buf.slice());
+            if (fileIndex.isChildAbuseQuery(query)) {
+                // No answer, and not searched on Kad
+                log.info("UDP global search from {} refused by the child abuse filter", reply.address().getHostAddress());
+                return;
+            }
+            results = fileIndex.searchComplex(query, Math.min(config.maxSearchResults(), MAX_GLOBAL_SEARCH_RESULTS));
+        } catch (RuntimeException e) {
+            log.debug("Malformed UDP search request from {}: {}", reply.address(), e.getMessage());
+            return;
+        }
+
+        sendGlobalSearchResults(reply, results, largeFiles);
+        // Index full: also played on the relay server, unless the search comes from it, and its other files follow
+        java.util.concurrent.CompletableFuture<List<FileMetadata>> relayed = serverRelay.isRelayServer(reply.address())
+                ? null : serverRelay.forkSearch(tree, 1);
+        if (relayed != null) {
+            java.util.Set<String> sent = new java.util.HashSet<>();
+            results.forEach(m -> sent.add(m.hash().toUpperCase(java.util.Locale.ROOT)));
+            boolean large = largeFiles;
+            relayed.thenAccept(found -> {
+                List<FileMetadata> extra = found.stream()
+                        .filter(m -> !sent.contains(m.hash().toUpperCase(java.util.Locale.ROOT)))
+                        .limit(Math.max(0, MAX_GLOBAL_SEARCH_RESULTS - sent.size()))
+                        .toList();
+                try {
+                    sendGlobalSearchResults(reply, extra, large);
+                } catch (IOException e) {
+                    log.debug("Could not send the relay server's results to {}: {}", reply.address(), e.getMessage());
+                }
+            });
         }
 
         // Only searched on Kad: forwarding it to other eD2K servers could make it loop between servers
@@ -1417,6 +1451,7 @@ public class Server {
         maintenance.shutdownNow();
         serverSearchBridge.close();
         serverIndexUpdater.close();
+        serverRelay.close();
         if (ipFilterUpdater != null) ipFilterUpdater.close();
         kadSearchBridge = null;
         if (kadNode != null) {

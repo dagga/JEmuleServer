@@ -79,6 +79,9 @@ public final class EmuleTestSupport {
         }
 
         @Override public ServerSearchBridge getServerSearchBridge() { return serverSearchBridge; }
+        private ServerRelay serverRelay;
+        public void setServerRelay(ServerRelay relay) { this.serverRelay = relay; }
+        @Override public ServerRelay getServerRelay() { return serverRelay; }
 
         @Override public Socket getSocket() { return socket; }
         @Override public ServerConfig getConfig() { return config; }

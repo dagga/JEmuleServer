@@ -35,6 +35,9 @@ public interface ClientContext {
     default org.jemule.network.ServerIndexUpdater getServerIndexUpdater() {
         return getServer() != null ? getServer().getServerIndexUpdater() : null;
     }
+    default org.jemule.network.ServerRelay getServerRelay() {
+        return getServer() != null ? getServer().getServerRelay() : null;
+    }
 
     /** Kad source searches for OP_GETSOURCES, null without a server or a Kad node. */
     default org.jemule.network.KadSourceService getKadSourceService() {
