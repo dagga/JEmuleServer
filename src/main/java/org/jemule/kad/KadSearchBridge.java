@@ -230,17 +230,6 @@ public class KadSearchBridge implements AutoCloseable {
             }
         }
 
-        /** Entries received from all the nodes asked. */
-        int received() {
-            int received = 0;
-            for (NodePages p : pages.values()) {
-                synchronized (p) {
-                    received += p.received;
-                }
-            }
-            return received;
-        }
-
         /** The nodes whose last page was full when the search stopped reading, with their next start position. */
         Map<InetSocketAddress, Integer> capped() {
             Map<InetSocketAddress, Integer> capped = new java.util.HashMap<>();
@@ -411,9 +400,10 @@ public class KadSearchBridge implements AutoCloseable {
                         activeSessions.remove(key, created);
                         created.complete();
                         long now = System.currentTimeMillis();
-                        int received = created.received();
+                        // The results the search kept: at least the sources required, and clean
+                        int kept = created.getResults().size();
                         created.capped().forEach((node, next) -> pageFollower.follow(created.targetId(),
-                                created.searchTerms(), node, next, received, now));
+                                created.searchTerms(), node, next, kept, now));
                     }
                 });
             }
@@ -661,11 +651,14 @@ public class KadSearchBridge implements AutoCloseable {
                 .filter(s -> s.targetId().equals(parsed.targetId()))
                 .toList();
         if (sessions.isEmpty()) {
-            if (pageFollower.accept(parsed.targetId(), new InetSocketAddress(remoteAddress, remotePort),
-                    parsed.files().size(), FULL_PAGE_THRESHOLD, System.currentTimeMillis())) {
-                // A background page: its files only go to the index
+            InetSocketAddress node = new InetSocketAddress(remoteAddress, remotePort);
+            if (pageFollower.expects(parsed.targetId(), node)) {
+                // A background page: its files only go to the index; those kept count towards the search's limit
                 resultsReceived.addAndGet(parsed.files().size());
-                backgroundFilesIngested.addAndGet(screenAndIngest(parsed.files()).size());
+                int kept = screenAndIngest(parsed.files()).size();
+                backgroundFilesIngested.addAndGet(kept);
+                pageFollower.accept(parsed.targetId(), node, parsed.files().size(), kept, FULL_PAGE_THRESHOLD,
+                        System.currentTimeMillis());
                 return;
             }
             log.debug("Received SEARCH_RES for unknown or expired target: {}", parsed.targetId());

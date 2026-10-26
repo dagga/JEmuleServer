@@ -36,7 +36,7 @@ class KadPageFollowerTest {
         for (int page = 0; page < 5; page++) {
             now += KadPageFollower.PAGE_INTERVAL_MS;
             follower.tick(now);
-            follower.accept(TARGET, node(1), 300, FULL, now);
+            follower.accept(TARGET, node(1), 300, 300, FULL, now);
         }
         assertEquals(List.of(900, 1200, 1500, 1800, 2100), sent, "one page an interval, while they come back full");
         assertEquals(1, follower.followed());
@@ -51,20 +51,34 @@ class KadPageFollowerTest {
         for (int round = 0; round < 3; round++) {
             now += KadPageFollower.PAGE_INTERVAL_MS;
             follower.tick(now);
-            follower.accept(TARGET, node(5), 300, FULL, now);
-            follower.accept(TARGET, node(6), 300, FULL, now);
+            follower.accept(TARGET, node(5), 300, 300, FULL, now);
+            follower.accept(TARGET, node(6), 300, 300, FULL, now);
         }
-        assertEquals(0, follower.followed(), "59,000 + 4 x 300 > 60,000: no node is asked again");
+        assertEquals(0, follower.followed(), "59,000 + 4 x 300 kept > 60,000: no node is asked again");
         assertEquals(4, sent.size(), "2 rounds of 2 pages");
         follower.follow(TARGET, null, node(7), 900, KadPageFollower.MAX_RESULTS_PER_SEARCH, now);
         assertEquals(0, follower.followed(), "a search already at 60,000 is not followed");
     }
 
     @Test
+    void onlyTheResultsKeptCountTowardsTheLimit() throws Exception {
+        long now = 0;
+        follower.follow(TARGET, null, node(9), 900, 59_000, now);
+        for (int round = 0; round < 5; round++) {
+            now += KadPageFollower.PAGE_INTERVAL_MS;
+            follower.tick(now);
+            // Full pages, but few files with a source: the search goes on
+            follower.accept(TARGET, node(9), 300, 100, FULL, now);
+        }
+        assertEquals(1, follower.followed(), "59,000 + 5 x 100 kept < 60,000");
+        assertEquals(5, sent.size());
+    }
+
+    @Test
     void aNodeIsReadUpToTheLastStartPositionOfKad() throws Exception {
         follower.follow(TARGET, null, node(8), KadPacket.MAX_START_POSITION - 100, 0, 0);
         follower.tick(KadPageFollower.PAGE_INTERVAL_MS);
-        follower.accept(TARGET, node(8), 300, FULL, KadPageFollower.PAGE_INTERVAL_MS);
+        follower.accept(TARGET, node(8), 300, 300, FULL, KadPageFollower.PAGE_INTERVAL_MS);
         assertEquals(0, follower.followed(), "no position past 32,767");
     }
 
@@ -72,17 +86,17 @@ class KadPageFollowerTest {
     void aPageThatIsNotFullEndsTheFollowing() throws Exception {
         follower.follow(TARGET, null, node(2), 900, 2700, 0);
         follower.tick(KadPageFollower.PAGE_INTERVAL_MS);
-        assertTrue(follower.accept(TARGET, node(2), 120, FULL, KadPageFollower.PAGE_INTERVAL_MS));
+        assertTrue(follower.accept(TARGET, node(2), 120, 120, FULL, KadPageFollower.PAGE_INTERVAL_MS));
         follower.tick(10 * KadPageFollower.PAGE_INTERVAL_MS);
         assertEquals(List.of(900), sent);
-        assertFalse(follower.accept(TARGET, node(2), 300, FULL, 0), "no longer followed: an answer is not accepted");
+        assertFalse(follower.accept(TARGET, node(2), 300, 300, FULL, 0), "no longer followed: an answer is not accepted");
     }
 
     @Test
     void unaskedAnswersAreRefusedAndSilentNodesDropped() throws Exception {
-        assertFalse(follower.accept(TARGET, node(3), 300, FULL, 0), "never followed");
+        assertFalse(follower.accept(TARGET, node(3), 300, 300, FULL, 0), "never followed");
         follower.follow(TARGET, null, node(3), 900, 2700, 0);
-        assertFalse(follower.accept(TARGET, node(3), 300, FULL, 1), "followed, but no page asked yet");
+        assertFalse(follower.accept(TARGET, node(3), 300, 300, FULL, 1), "followed, but no page asked yet");
         follower.tick(KadPageFollower.PAGE_INTERVAL_MS);
         follower.tick(KadPageFollower.PAGE_INTERVAL_MS + KadPageFollower.ANSWER_TIMEOUT_MS + 1);
         assertEquals(0, follower.followed(), "no answer: dropped");

@@ -33,11 +33,12 @@ import java.util.concurrent.atomic.AtomicLong;
  * most {@link KadSearchBridge#MAX_PAGES_PER_NODE} pages of 300 from each node, within the time the client waits; a
  * node whose last page was full holds more, up to tens of thousands of entries. Its next pages are requested one
  * every {@link #PAGE_INTERVAL_MS}, under the 3 KADEMLIA2_SEARCH_KEY_REQ a minute a node accepts from one IP, while
- * they come back full, until the search has {@link #MAX_RESULTS_PER_SEARCH} results from all its nodes together.
+ * they come back full, until the search has kept {@link #MAX_RESULTS_PER_SEARCH} results from all its nodes together:
+ * files with at least the sources required and clean, the others do not count.
  * Their files only go to the index: the client has had its answer.
  */
 final class KadPageFollower {
-    /** Results of one search from all its nodes, the pages read while the client waited included. */
+    /** Results kept by one search from all its nodes, the pages read while the client waited included. */
     static final int MAX_RESULTS_PER_SEARCH = 60_000;
     /** Time between two page requests to one node. */
     static final long PAGE_INTERVAL_MS = 25_000;
@@ -60,9 +61,9 @@ final class KadPageFollower {
 
     private record Key(KadId target, InetSocketAddress node) {}
 
-    /** Results received by a search from all its nodes. */
+    /** Results kept by a search from all its nodes. */
     private static final class Total {
-        int received;
+        int kept;
     }
 
     private static final class Follow {
@@ -98,11 +99,11 @@ final class KadPageFollower {
      * Follows a node whose last page of the search was full.
      *
      * @param nextStart the start position of the next page
-     * @param received  the results the search already received from all its nodes
+     * @param kept      the results the search already kept from all its nodes
      */
-    synchronized void follow(KadId target, byte[] searchTerms, InetSocketAddress node, int nextStart, int received,
+    synchronized void follow(KadId target, byte[] searchTerms, InetSocketAddress node, int nextStart, int kept,
                              long now) {
-        if (nextStart > KadPacket.MAX_START_POSITION || received >= MAX_RESULTS_PER_SEARCH) return;
+        if (nextStart > KadPacket.MAX_START_POSITION || kept >= MAX_RESULTS_PER_SEARCH) return;
         Key key = new Key(target, node);
         if (follows.containsKey(key)) return;
         if (follows.size() >= MAX_FOLLOWED) {
@@ -113,7 +114,7 @@ final class KadPageFollower {
         }
         SearchKey search = SearchKey.of(target, searchTerms);
         Total total = totals.computeIfAbsent(search, ignored -> new Total());
-        total.received = Math.max(total.received, received);
+        total.kept = Math.max(total.kept, kept);
         follows.put(key, new Follow(searchTerms, search, total, nextStart, now + PAGE_INTERVAL_MS));
         nodesFollowed.incrementAndGet();
     }
@@ -156,19 +157,27 @@ final class KadPageFollower {
         }
     }
 
+    /** True when the answer of this node is a page this follower asked for: its files go to the index. */
+    synchronized boolean expects(KadId target, InetSocketAddress node) {
+        Follow f = follows.get(new Key(target, node));
+        return f != null && f.sentAt != 0;
+    }
+
     /**
      * Takes the answer of a followed node.
      *
-     * @return true if the answer is a page this follower asked for: its files go to the index
+     * @param entries the entries of the page, which tell whether it was full
+     * @param kept    the files of the page kept for the index, which count towards the search's limit
+     * @return true if the answer is a page this follower asked for
      */
-    synchronized boolean accept(KadId target, InetSocketAddress node, int entries, int fullPage, long now) {
+    synchronized boolean accept(KadId target, InetSocketAddress node, int entries, int kept, int fullPage, long now) {
         Key key = new Key(target, node);
         Follow f = follows.get(key);
         if (f == null || f.sentAt == 0) return false;
         pagesAnswered.incrementAndGet();
-        f.total.received += entries;
+        f.total.kept += kept;
         int next = f.nextStart + KadSearchBridge.RESULTS_PER_PAGE;
-        if (f.total.received >= MAX_RESULTS_PER_SEARCH) {
+        if (f.total.kept >= MAX_RESULTS_PER_SEARCH) {
             // The search has its results: none of its nodes is asked again
             follows.values().removeIf(other -> other.search.equals(f.search));
             totals.remove(f.search);
