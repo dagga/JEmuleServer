@@ -118,11 +118,11 @@ The production server runs with this calibration:
 | | |
 |---|---|
 | CPU | 1 vCPU, AMD EPYC at 2.1 GHz (KVM virtual machine, model and boost hidden by the hypervisor) |
-| Memory | 947 MB of RAM, 512 MB swap file |
+| Memory | 947 MB of RAM, 1 GB of swap (two 512 MB swap files) |
 | Disk | 9.8 GB |
 | System | Fedora Linux 43 Server, OpenJDK 25 |
-| Launch | `java --add-modules=jdk.httpserver -Xmx650m -Xmn48m -XX:MinHeapFreeRatio=10 -XX:MaxHeapFreeRatio=30 -XX:MarkSweepDeadRatio=0 -XX:+UseCompactObjectHeaders -XX:ThreadPriorityPolicy=1 -jar JEmuleServer-<version>.jar server.properties` |
-| `server.properties` | `maxFiles=2000000` (the default; the heap guard may stop the index first, see below) |
+| Launch | `java --add-modules=jdk.httpserver -Xmx750m -Xmn48m -XX:MinHeapFreeRatio=10 -XX:MaxHeapFreeRatio=30 -XX:MarkSweepDeadRatio=0 -XX:+UseCompactObjectHeaders -XX:ThreadPriorityPolicy=1 -jar JEmuleServer-<version>.jar server.properties` |
+| `server.properties` | `maxFiles=2200000` (the default is 2,000,000) |
 
 Measured with 1.2.19, 706,165 files and 196,532 banned hashes:
 
@@ -155,10 +155,12 @@ Why these settings:
 - `-Xmn48m`: on one CPU the JVM uses the serial collector, which gives a third of the heap to the young generation
   (218 MB out of 688 MB). That memory stays committed although it is almost empty after each collection; 48 MB is
   enough for the allocation rate of the server and leaves the rest to the old generation, where the index lives.
-- `-Xmx650m`: 602 MB of old generation, of which the heap guard lets the live data fill 482 MB. The Java process
+- `-Xmx750m`: 702 MB of old generation, of which the heap guard lets the live data fill 561 MB. The Java process
   needs about 150 MB besides the heap (metaspace, code, threads): with 600 MB of heap it took 757 MB, 554 MB resident
-  and 203 MB in swap, while the system and the other processes need about 180 MB of the 947 MB of RAM. 650 MB is the
-  most this server can give without swapping the live index: the cold pages already go to the swap file.
+  and 203 MB in swap, while the system and the other processes need about 180 MB of the 947 MB of RAM. The cold pages
+  go to the swap file, raised to 1 GB for that. With 650 MB of heap, 1.2.28 stopped on October 26, 2026 at 1,847,306
+  files, most likely out of memory with the guard at 481 MB; with 700 MB it ran 1,847,313 files with 410 MB of live
+  heap, 629 MB resident, 116 MB of RAM available and 251 MB of swap used.
   `./gradlew benchmark -Pfiles=1200000 -Pheap=600m -Pcpus=1` loads 1,200,000 files in 600 MB.
 - `-XX:MinHeapFreeRatio=10 -XX:MaxHeapFreeRatio=30`: the serial collector keeps the old generation at the largest size
   it ever reached, i.e. after the garbage of the startup load. With these ratios, each full collection shrinks it to
@@ -173,13 +175,13 @@ Why these settings:
 - `-XX:+UseCompactObjectHeaders` (Java 25): object headers of 8 bytes instead of 12. Loaded from the production
   database copy of October 25, 2026 (1,521,140 files) with the options above, the index takes 341 MB of live heap
   instead of 355 MB.
-- `maxFiles=2000000` (the default): bounds the index. Beyond it, new files are refused, whatever brings them
-  (clients, Kad, other servers); files already known still get their new sources. It applies at once from the Settings
-  view of the web panel, without a restart. Here the heap guard may stop the index first: about 370 MB of live heap at
-  1,530,000 files, about 250 bytes per new file and 25 MB for the next growth of the index arrays by 1/8 come to about
-  1,850,000 files within the 482 MB the guard allows.
+- `maxFiles=2200000` (the default is 2,000,000): bounds the index. Beyond it, new files are refused, whatever brings
+  them (clients, Kad, other servers); files already known still get their new sources. It applies at once from the
+  Settings view of the web panel, without a restart. From 410 MB of live heap at 1,847,313 files, about 250 bytes per
+  new file and about 30 MB for the next growth of the index arrays by 1/8 come to about 2,300,000 files within the
+  561 MB the guard allows, so `maxFiles` stops the index first, with little margin.
 - **Heap guard** (always on): new files are also refused while the live data, measured after the last collection of
-  the old generation, fills 80% of it (482 MB of the 602 MB here). The index then stops growing instead of running out
+  the old generation, fills 80% of it (561 MB of the 702 MB here). The index then stops growing instead of running out
   of memory; the Overview's index capacity shows the fuller of the two limits and the files refused. More RAM and a
   larger `-Xmx` move the guard, not `maxFiles`.
 
