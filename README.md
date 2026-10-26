@@ -1,6 +1,6 @@
 # JEmuleServer
 
-JEmuleServer is an eMule server written in Java (version 1.2.27).
+JEmuleServer is an eMule server written in Java (version 1.2.28).
 
 Downloads (installers and JAR) are on the [releases page](https://github.com/dagga/JEmuleServer/releases); the changes
 of each version are described in `doc/release-notes-v<version>.md` (latest: [1.2.9](doc/release-notes-v1.2.9.md)).
@@ -27,7 +27,7 @@ Building requires a JDK 25 (Gradle toolchain; Gradle downloads it when the machi
 ./gradlew build
 ```
 
-The JAR file will be generated in `build/libs/JEmuleServer-1.2.27.jar`.
+The JAR file will be generated in `build/libs/JEmuleServer-1.2.28.jar`.
 
 ## Installation from the release packages
 
@@ -69,7 +69,7 @@ Once the project is compiled, you can start the server with the following comman
 client thread blocked in a `synchronized` block holds its carrier thread, which on one CPU stalls every client):
 
 ```bash
-java -XX:MaxRAMPercentage=75 -XX:ThreadPriorityPolicy=1 --add-modules=jdk.httpserver -jar build/libs/JEmuleServer-1.2.27.jar [config_file] [port]
+java -XX:MaxRAMPercentage=75 -XX:ThreadPriorityPolicy=1 --add-modules=jdk.httpserver -jar build/libs/JEmuleServer-1.2.28.jar [config_file] [port]
 ```
 
 - `-XX:ThreadPriorityPolicy=1`: on Linux, the JVM ignores thread priorities without it. The server runs its threads
@@ -122,7 +122,7 @@ The production server runs with this calibration:
 | Disk | 9.8 GB |
 | System | Fedora Linux 43 Server, OpenJDK 25 |
 | Launch | `java --add-modules=jdk.httpserver -Xmx650m -Xmn48m -XX:MinHeapFreeRatio=10 -XX:MaxHeapFreeRatio=30 -XX:MarkSweepDeadRatio=0 -XX:+UseCompactObjectHeaders -XX:ThreadPriorityPolicy=1 -jar JEmuleServer-<version>.jar server.properties` |
-| `server.properties` | `maxFiles=1850000` (the heap guard's estimated capacity, see below) |
+| `server.properties` | `maxFiles=2000000` (the default; the heap guard may stop the index first, see below) |
 
 Measured with 1.2.19, 706,165 files and 196,532 banned hashes:
 
@@ -173,11 +173,11 @@ Why these settings:
 - `-XX:+UseCompactObjectHeaders` (Java 25): object headers of 8 bytes instead of 12. Loaded from the production
   database copy of October 25, 2026 (1,521,140 files) with the options above, the index takes 341 MB of live heap
   instead of 355 MB.
-- `maxFiles=1850000`: bounds the index. Beyond it, new files are refused, whatever brings them (clients, Kad, other
-  servers); files already known still get their new sources. It applies at once from the Settings view of the web
-  panel, without a restart. 1,850,000 is the estimated capacity of the heap guard here: about 370 MB of live heap in
-  production at 1,530,000 files, about 250 bytes per new file, and 25 MB for the next growth of the index arrays by
-  1/8, within the 482 MB the guard allows.
+- `maxFiles=2000000` (the default): bounds the index. Beyond it, new files are refused, whatever brings them
+  (clients, Kad, other servers); files already known still get their new sources. It applies at once from the Settings
+  view of the web panel, without a restart. Here the heap guard may stop the index first: about 370 MB of live heap at
+  1,530,000 files, about 250 bytes per new file and 25 MB for the next growth of the index arrays by 1/8 come to about
+  1,850,000 files within the 482 MB the guard allows.
 - **Heap guard** (always on): new files are also refused while the live data, measured after the last collection of
   the old generation, fills 80% of it (482 MB of the 602 MB here). The index then stops growing instead of running out
   of memory; the Overview's index capacity shows the fuller of the two limits and the files refused. More RAM and a
@@ -293,7 +293,10 @@ that brings this content to its clients without exposing them to illicit files:
 - **Forked search**: each `OP_SEARCHREQUEST` is answered from the local index and sent at the same time to the 8 Kad
   nodes closest to its longest required word (`KADEMLIA2_SEARCH_KEY_REQ`, keyword hashed with MD4), with the whole
   query so that the nodes only return matching files. A node that returns a full page of 300 files is asked for the
-  next ones, up to 900.
+  next ones, up to 900 while the client waits; a node still full then is read on in the background, one page every 25
+  seconds (under the 3 requests a minute a node accepts), while its pages come back full, until the search has kept
+  60,000 results from all its nodes (files with at least `kadMinSourcesForIngest` sources that pass the filters).
+  These files only go to the index; the Searches view counts these background pages.
 - **Flood limits**: the server never sends a Kad node more requests than the node accepts per minute from one IP, so
   that the nodes neither drop its requests nor ban it.
 - **Filtering**: every file returned by Kad goes through the [child abuse filter](#child-abuse-filter), the banned

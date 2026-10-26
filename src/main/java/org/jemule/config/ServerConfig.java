@@ -317,7 +317,7 @@ public record ServerConfig(
             300,
             50,
             1000000,
-            10000000,
+            2000000,
             5000,
             200,
             "./jemule_db",

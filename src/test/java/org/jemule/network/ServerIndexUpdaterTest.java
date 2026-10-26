@@ -110,6 +110,8 @@ class ServerIndexUpdaterTest {
                     readPacket(in);                                                     // the empty OP_OFFERFILES
                     byte[][] search = readPacket(in);
                     received.add(search[1]);
+                    // The rest of the welcome, read during the first search: not a warning (production, 2026-10-26)
+                    out.write(packet(0x38, message("No traffic limit. No time limit - Unlimited and free server switches")));
                     out.write(packet(0x33, searchResult(2, 5, "found")));
                     byte[][] second = readPacket(in);
                     out.write(packet(0x38, message("Warning: flood detected, slow down")));
@@ -139,6 +141,16 @@ class ServerIndexUpdaterTest {
             assertEquals("JEmuleServer", tags.getFirst().value());
             assertArrayEquals(ServerIndexUpdater.SearchTrees.build("found", null, null), received.get(1));
         }
+    }
+
+    @Test
+    void onlyRealWarningsCount() {
+        assertFalse(ServerUpdateSession.isWarning("No traffic limit. No time limit - Unlimited and free server switches"));
+        assertFalse(ServerUpdateSession.isWarning("Banana split server, welcome"));
+        assertTrue(ServerUpdateSession.isWarning("Flood detected: slow down"));
+        assertTrue(ServerUpdateSession.isWarning("You have been banned for 1 hour"));
+        assertTrue(ServerUpdateSession.isWarning("Too many searches, please wait"));
+        assertTrue(ServerUpdateSession.isWarning("Search limit reached"));
     }
 
     private static byte[] message(String text) {
