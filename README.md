@@ -293,7 +293,9 @@ that brings this content to its clients without exposing them to illicit files:
 - **Forked search**: each `OP_SEARCHREQUEST` is answered from the local index and sent at the same time to the 8 Kad
   nodes closest to its longest required word (`KADEMLIA2_SEARCH_KEY_REQ`, keyword hashed with MD4), with the whole
   query so that the nodes only return matching files. A node that returns a full page of 300 files is asked for the
-  next ones, up to 900.
+  next ones, up to 900 while the client waits; a node still full then is read on in the background, one page every 25
+  seconds (under the 3 requests a minute a node accepts), while its pages come back full, until the search has 60,000
+  results from all its nodes. These files only go to the index; the Searches view counts these background pages.
 - **Flood limits**: the server never sends a Kad node more requests than the node accepts per minute from one IP, so
   that the nodes neither drop its requests nor ban it.
 - **Filtering**: every file returned by Kad goes through the [child abuse filter](#child-abuse-filter), the banned

@@ -702,6 +702,18 @@ final class AdminWebPanel implements AutoCloseable {
         kadRow.put("blocked", kad == null ? 0L : kad.getIllicitFilesBlocked());
         kadRow.put("skipped", 0L);
         rows.add(kadRow);
+        // Pages of the nodes past the search's limit, read in the background: nodes followed, pages asked and
+        // answered, files accepted for the index
+        Map<String, Object> pagesRow = new java.util.LinkedHashMap<>();
+        pagesRow.put("channel", "Kad background pages");
+        pagesRow.put("queries", kad == null ? 0L : kad.getBackgroundNodesFollowed());
+        pagesRow.put("requests", kad == null ? 0L : kad.getBackgroundPagesRequested());
+        pagesRow.put("results", kad == null ? 0L : kad.getBackgroundPagesAnswered());
+        pagesRow.put("ingested", kad == null ? 0L : kad.getBackgroundFilesIngested());
+        pagesRow.put("active", null);
+        pagesRow.put("blocked", null);
+        pagesRow.put("skipped", null);
+        rows.add(pagesRow);
 
         ServerSearchBridge servers = server.getServerSearchBridge();
         Map<String, Object> serverRow = new java.util.LinkedHashMap<>();

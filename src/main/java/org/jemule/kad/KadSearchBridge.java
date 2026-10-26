@@ -118,6 +118,11 @@ public class KadSearchBridge implements AutoCloseable {
     private final AtomicLong filesIngested = new AtomicLong(0);
     private final AtomicLong sourceSearches = new AtomicLong(0);
     private final AtomicLong sourcesReceived = new AtomicLong(0);
+    /** Reads the pages of the nodes past the search's limit, in the background. */
+    private final KadPageFollower pageFollower = new KadPageFollower(this::sendPageRequest);
+    private volatile java.util.concurrent.ScheduledExecutorService pageTicker;
+    /** Files of the background pages indexed. */
+    private final AtomicLong backgroundFilesIngested = new AtomicLong(0);
     /** Source requests the Kad flood guard did not send: the node would have dropped them. */
     private final AtomicLong sourceRequestsRefused = new AtomicLong(0);
 
@@ -212,14 +217,39 @@ public class KadSearchBridge implements AutoCloseable {
             synchronized (node) {
                 node.received += entries;
                 int next = node.start + RESULTS_PER_PAGE;
-                if (node.received < node.start + FULL_PAGE_THRESHOLD || node.requested >= MAX_PAGES_PER_NODE
-                        || next > KadPacket.MAX_START_POSITION) {
+                boolean full = node.received >= node.start + FULL_PAGE_THRESHOLD;
+                if (full && node.requested >= MAX_PAGES_PER_NODE && next <= KadPacket.MAX_START_POSITION) {
+                    node.cappedAt = next; // the node holds more: the next pages are read in the background
+                }
+                if (!full || node.requested >= MAX_PAGES_PER_NODE || next > KadPacket.MAX_START_POSITION) {
                     return -1;
                 }
                 node.start = next;
                 node.requested++;
                 return next;
             }
+        }
+
+        /** Entries received from all the nodes asked. */
+        int received() {
+            int received = 0;
+            for (NodePages p : pages.values()) {
+                synchronized (p) {
+                    received += p.received;
+                }
+            }
+            return received;
+        }
+
+        /** The nodes whose last page was full when the search stopped reading, with their next start position. */
+        Map<InetSocketAddress, Integer> capped() {
+            Map<InetSocketAddress, Integer> capped = new java.util.HashMap<>();
+            pages.forEach((node, p) -> {
+                synchronized (p) {
+                    if (p.cappedAt > 0) capped.put(node, p.cappedAt);
+                }
+            });
+            return capped;
         }
 
         public boolean wasQueried(InetAddress address, int port) {
@@ -299,6 +329,18 @@ public class KadSearchBridge implements AutoCloseable {
         running = true;
         udpService.registerListener(KadOpCode.SEARCH_RES, this::handleSearchRes);
         udpService.registerListener(KadOpCode.RES, this::handleFindNodeRes);
+        pageTicker = ServerThreads.maintenanceScheduler("KadPages");
+        pageTicker.scheduleWithFixedDelay(() -> {
+            try {
+                if (fileIndex != null && fileIndex.isFull()) {
+                    pageFollower.clear(); // no room for the files of more pages
+                } else {
+                    pageFollower.tick(System.currentTimeMillis());
+                }
+            } catch (RuntimeException e) {
+                log.debug("Kad background pages: {}", e.getMessage());
+            }
+        }, 5, 5, java.util.concurrent.TimeUnit.SECONDS);
         log.info("KadSearchBridge started (alpha: {}, timeout: {}ms)", alphaNodes, searchTimeoutMs);
     }
 
@@ -368,6 +410,10 @@ public class KadSearchBridge implements AutoCloseable {
                         // Removed first: whoever sees the results sees the session over, and a new search starts afresh
                         activeSessions.remove(key, created);
                         created.complete();
+                        long now = System.currentTimeMillis();
+                        int received = created.received();
+                        created.capped().forEach((node, next) -> pageFollower.follow(created.targetId(),
+                                created.searchTerms(), node, next, received, now));
                     }
                 });
             }
@@ -599,6 +645,13 @@ public class KadSearchBridge implements AutoCloseable {
         }
     }
 
+    private void sendPageRequest(KadId target, int startPosition, byte[] searchTerms, InetSocketAddress node)
+            throws IOException {
+        if (!running) throw new IOException("stopped");
+        udpService.send(KadPacket.createSearchKeyReq(target, startPosition, searchTerms), node.getAddress(), node.getPort());
+        requestsSent.incrementAndGet();
+    }
+
     protected void handleSearchRes(KadPacket packet, InetAddress remoteAddress, int remotePort) {
         if (handleSourceRes(packet.data(), remoteAddress, remotePort)) return;
         KadPacket.SearchRes parsed = KadPacket.parseSearchRes(packet.data());
@@ -608,6 +661,13 @@ public class KadSearchBridge implements AutoCloseable {
                 .filter(s -> s.targetId().equals(parsed.targetId()))
                 .toList();
         if (sessions.isEmpty()) {
+            if (pageFollower.accept(parsed.targetId(), new InetSocketAddress(remoteAddress, remotePort),
+                    parsed.files().size(), FULL_PAGE_THRESHOLD, System.currentTimeMillis())) {
+                // A background page: its files only go to the index
+                resultsReceived.addAndGet(parsed.files().size());
+                backgroundFilesIngested.addAndGet(screenAndIngest(parsed.files()).size());
+                return;
+            }
             log.debug("Received SEARCH_RES for unknown or expired target: {}", parsed.targetId());
             return;
         }
@@ -624,6 +684,22 @@ public class KadSearchBridge implements AutoCloseable {
         log.debug("Received SEARCH_RES with {} files from {}:{} for target {}",
                 files.size(), remoteAddress.getHostAddress(), remotePort, parsed.targetId());
 
+        List<FileMetadata> acceptedFiles = screenAndIngest(files);
+        for (KadSearchSession session : sessions) {
+            acceptedFiles.forEach(session::addResult);
+            int nextPage = session.nextPage(remoteAddress, remotePort, files.size());
+            if (nextPage > 0) {
+                requestNextPage(session, remoteAddress, remotePort, nextPage);
+            }
+        }
+    }
+
+    /**
+     * Screens files (child abuse, fake, sources) and queues the accepted ones for the index.
+     *
+     * @return the files accepted
+     */
+    private List<FileMetadata> screenAndIngest(List<FileMetadata> files) {
         List<FileMetadata> acceptedFiles = new ArrayList<>();
         List<FileMetadata> filesToIngest = new ArrayList<>();
         for (FileMetadata file : files) {
@@ -659,13 +735,7 @@ public class KadSearchBridge implements AutoCloseable {
                 }
             });
         }
-        for (KadSearchSession session : sessions) {
-            acceptedFiles.forEach(session::addResult);
-            int nextPage = session.nextPage(remoteAddress, remotePort, files.size());
-            if (nextPage > 0) {
-                requestNextPage(session, remoteAddress, remotePort, nextPage);
-            }
-        }
+        return acceptedFiles;
     }
 
     /**
@@ -799,6 +869,26 @@ public class KadSearchBridge implements AutoCloseable {
         return sourcesReceived.get();
     }
 
+    /** Nodes whose keyword index was read past the search's pages, in the background, since the start. */
+    public long getBackgroundNodesFollowed() {
+        return pageFollower.nodesFollowed();
+    }
+
+    /** Background page requests sent since the start. */
+    public long getBackgroundPagesRequested() {
+        return pageFollower.pagesRequested();
+    }
+
+    /** Background pages answered since the start. */
+    public long getBackgroundPagesAnswered() {
+        return pageFollower.pagesAnswered();
+    }
+
+    /** Files of the background pages accepted for the index since the start. */
+    public long getBackgroundFilesIngested() {
+        return backgroundFilesIngested.get();
+    }
+
     /** Source requests not sent since the start because the node had had its share: Kad pushed back. */
     public long getSourceRequestsRefused() {
         return sourceRequestsRefused.get();
@@ -827,6 +917,8 @@ public class KadSearchBridge implements AutoCloseable {
     @Override
     public synchronized void close() {
         running = false;
+        if (pageTicker != null) pageTicker.shutdownNow();
+        pageFollower.clear();
         activeSessions.values().forEach(KadSearchSession::complete);
         activeSessions.clear();
         pendingLookups.values().forEach(lookup -> lookup.done.complete(null));
@@ -840,6 +932,8 @@ public class KadSearchBridge implements AutoCloseable {
         int received;
         int start;
         int requested = 1;
+        /** Start of the next page when the search stopped at its page limit on a full page; 0 otherwise. */
+        int cappedAt;
     }
 
     /**
