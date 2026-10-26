@@ -108,7 +108,9 @@ public enum ConfigParameter {
     SERVER_INDEX_UPDATE_MAX_PER_DAY("serverIndexUpdateMaxPerDay", Type.INTEGER, Scope.HOT, 1, 2000,
             "Index update: searches per server and per day at most"),
     SERVER_INDEX_UPDATE_MIN_SOURCES("serverIndexUpdateMinSources", Type.INTEGER, Scope.HOT, 1, 1000,
-            "Index update: sources a file needs to be indexed");
+            "Index update: sources a file needs to be indexed"),
+    RELAY_SERVER("relayServer", Type.STRING, Scope.HOT, 0, 0,
+            "eD2K server (host:port) taking over once the index is full: searches played there, new logins sent there");
 
     /** Value type of a parameter, with its parsing and formatting rules. */
     public enum Type {

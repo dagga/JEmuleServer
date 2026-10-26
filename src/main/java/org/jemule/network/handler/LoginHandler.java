@@ -90,6 +90,9 @@ public class LoginHandler {
         sendServerStatus(context, out);
         sendServerMessage(context, out, "Welcome to JEmuleServer version " + Main.VERSION + "\n" +
                 "Your ID is: " + Long.toUnsignedString(clientId));
+        // Index full: the client stays here, and learns the relay server that its requests are played on
+        org.jemule.network.ServerRelay relay = context.getServerRelay();
+        if (relay != null && !relay.isRelayServer(clientIp)) sendRelayServerList(context, out, relay.announce());
 
         // FR-KAD-02: HighID clients are used to bootstrap the embedded Kademlia node
         if (context.getServer() != null) {
@@ -171,6 +174,15 @@ public class LoginHandler {
         log.info("Login: nick='{}' listenPort={} version=0x{} caps=0x{} emuleVersion=0x{}",
                 HandlerUtils.sanitize(state.nickname()), state.listenPort(), Long.toHexString(state.clientVersion()),
                 Integer.toHexString(state.serverCaps()), Long.toHexString(state.emuleVersion()));
+    }
+
+    /** OP_SERVERLIST {@code <count 1>(<IP 4><port 2>)} with the relay server only. */
+    static void sendRelayServerList(ClientContext context, OutputStream out, byte[] entry) throws IOException {
+        if (entry.length != 6) return;
+        byte[] list = new byte[7];
+        list[0] = 1;
+        System.arraycopy(entry, 0, list, 1, 6);
+        new Packet(Packet.PROTOCOL_ED2K, OpCode.SERVER_LIST.value, list).write(out, context.getState().isZlibSupported());
     }
 
     public static void sendServerMessage(ClientContext context, OutputStream out, String msg) throws IOException {

@@ -349,6 +349,25 @@ public final class ServerSearchBridge implements AutoCloseable {
         return files;
     }
 
+    /**
+     * True when a TCP OP_SEARCHRESULT ends with the "more results" flag: the server has more for OP_QUERY_MORE_RESULT.
+     */
+    static boolean moreAvailable(byte[] payload) {
+        if (payload == null || payload.length < 5) return false;
+        ByteBuffer input = ByteBuffer.wrap(payload).order(ByteOrder.LITTLE_ENDIAN);
+        try {
+            int count = input.getInt();
+            if (count < 0 || count > 10_000) return false;
+            for (int i = 0; i < count; i++) {
+                input.position(input.position() + 22); // hash, client ID and port
+                Tag.readList(input);
+            }
+            return input.hasRemaining() && input.get() == 0x01;
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
     /** Reads {@code <hash 16><ID 4><port 2><tags>} and adds the file when it is valid; false when malformed. */
     private static boolean readResult(ByteBuffer input, List<FileMetadata> files) {
         byte[] hashBytes = new byte[16];

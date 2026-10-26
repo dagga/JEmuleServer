@@ -33,6 +33,8 @@ public class SearchHandler {
      * (MAX_MORE_SEARCH_REQ, sized for "(1+5)*300 = 1800" results), so the batch size bounds what a client can see.
      */
     public static final int BATCH_SIZE = 300;
+    /** Time a client waits for the relay server's results; later ones come with the "More" button. */
+    static final long RELAY_WAIT_MS = 8_000;
 
     public void handleSearch(ClientContext context, byte[] data, OutputStream out) throws IOException {
         if (data == null || data.length < 1) {
@@ -61,14 +63,35 @@ public class SearchHandler {
             query = null;
         }
 
+        // Index full: the search is played on the relay server, whose results come first; never one of the relay
+        // server's own searches (its index update logs in here as a client)
+        org.jemule.network.ServerRelay relay = context.getServerRelay();
+        CompletableFuture<List<FileMetadata>> relayed = relay == null || query == null
+                || relay.isRelayServer(context.getSocket().getInetAddress())
+                ? null : relay.forkSearch(data, org.jemule.network.ServerRelay.MAX_PAGES);
         LinkedHashMap<String, FileMetadata> dedupMap = new LinkedHashMap<>();
+        if (relayed != null) {
+            try {
+                addResults(dedupMap, relayed.get(RELAY_WAIT_MS, TimeUnit.MILLISECONDS));
+                relayed = null;
+            } catch (TimeoutException e) {
+                log.debug("Relay server still searching {}: its results come with More", query);
+            } catch (Exception e) {
+                log.debug("Relayed search failed for {}: {}", query, e.getMessage());
+                relayed = null;
+            }
+        }
         for (FileMetadata f : localResults) {
             if (f != null && f.hash() != null) {
-                dedupMap.put(f.hash().toUpperCase(Locale.ROOT), f);
+                dedupMap.putIfAbsent(f.hash().toUpperCase(Locale.ROOT), f);
             }
         }
 
         CompletableFuture<List<FileMetadata>> remoteResults = startRemoteSearches(context, query, data);
+        if (relayed != null) {
+            remoteResults = remoteResults == null ? relayed : remoteResults.thenCombine(relayed.exceptionally(e -> List.of()),
+                    (remote, fromRelay) -> java.util.stream.Stream.concat(fromRelay.stream(), remote.stream()).toList());
+        }
         boolean deferRemoteResults = false;
         if (remoteResults != null) {
             if (remoteResults.isDone()) {
@@ -156,6 +179,14 @@ public class SearchHandler {
                 .toList();
         return CompletableFuture.allOf(safeFutures.toArray(CompletableFuture[]::new))
                 .thenApply(ignored -> safeFutures.stream().flatMap(future -> future.join().stream()).toList());
+    }
+
+    /** The relay server played the client's own search: its files are added as they come. */
+    private static void addResults(LinkedHashMap<String, FileMetadata> results, List<FileMetadata> found) {
+        if (found == null) return;
+        for (FileMetadata file : found) {
+            if (file != null && file.hash() != null) results.putIfAbsent(file.hash().toUpperCase(Locale.ROOT), file);
+        }
     }
 
     private static void addMatchingResults(LinkedHashMap<String, FileMetadata> results,
