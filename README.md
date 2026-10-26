@@ -78,7 +78,7 @@ java -XX:MaxRAMPercentage=75 -XX:ThreadPriorityPolicy=1 --add-modules=jdk.httpse
   priority works for any user; raising the admin tier above the clients needs root or `CAP_SYS_NICE`. The startup log
   says whether the priorities are applied. The .deb and .rpm launchers already pass the option.
 - `-XX:MaxRAMPercentage=75`: lets the heap grow to 75% of the RAM instead of 25%; the .deb and .rpm launchers
-  already pass it. On a 1 GB server, prefer the explicit heap options of the reference server (see Memory sizing
+  already pass it. On a 1 GB server, prefer the explicit heap options of the minimal server (see Memory sizing
   below).
 
 JVM options used by the server:
@@ -88,7 +88,7 @@ JVM options used by the server:
 | `--add-modules=jdk.httpserver` | Loads the HTTP server module of the admin web panel and its API. | Always (the launchers pass it). |
 | `-XX:ThreadPriorityPolicy=1` | Applies the thread priority tiers on Linux. | Always on Linux (the launchers pass it). |
 | `-XX:MaxRAMPercentage=75` | Heap up to 75% of the RAM instead of 25%. | Dedicated server with enough RAM; the .deb and .rpm launchers pass it. |
-| `-Xmx<size>` | Maximum heap, replaces `MaxRAMPercentage`. | Small server: sized from `maxFiles` (see Memory sizing). |
+| `-Xmx<size>` | Maximum heap, replaces `MaxRAMPercentage`. | Sized from `maxFiles` (see Memory sizing): 750m on the minimal server, 6g on the reference server. |
 | `-Xmn48m` | Young generation of 48 MB instead of a third of the heap. | With `-Xmx` on a small server. |
 | `-XX:MinHeapFreeRatio=10 -XX:MaxHeapFreeRatio=30` | After a full collection, the JVM gives back to the system the heap beyond 30% above what is in use, and grows it again when needed. | Small server whose RAM is short. |
 | `-XX:+UseCompactObjectHeaders` | Object headers of 8 bytes instead of 12 (Java 25). | Any server: about 4% less live heap for the index. |
@@ -111,9 +111,52 @@ inverted index keeps its file numbers as variable-length gaps. This comes to abo
 1.2.24 (350 before). Only the tags searches filter on are kept (source count, artist, album, title, length,
 bitrate, codec, rating).
 
-#### Reference server on 1 GB of RAM
+Two production calibrations are kept, each with its configuration file in `config/`:
 
-The production server runs with this calibration:
+- the **reference server** (`config/server-reference.properties`), sized for 10,000,000 files on 12 GB of RAM;
+- the **minimal server** (`config/server-minimal.properties`), the smallest machine the server runs on in production,
+  1 GB of RAM for about 2,200,000 files.
+
+#### Reference server for 10,000,000 files
+
+| | |
+|---|---|
+| CPU | 6 vCPU, Intel Core (Haswell), KVM virtual machine |
+| Memory | 11.4 GB of RAM, no swap |
+| Disk | 99 GB |
+| System | Rocky Linux 10.2, OpenJDK 25 |
+| Launch | `java --add-modules=jdk.httpserver -Xmx6g -XX:+UseCompactObjectHeaders -XX:ThreadPriorityPolicy=1 -jar JEmuleServer-<version>.jar server-reference.properties` |
+| `server.properties` | `config/server-reference.properties`: `maxFiles=10000000` |
+
+Measured with 1.2.28 on October 26, 2026, from a copy of the minimal server's database:
+
+| | |
+|---|---|
+| Startup (database load) | 2,017,799 files in about 3 minutes 30, against 10 minutes on the minimal server |
+| Live old generation | 464 MB (about 230 bytes per file) |
+| Heap guard | 4,915 MB (80% of the 6 GB heap) |
+| Java process | about 1.9 GB resident |
+
+Why these settings:
+
+- With several CPUs the JVM uses the G1 collector, whose old generation can take the whole heap: the options of the
+  minimal server (`-Xmn48m`, the heap free ratios, `-XX:MarkSweepDeadRatio=0`) are for the serial collector and are
+  left out.
+- `-Xmx6g`: 10,000,000 real files take about 2.7 GB of live heap (270 bytes per file, the most measured in
+  production), plus 1/8 for the next growth of the index arrays: about 3 GB, 62% of the 4.9 GB the heap guard allows.
+  The rest leaves G1 room to collect concurrently and covers the clients, Kad and the searches. With about 0.5 GB
+  outside the heap and about 2.8 GB of database file in the page cache (275 bytes per file), the machine keeps
+  2 GB of its RAM free, without swap.
+- `maxFiles=10000000`: the target of this machine; the heap guard would only stop the index at about 16,000,000.
+- `./gradlew benchmark -Pfiles=10000000 -Pheap=6g -Pcpus=6` loads 10,000,000 synthetic files in 257 s (4,019,387
+  distinct words) with 767 MB of heap: generated names are much shorter than real ones (80 bytes per file), so size
+  the heap from the production figures above. A search for a common word then takes about 0.7 s, a rare word 17 ms.
+  Its database reaches 13 GB before the compaction (1.7 GB after): run it with `java.io.tmpdir` on a disk, not a
+  small tmpfs.
+
+#### Minimal server on 1 GB of RAM
+
+The first production server runs with this calibration:
 
 | | |
 |---|---|
@@ -122,7 +165,7 @@ The production server runs with this calibration:
 | Disk | 9.8 GB |
 | System | Fedora Linux 43 Server, OpenJDK 25 |
 | Launch | `java --add-modules=jdk.httpserver -Xmx750m -Xmn48m -XX:MinHeapFreeRatio=10 -XX:MaxHeapFreeRatio=30 -XX:MarkSweepDeadRatio=0 -XX:+UseCompactObjectHeaders -XX:ThreadPriorityPolicy=1 -jar JEmuleServer-<version>.jar server.properties` |
-| `server.properties` | `maxFiles=2200000` (the default is 2,000,000) |
+| `server.properties` | `config/server-minimal.properties`: `maxFiles=2200000` (the default is 2,000,000) |
 
 Measured with 1.2.19, 706,165 files and 196,532 banned hashes:
 
@@ -208,7 +251,7 @@ The system logs (journald) also grow on a small disk: `journalctl --vacuum-size=
 
 A database written by version 1.2.14 or older is migrated at the first start: the source counts move to the
 `file_sources` table, the other tags are deleted, then the file is compacted. The progress is logged on the console
-(about 75 seconds for 3.3 million tag rows on the reference server); a migration interrupted halfway starts again at
+(about 75 seconds for 3.3 million tag rows on the minimal server); a migration interrupted halfway starts again at
 the next start.
 
 H2 does not compact the file while the startup load reads it (a compaction running during that load made the file
