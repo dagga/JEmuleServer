@@ -67,6 +67,31 @@ class PersistenceTest {
     }
 
     @Test
+    void filesPublishedOneByOneShareATransactionUntilADeletion() throws Exception {
+        String dbPath = tempDir.resolve("coalesced").toString();
+        java.util.List<Runnable> queued = new java.util.ArrayList<>();
+        try (DatabaseManager db = new DatabaseManager(dbPath)) {
+            FileIndex index = new FileIndex(db);
+            index.setPersistenceExecutor(queued::add);
+            for (int i = 0; i < 3; i++) {
+                index.addFile(new FileMetadata(String.format("%032X", i), "coalesced " + i + ".avi", 2048, "Video"));
+            }
+            assertEquals(1, queued.size(), "one write for the three files");
+
+            index.removeFile(String.format("%032X", 1));
+            index.addFile(new FileMetadata(String.format("%032X", 1), "coalesced again.avi", 4096, "Video"));
+            index.addFile(new FileMetadata(String.format("%032X", 7), "coalesced 7.avi", 2048, "Video"));
+            assertEquals(3, queued.size(), "the deletion closes the first write; the files after it share another");
+
+            queued.forEach(Runnable::run);
+            java.util.Map<String, FileMetadata> saved = new java.util.HashMap<>();
+            db.loadFiles().forEach(f -> saved.put(f.hash(), f));
+            assertEquals(4, saved.size());
+            assertEquals("coalesced again.avi", saved.get(String.format("%032X", 1)).name(), "written after its deletion");
+        }
+    }
+
+    @Test
     void databaseWritesRunOnThePersistenceExecutorInOrder() throws Exception {
         String dbPath = tempDir.resolve("asyncdb").toString();
         FileMetadata file = new FileMetadata("ABCDEF1234567890ABCDEF1234567890", "queued file.avi", 2048, "Video");

@@ -375,6 +375,7 @@ public class FileIndex {
         }
         searchCache.clear();
         if (db != null) {
+            sealPendingWrites();
             persistence.execute(() -> db.deleteFile(hashToDelete)); // after any queued write of this file
         }
         return true;
@@ -415,10 +416,71 @@ public class FileIndex {
         this.persistence = executor == null ? Runnable::run : executor;
     }
 
+    /** Most files written in one transaction by a {@link PendingWrites}: a larger one waits for the next. */
+    static final int MAX_PENDING_WRITES = 10_000;
+
+    /**
+     * Writes queued and not started yet: the files published one by one join the same transaction instead of a
+     * transaction each (which MySQL syncs to the disk, about 2 ms). Guarded by {@link #pendingLock}.
+     */
+    private PendingWrites pending;
+    private final Object pendingLock = new Object();
+
+    /** The writes of one transaction, the last state of each file kept. */
+    private static final class PendingWrites {
+        final Map<String, FileMetadata> files = new LinkedHashMap<>();
+        final Map<String, FileMetadata> sourceCounts = new LinkedHashMap<>();
+
+        void add(Writes writes) {
+            for (FileMetadata file : writes.files()) {
+                sourceCounts.remove(file.hash());
+                files.put(file.hash(), file);
+            }
+            for (FileMetadata file : writes.sourceCounts()) {
+                // A file written in this transaction is written again with its new count
+                if (files.containsKey(file.hash())) files.put(file.hash(), file);
+                else sourceCounts.put(file.hash(), file);
+            }
+        }
+
+        int size() {
+            return files.size() + sourceCounts.size();
+        }
+    }
+
     private void persist(Writes writes) {
-        if (db == null) return;
-        if (!writes.files().isEmpty()) persistence.execute(() -> db.saveFiles(writes.files()));
-        if (!writes.sourceCounts().isEmpty()) persistence.execute(() -> db.saveSourceCounts(writes.sourceCounts()));
+        if (db == null || writes.files().isEmpty() && writes.sourceCounts().isEmpty()) return;
+        PendingWrites started = null;
+        synchronized (pendingLock) {
+            if (pending == null || pending.size() >= MAX_PENDING_WRITES) {
+                pending = started = new PendingWrites();
+            }
+            pending.add(writes);
+        }
+        if (started != null) {
+            PendingWrites batch = started;
+            persistence.execute(() -> {
+                sealPendingWrites(batch);
+                if (!batch.files.isEmpty()) db.saveFiles(batch.files.values());
+                if (!batch.sourceCounts.isEmpty()) db.saveSourceCounts(batch.sourceCounts.values());
+            });
+        }
+    }
+
+    /**
+     * Writes queued after this call start a new transaction, queued after what the caller queues next: a deletion
+     * then never runs before a write of the same file published before it, nor after one published after it.
+     */
+    private void sealPendingWrites() {
+        synchronized (pendingLock) {
+            pending = null;
+        }
+    }
+
+    private void sealPendingWrites(PendingWrites batch) {
+        synchronized (pendingLock) {
+            if (pending == batch) pending = null;
+        }
     }
 
     /** Called with the write lock held. */

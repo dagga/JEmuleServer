@@ -61,7 +61,8 @@ You can start the server directly via Gradle:
 ```
 
 This task starts the JVM with `-Djava.net.preferIPv4Stack=true` (IPv4 only) and `-XX:ThreadPriorityPolicy=1`; use
-the JAR for IPv6.
+the JAR for IPv6. When a `server.properties.local` file exists (git-ignored, for the local database user and password
+of a development machine), it is used instead of `server.properties`.
 
 ### Manual JAR Launch
 
@@ -260,6 +261,90 @@ Once the load is over, the server checks every 10 minutes and compacts the file 
 less than 50% of it is used, the same way: the database is closed for the few seconds of the rewrite, the writes wait
 meanwhile, and the sizes are logged. Without it, the writes of a running server made the file grow from 200 MB to
 1.4 GB in 15 hours; H2's own background compaction neither prevents that growth nor shrinks the file.
+
+### MySQL database
+
+Instead of the H2 file, the server can keep its database on a MySQL 8 server or a MariaDB 10.11+ one (the test suite passes on both), on the same machine
+or on another one:
+
+```properties
+databaseType=mysql
+databaseUrl=jdbc:mysql://127.0.0.1:3306/jemule
+databaseUser=jemule
+# or empty, and the JEMULE_DATABASE_PASSWORD environment variable
+databasePassword=...
+```
+
+The database and its user are created once; the server creates its tables:
+
+```sql
+CREATE DATABASE jemule CHARACTER SET utf8mb4;
+CREATE USER 'jemule'@'localhost' IDENTIFIED BY '...';
+GRANT ALL PRIVILEGES ON jemule.* TO 'jemule'@'localhost';
+```
+
+What changes with MySQL:
+
+- **The JVM heap only holds the index.** H2 keeps its page cache and write buffers in the heap; MySQL keeps its
+  cache, the InnoDB buffer pool, in its own process. An OutOfMemoryError of the server no longer closes the database.
+- **The startup load reads from the buffer pool** when MySQL kept running: restarting the eD2K server does not read
+  the database from the disk again. Give `innodb_buffer_pool_size` at least the size of the database (shown in the
+  Overview), RAM permitting; `innodb_buffer_pool_dump_at_shutdown` (on by default) keeps it warm across MySQL
+  restarts too.
+- **No compaction:** InnoDB reuses the space it frees, so the startup and online compactions of H2, and the writes
+  they hold back, are gone.
+- **A remote server** costs a round trip per batch: the writes run on the ingestion thread, never on the clients',
+  and the startup load reads 5,000 files per query. Over the Internet, add `sslMode=REQUIRED` to the URL. A lost
+  connection is reopened at the next database operation, as H2 is after a fatal error (`databaseReopens`).
+
+MySQL 8 has no query cache any more (removed in 8.0), so the searches stay answered by the index in the heap, as with
+H2.
+
+Measured on a copy of the production database (2,097,328 files, 209,479 banned names, 977 MB of H2), with MySQL 8.4
+on the same machine and its default settings (128 MB buffer pool, the log synced at every commit):
+
+| Step | H2 | MySQL |
+|---|---|---|
+| Import into MySQL | – | 78 s |
+| Read every file | 43 s | 10 s |
+| Startup load of the index | 78 s | 51 s |
+| 450 searches (same index) | 7.1 s | 7.7 s |
+| 10,000 new files in one batch | 0.34 s | 0.45 s |
+| 9,940 source counts | 0.8 s | 4.3 s |
+| One file, ban, statistic written alone | 0.02–0.1 ms | 2–4 ms |
+
+A write alone costs a commit, which MySQL syncs to the disk; `innodb_flush_log_at_trx_commit=2` syncs once a second,
+as H2 does, and halves it. The files that clients publish one by one are written together: the files queued while
+the ingestion thread is busy share one transaction (10,000 at most), with H2 too.
+
+#### H2 / MySQL non-regression
+
+`H2MySqlEquivalenceTest` imports an H2 database into MySQL, then compares both: every file with its tags and source
+count, the banned names, statistics and metrics, the results of hundreds of searches on an index loaded from each, then
+the same after the same writes on both, each step timed on both sides. With `-Pmysql.url` it runs in the regular
+suite on generated files (every tag type, Unicode, names differing by case or accent only, sizes beyond 4 GB). On a
+real database, of which it uses a copy in `build/equivalence`:
+
+```bash
+./gradlew benchmark --tests '*H2MySqlEquivalenceTest' -Ph2=/path/to/jemule_db.mv.db -Pheap=6g \
+    -Pmysql.url=jdbc:mysql://127.0.0.1:3306/jemule_test -Pmysql.user=... -Pmysql.password=...
+```
+
+The tables of the MySQL database given are dropped. On the production copy above, no difference.
+
+#### Moving an H2 database to MySQL
+
+1. Stop the server, and keep a copy of `jemule_db.mv.db`.
+2. Create the MySQL database and its user as above, and set `databaseType=mysql` and the connection settings in
+   `server.properties`, leaving `databasePath` on the H2 database.
+3. Start the server. Finding the MySQL database without files and the H2 file at `databasePath`, it copies the files,
+   their tags and source counts, the banned names, the metrics history and the statistics (the Kad node keeps its ID)
+   before anything else, logging its progress. An import interrupted halfway resumes at the next start, after the
+   last file copied.
+4. The H2 file is no longer used: keep it as a backup, or delete it.
+
+`databaseImportFromH2=false` skips the import. To go back to H2, set `databaseType=h2`: the server starts from the H2
+file as it was when the import was done.
 
 ## Configuration
 

@@ -41,7 +41,15 @@ public enum ConfigParameter {
             "Files a single user can publish"),
     MAX_SOURCES_PER_FILE("maxSourcesPerFile", Type.INTEGER, Scope.HOT, 1, 10_000,
             "Sources returned per file request"),
-    DATABASE_PATH("databasePath", Type.STRING, Scope.RESTART, 0, 0, "H2 database path"),
+    DATABASE_PATH("databasePath", Type.STRING, Scope.RESTART, 0, 0,
+            "H2 database path (with MySQL: the H2 database imported at the first start)"),
+    DATABASE_TYPE("databaseType", Type.STRING, Scope.RESTART, 0, 0, "Database: h2 (file at databasePath) or mysql"),
+    DATABASE_URL("databaseUrl", Type.STRING, Scope.RESTART, 0, 0,
+            "MySQL JDBC URL, jdbc:mysql://host:3306/database (databaseType=mysql)"),
+    DATABASE_USER("databaseUser", Type.STRING, Scope.RESTART, 0, 0,
+            "MySQL user (the password is only read from server.properties or JEMULE_DATABASE_PASSWORD)"),
+    DATABASE_IMPORT_FROM_H2("databaseImportFromH2", Type.BOOLEAN, Scope.RESTART, 0, 0,
+            "MySQL: copy the H2 database at databasePath into an empty MySQL database at the first start"),
     IP_FILTER_PATH("ipFilterPath", Type.STRING, Scope.HOT, 0, 0,
             "IP filter file path (empty disables the filter and its updates)"),
     FAKE_FILE_DETECTION_ENABLED("fakeFileDetectionEnabled", Type.BOOLEAN, Scope.HOT, 0, 0,
@@ -267,6 +275,7 @@ public enum ConfigParameter {
                     }
                 }
             }
+            case "databaseType" -> DatabaseConfig.parseType(value);
             case "adminAllowedMacs" -> {
                 for (String token : splitList(value)) {
                     String normalized = org.jemule.security.AdminAccessFilter.normalizeMac(token);
