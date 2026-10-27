@@ -31,5 +31,8 @@ Thumbs.db
 /ipfilter.dat.trace
 *.bin
 
+# Development configuration with the local database password (./gradlew run)
+/server.properties.local
+
 # Specifications (kept local)
 /SFD_*.md

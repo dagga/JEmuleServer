@@ -215,7 +215,7 @@ final class AdminWebPanel implements AutoCloseable {
                 tile('Relay server',fmt(r.searches||0),'searches played on '+(r.server||'no relay server')+' · '+fmt(r.results||0)+' results in '+fmt(r.pages||0)+' pages · '+fmt(r.sourcesFound||0)+' HighID sources for '+fmt(r.sourceRequests||0)+' requests · '+fmt(r.announcedLogins||0)+' logins told of it · '+fmt(r.failures||0)+' failures',r.active?state('good','Active: the index is full'):'<div class="sub">'+(r.server?'Standing by until the index is full':'Not configured (relayServer)')+'</div>')+
                 tile('OFFERFILES v1',fmt(v.newFiles),'new files from fast-publishing clients since the last start · '+fmt(v.newFilesLegacy)+' from legacy clients · '+fmt(v.sessionsAdvertised)+' of '+fmt(v.loginsAsked)+' asking logins answered',v.enabled?state('good','Enabled'):'<div class="sub">Disabled (offerFilesV1Enabled)</div>')+
                 tile('Banned names',compact(o.protection.bannedNames),fmt(o.protection.bannedNames)+' file names, from the administrator and the child abuse filter · '+fmt(o.protection.childAbuseRejected)+' files and '+fmt(o.protection.childAbuseQueries||0)+' searches refused by the child abuse filter since the last start · '+fmt(o.protection.ipFilterRanges)+' IP filter ranges')+
-                tile('Database',o.database.sizeMb==null?'–':fmt(o.database.sizeMb)+' MB',o.database.reopens?state('critical','Reopened '+o.database.reopens+' times after a fatal error'):state('good','No fatal error'))+
+                tile('Database'+(o.database.type?' ('+o.database.type+')':''),o.database.sizeMb==null?'–':fmt(o.database.sizeMb)+' MB',o.database.reopens?state('critical',(o.database.type==='MySQL'?'Reconnected ':'Reopened ')+o.database.reopens+' times after a fatal error'):state('good','No fatal error'))+
                 tile('Uptime',duration(o.uptimeSeconds),'version '+esc(o.version));
             }
             async function refreshHistory(){try{hist=await getJson('/api/history?days=30')}catch(e){notice.textContent='Request failed: '+e.message;return}drawCharts()}
@@ -529,6 +529,7 @@ final class AdminWebPanel implements AutoCloseable {
         protection.put("ipFilterRanges", server.getIPFilter().getFilterCount());
 
         Map<String, Object> db = new java.util.LinkedHashMap<>();
+        db.put("type", database == null ? null : database.isMySql() ? "MySQL" : "H2");
         db.put("sizeMb", database == null ? null : database.fileSize() / 1024 / 1024);
         db.put("reopens", database == null ? 0L : database.getReopenCount());
 

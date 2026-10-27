@@ -267,6 +267,7 @@ public class Server {
         DatabaseManager dbMgr = null;
         try {
             dbMgr = new DatabaseManager(
+                    config.database(),
                     config.databasePath(),
                     config.cbFailureRateThreshold(),
                     config.cbMinimumNumberOfCalls(),
@@ -280,7 +281,8 @@ public class Server {
             log.info("Loaded {} banned file names from database ({} in all with the child abuse filter's)",
                     banned.size(), dbMgr.countBannedNames());
         } catch (SQLException e) {
-            log.error("Failed to initialize database: {}", e.getMessage());
+            log.error("Failed to initialize the database ({}): {}. The files are not saved until the next start",
+                    config.database(), e.getMessage());
         }
 
         this.db = dbMgr;
