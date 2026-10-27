@@ -61,6 +61,8 @@ tasks.register<Test>("benchmark") {
     // A low-cost server has 1 or 2 vCPUs
     jvmArgs("-XX:ActiveProcessorCount=" + (project.findProperty("cpus") ?: "2").toString())
     systemProperty("jemule.benchmark.files", (project.findProperty("files") ?: "1000000").toString())
+    // H2 database (a copy is used) compared with its MySQL import: -Ph2=/path/to/jemule_db.mv.db
+    project.findProperty("h2")?.let { systemProperty("jemule.equivalence.h2", it.toString()) }
     listOf("url", "user", "password").forEach { key ->
         project.findProperty("mysql.$key")?.let { systemProperty("jemule.test.mysql.$key", it.toString()) }
     }

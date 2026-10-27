@@ -95,7 +95,8 @@ public class DatabaseManager implements AutoCloseable {
 
     /**
      * MySQL tables: the same columns as H2's. Hashes in ASCII, binary collations so that names compare as in H2
-     * (MySQL's default ones ignore case and accents). The tags of a file are clustered under its hash, in their order.
+     * (MySQL's default ones ignore case and accents), ban dates to the microsecond as in H2 (MySQL rounds them to the
+     * second by default). The tags of a file are clustered under its hash, in their order.
      */
     private static final List<String> MYSQL_SCHEMA = List.of(
             """
@@ -138,7 +139,7 @@ public class DatabaseManager implements AutoCloseable {
             CREATE TABLE IF NOT EXISTS banned_names (
                 name VARCHAR(768) NOT NULL PRIMARY KEY,
                 reason VARCHAR(255),
-                added_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+                added_at TIMESTAMP(6) NULL DEFAULT CURRENT_TIMESTAMP(6),
                 KEY (added_at)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin""");
 
@@ -947,14 +948,25 @@ public class DatabaseManager implements AutoCloseable {
         if (files == null || files.isEmpty()) return;
         try {
             locked(() -> {
-                try (PreparedStatement mergeSources = connection.prepareStatement(sql.mergeSourceCountOfSavedFile())) {
-                    for (FileMetadata meta : files) {
-                        mergeSources.setString(1, meta.hash());
-                        mergeSources.setInt(2, meta.sourceCount());
-                        mergeSources.setString(3, meta.hash());
-                        mergeSources.addBatch();
+                // One transaction: in auto-commit, MySQL syncs its log to the disk after every row of the batch (an
+                // INSERT ... SELECT is not rewritten into one statement)
+                try {
+                    connection.setAutoCommit(false);
+                    try (PreparedStatement mergeSources = connection.prepareStatement(sql.mergeSourceCountOfSavedFile())) {
+                        for (FileMetadata meta : files) {
+                            mergeSources.setString(1, meta.hash());
+                            mergeSources.setInt(2, meta.sourceCount());
+                            mergeSources.setString(3, meta.hash());
+                            mergeSources.addBatch();
+                        }
+                        mergeSources.executeBatch();
                     }
-                    mergeSources.executeBatch();
+                    connection.commit();
+                } catch (SQLException e) {
+                    try { connection.rollback(); } catch (SQLException ex) { /* ignore */ }
+                    throw e;
+                } finally {
+                    try { connection.setAutoCommit(true); } catch (SQLException e) { /* ignore */ }
                 }
                 return null;
             });

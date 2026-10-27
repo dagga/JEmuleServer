@@ -300,11 +300,37 @@ What changes with MySQL:
 MySQL 8 has no query cache any more (removed in 8.0), so the searches stay answered by the index in the heap, as with
 H2.
 
-Measured with `./gradlew benchmark -Pfiles=1000000 -Pmysql.url=... -Pmysql.user=... -Pmysql.password=...` (MySQL 8.4
-on the same machine, 1 GB buffer pool): the H2 database of 1,000,000 files is imported in 28 s and takes 195 MB in
-MySQL; the startup load takes 12 s instead of 17 s from H2; the index takes the same heap, and H2 keeps a few more MB
-of cache in it. A write of 10,000 files costs 0.02 ms per file, as with H2; a single file written alone costs about
-2 ms (a commit, synced to the disk), 1 ms with `innodb_flush_log_at_trx_commit=2`, which syncs once a second like H2.
+Measured on a copy of the production database (2,097,328 files, 209,479 banned names, 977 MB of H2), with MySQL 8.4
+on the same machine and its default settings (128 MB buffer pool, the log synced at every commit):
+
+| Step | H2 | MySQL |
+|---|---|---|
+| Import into MySQL | – | 78 s |
+| Read every file | 43 s | 10 s |
+| Startup load of the index | 78 s | 51 s |
+| 450 searches (same index) | 7.1 s | 7.7 s |
+| 10,000 new files in one batch | 0.34 s | 0.45 s |
+| 9,940 source counts | 0.8 s | 4.3 s |
+| One file, ban, statistic written alone | 0.02–0.1 ms | 2–4 ms |
+
+A write alone costs a commit, which MySQL syncs to the disk; `innodb_flush_log_at_trx_commit=2` syncs once a second,
+as H2 does, and halves it. The files that clients publish one by one are written together: the files queued while
+the ingestion thread is busy share one transaction (10,000 at most), with H2 too.
+
+#### H2 / MySQL non-regression
+
+`H2MySqlEquivalenceTest` imports an H2 database into MySQL, then compares both: every file with its tags and source
+count, the banned names, statistics and metrics, the results of hundreds of searches on an index loaded from each, then
+the same after the same writes on both, each step timed on both sides. With `-Pmysql.url` it runs in the regular
+suite on generated files (every tag type, Unicode, names differing by case or accent only, sizes beyond 4 GB). On a
+real database, of which it uses a copy in `build/equivalence`:
+
+```bash
+./gradlew benchmark --tests '*H2MySqlEquivalenceTest' -Ph2=/path/to/jemule_db.mv.db -Pheap=6g \
+    -Pmysql.url=jdbc:mysql://127.0.0.1:3306/jemule_test -Pmysql.user=... -Pmysql.password=...
+```
+
+The tables of the MySQL database given are dropped. On the production copy above, no difference.
 
 #### Moving an H2 database to MySQL
 
