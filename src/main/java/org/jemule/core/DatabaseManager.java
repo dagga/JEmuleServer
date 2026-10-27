@@ -21,6 +21,7 @@ package org.jemule.core;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import io.github.resilience4j.core.functions.CheckedSupplier;
+import org.jemule.config.DatabaseConfig;
 import org.jemule.protocol.Tag;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -50,15 +51,114 @@ public class DatabaseManager implements AutoCloseable {
     static final String SCHEMA_VERSION_KEY = "schema_version";
     /** Rows of file_tags read per transaction, so that a migration never holds much memory. */
     private static final int MIGRATION_BATCH_ROWS = 50_000;
-    private static final String MERGE_SOURCE_COUNT =
-            "MERGE INTO file_sources (hash, source_count) KEY (hash) VALUES (?, ?)";
-    private static final String MERGE_SOURCE_COUNT_OF_SAVED_FILE = """
-            MERGE INTO file_sources (hash, source_count) KEY (hash)
-            SELECT ?, ? FROM files WHERE hash = ?""";
+    /** Files read per query when loading a MySQL database: the driver reads a whole result set into memory. */
+    static final int MYSQL_LOAD_PAGE_FILES = 5_000;
+    /** Time the size of a MySQL database is kept: the overview asks for it every few seconds. */
+    private static final long MYSQL_SIZE_TTL_MS = 60_000;
 
+    /**
+     * The statements written differently for H2 and MySQL: H2's MERGE ... KEY is INSERT ... ON DUPLICATE KEY UPDATE
+     * in MySQL (VALUES() rather than a row alias, which MariaDB does not know). The parameters are the same.
+     */
+    record Sql(String mergeFile, String mergeSourceCount, String mergeSourceCountOfSavedFile, String mergeBannedName,
+               String insertBannedNameIfAbsent, String mergeMetricsSample, String mergeStat, int maxBannedNameLength) {
+    }
+
+    static final Sql H2_SQL = new Sql(
+            "MERGE INTO files (hash, name, size, type) KEY (hash) VALUES (?, ?, ?, ?)",
+            "MERGE INTO file_sources (hash, source_count) KEY (hash) VALUES (?, ?)",
+            """
+            MERGE INTO file_sources (hash, source_count) KEY (hash)
+            SELECT ?, ? FROM files WHERE hash = ?""",
+            "MERGE INTO banned_names (name, reason) KEY (name) VALUES (?, ?)",
+            "INSERT INTO banned_names (name, reason) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM banned_names WHERE name = ?)",
+            "MERGE INTO metrics_history (sampled_at, files, clients) KEY (sampled_at) VALUES (?, ?, ?)",
+            "MERGE INTO stats (stat_key, stat_value) KEY (stat_key) VALUES (?, ?)",
+            1024);
+
+    static final Sql MYSQL_SQL = new Sql(
+            "INSERT INTO files (hash, name, size, type) VALUES (?, ?, ?, ?) "
+                    + "ON DUPLICATE KEY UPDATE name = VALUES(name), size = VALUES(size), type = VALUES(type)",
+            "INSERT INTO file_sources (hash, source_count) VALUES (?, ?) "
+                    + "ON DUPLICATE KEY UPDATE source_count = VALUES(source_count)",
+            "INSERT INTO file_sources (hash, source_count) SELECT ?, ? FROM files WHERE hash = ? "
+                    + "ON DUPLICATE KEY UPDATE source_count = VALUES(source_count)",
+            "INSERT INTO banned_names (name, reason) VALUES (?, ?) ON DUPLICATE KEY UPDATE reason = VALUES(reason)",
+            "INSERT INTO banned_names (name, reason) SELECT ?, ? FROM DUAL "
+                    + "WHERE NOT EXISTS (SELECT 1 FROM banned_names WHERE name = ?)",
+            "INSERT INTO metrics_history (sampled_at, files, clients) VALUES (?, ?, ?) "
+                    + "ON DUPLICATE KEY UPDATE files = VALUES(files), clients = VALUES(clients)",
+            "INSERT INTO stats (stat_key, stat_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE stat_value = VALUES(stat_value)",
+            // The longest primary key of InnoDB is 3,072 bytes, 4 per utf8mb4 character; no file system takes a
+            // name that long anyway
+            768);
+
+    /**
+     * MySQL tables: the same columns as H2's. Hashes in ASCII, binary collations so that names compare as in H2
+     * (MySQL's default ones ignore case and accents). The tags of a file are clustered under its hash, in their order.
+     */
+    private static final List<String> MYSQL_SCHEMA = List.of(
+            """
+            CREATE TABLE IF NOT EXISTS files (
+                hash VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL PRIMARY KEY,
+                name VARCHAR(1024) NOT NULL,
+                size BIGINT NOT NULL,
+                type VARCHAR(255)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin""",
+            """
+            CREATE TABLE IF NOT EXISTS file_tags (
+                file_hash VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+                id BIGINT NOT NULL AUTO_INCREMENT,
+                tag_type TINYINT,
+                tag_name VARCHAR(255),
+                tag_value_str MEDIUMTEXT,
+                tag_value_blob MEDIUMBLOB,
+                PRIMARY KEY (file_hash, id),
+                KEY (id),
+                FOREIGN KEY (file_hash) REFERENCES files(hash) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin""",
+            """
+            CREATE TABLE IF NOT EXISTS file_sources (
+                hash VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL PRIMARY KEY,
+                source_count INT NOT NULL,
+                FOREIGN KEY (hash) REFERENCES files(hash) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin""",
+            """
+            CREATE TABLE IF NOT EXISTS stats (
+                stat_key VARCHAR(255) NOT NULL PRIMARY KEY,
+                stat_value BIGINT
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin""",
+            """
+            CREATE TABLE IF NOT EXISTS metrics_history (
+                sampled_at BIGINT NOT NULL PRIMARY KEY,
+                files INT NOT NULL,
+                clients INT NOT NULL
+            ) ENGINE=InnoDB""",
+            """
+            CREATE TABLE IF NOT EXISTS banned_names (
+                name VARCHAR(768) NOT NULL PRIMARY KEY,
+                reason VARCHAR(255),
+                added_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+                KEY (added_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin""");
+
+    /** One page of files with their sources and tags, in hash order (MySQL). */
+    private static final String MYSQL_LOAD_PAGE = """
+            SELECT f.hash, f.name, f.size, f.type, t.tag_type, t.tag_name, t.tag_value_str, t.tag_value_blob,
+                   s.source_count
+            FROM (SELECT hash, name, size, type FROM files WHERE hash > ? ORDER BY hash LIMIT ?) f
+            LEFT JOIN file_sources s ON s.hash = f.hash
+            LEFT JOIN file_tags t ON t.file_hash = f.hash ORDER BY f.hash, t.id""";
+
+    private final boolean mysql;
+    private final Sql sql;
     private final String url;
-    /** The H2 file, for the sizes logged around a compaction. */
+    private final String user;
+    private final String password;
+    /** The H2 file, for the sizes logged around a compaction; null with MySQL. */
     private final java.io.File file;
+    private volatile long mysqlSize;
+    private volatile long mysqlSizeReadAt;
     /** Replaced when the database is reopened after a fatal error; only used while holding {@link #lock}. */
     private volatile Connection connection;
     private final CircuitBreaker circuitBreaker;
@@ -78,25 +178,76 @@ public class DatabaseManager implements AutoCloseable {
     }
 
     public DatabaseManager(String dbPath, float failureRateThreshold, int minCalls, int waitDurationInSeconds) throws SQLException {
-        // No background compaction: it rewrites the live pages at the end of the file, and while a long statement
-        // (the load at startup, a migration) keeps the old ones, the file grows by gigabytes; afterwards, it does not
-        // shrink the file either. The file is compacted at startup instead (compactIfSparse), then while the server
-        // runs (compactOnline). A 4 MB page cache instead of 16: the database is read
-        // once at startup, then only written to.
-        this.url = "jdbc:h2:" + dbPath + ";AUTO_COMPACT_FILL_RATE=0;CACHE_SIZE=4096";
-        this.file = new java.io.File(dbPath + ".mv.db");
-        this.connection = DriverManager.getConnection(url, "sa", "");
-        
+        this(DatabaseConfig.DEFAULT, dbPath, failureRateThreshold, minCalls, waitDurationInSeconds);
+    }
+
+    /**
+     * @param database the H2 file at {@code dbPath}, or a MySQL database; with MySQL, {@code dbPath} is the H2
+     *                 database copied into it at the first start ({@link DatabaseConfig#importFromH2()})
+     */
+    public DatabaseManager(DatabaseConfig database, String dbPath, float failureRateThreshold, int minCalls,
+                           int waitDurationInSeconds) throws SQLException {
+        this.mysql = database.isMySql();
+        this.sql = mysql ? MYSQL_SQL : H2_SQL;
+        if (mysql) {
+            this.url = database.jdbcUrl();
+            this.user = database.user();
+            this.password = database.effectivePassword();
+            this.file = null;
+        } else {
+            // No background compaction: it rewrites the live pages at the end of the file, and while a long statement
+            // (the load at startup, a migration) keeps the old ones, the file grows by gigabytes; afterwards, it does
+            // not shrink the file either. The file is compacted at startup instead (compactIfSparse), then while the
+            // server runs (compactOnline). A 4 MB page cache instead of 16: the database is read
+            // once at startup, then only written to.
+            this.url = "jdbc:h2:" + dbPath + ";AUTO_COMPACT_FILL_RATE=0;CACHE_SIZE=4096";
+            this.user = "sa";
+            this.password = "";
+            this.file = new java.io.File(dbPath + ".mv.db");
+        }
+        this.connection = connect();
+
         CircuitBreakerConfig config = CircuitBreakerConfig.custom()
                 .failureRateThreshold(failureRateThreshold)
                 .minimumNumberOfCalls(minCalls)
                 .waitDurationInOpenState(java.time.Duration.ofSeconds(waitDurationInSeconds))
                 .build();
         this.circuitBreaker = CircuitBreaker.of("database", config);
-        
+
         initSchema();
         migrate();
-        compactIfSparse();
+        if (mysql) {
+            if (database.importFromH2()) {
+                try {
+                    new H2ToMySqlImport(this, dbPath).importIfNeeded();
+                } catch (SQLException e) {
+                    // Not started on an incomplete database: the import resumes at the next start
+                    connection.close();
+                    throw e;
+                }
+            }
+        } else {
+            compactIfSparse();
+        }
+    }
+
+    private Connection connect() throws SQLException {
+        return DriverManager.getConnection(url, user, password);
+    }
+
+    /** True with MySQL, false with H2. */
+    public boolean isMySql() {
+        return mysql;
+    }
+
+    /** The SQL of this database's dialect, for {@link H2ToMySqlImport}. */
+    Sql sql() {
+        return sql;
+    }
+
+    /** The connection, for {@link H2ToMySqlImport}, which runs in the constructor before any other use. */
+    Connection connection() {
+        return connection;
     }
 
     /**
@@ -132,6 +283,15 @@ public class DatabaseManager implements AutoCloseable {
             return;
         }
         if (version >= SCHEMA_VERSION) return;
+        if (mysql) {
+            // MySQL tables are created at the current version; the older ones were H2 only
+            try {
+                setStatInternal(SCHEMA_VERSION_KEY, SCHEMA_VERSION);
+            } catch (SQLException e) {
+                logger.error("Could not write the database schema version: {}", e.getMessage());
+            }
+            return;
+        }
         try {
             long start = System.currentTimeMillis();
             boolean changed = false;
@@ -317,6 +477,7 @@ public class DatabaseManager implements AutoCloseable {
      * @return true if the file was compacted
      */
     public boolean compactOnline() {
+        if (mysql) return false; // InnoDB reuses the space it frees
         try {
             return locked(() -> {
                 if (file.length() < ONLINE_MIN_FILE_BYTES) return false;
@@ -358,7 +519,7 @@ public class DatabaseManager implements AutoCloseable {
             logger.warn("Database compaction failed: {}", e.getMessage());
         }
         try {
-            connection = DriverManager.getConnection(url, "sa", "");
+            connection = connect();
             logger.info("Database compacted in {} s: {} MB", (System.currentTimeMillis() - start) / 1000,
                     file.length() / 1_048_576);
         } catch (SQLException e) {
@@ -390,6 +551,11 @@ public class DatabaseManager implements AutoCloseable {
     /** Whether {@code e} means that the database or the connection is closed, as after a fatal error. */
     static boolean isDatabaseClosed(Throwable e) {
         for (Throwable t = e; t != null; t = t.getCause()) {
+            // A MySQL connection lost (server restarted, network): SQLState class 08
+            if (t instanceof SQLRecoverableException || t instanceof SQLNonTransientConnectionException) return true;
+            if (t instanceof SQLException sql && sql.getSQLState() != null && sql.getSQLState().startsWith("08")) {
+                return true;
+            }
             if (t instanceof SQLException sql) {
                 switch (sql.getErrorCode()) {
                     case org.h2.api.ErrorCode.DATABASE_IS_CLOSED, org.h2.api.ErrorCode.DATABASE_CALLED_AT_SHUTDOWN,
@@ -415,17 +581,22 @@ public class DatabaseManager implements AutoCloseable {
         long now = System.currentTimeMillis();
         if (now - lastReopenAttempt < REOPEN_INTERVAL_MS) return false;
         lastReopenAttempt = now;
-        logger.error("The database was closed by a fatal error ({}): reopening it", cause.getMessage());
+        logger.error("The database {} ({}): reopening it", mysql ? "connection was lost" : "was closed by a fatal error",
+                cause.getMessage());
         try {
             connection.close();
         } catch (SQLException ignored) {
             // the connection is already unusable
         }
         try {
-            connection = DriverManager.getConnection(url, "sa", "");
+            connection = connect();
             initSchema();
             reopenCount.incrementAndGet();
-            logger.error("Database reopened: writes resume. Check the memory of the JVM (-XX:MaxRAMPercentage)");
+            if (mysql) {
+                logger.error("Reconnected to the MySQL database: writes resume");
+            } else {
+                logger.error("Database reopened: writes resume. Check the memory of the JVM (-XX:MaxRAMPercentage)");
+            }
             return true;
         } catch (SQLException e) {
             logger.error("Could not reopen the database (next attempt in {} s): {}", REOPEN_INTERVAL_MS / 1000,
@@ -434,9 +605,27 @@ public class DatabaseManager implements AutoCloseable {
         }
     }
 
-    /** Size of the database file in bytes (0 for an in-memory database). */
+    /**
+     * Size of the database file in bytes (0 for an in-memory database). With MySQL, the data and indexes of its
+     * tables as InnoDB estimates them, read once a minute at most.
+     */
     public long fileSize() {
-        return file.length();
+        if (!mysql) return file.length();
+        long now = System.currentTimeMillis();
+        if (now - mysqlSizeReadAt < MYSQL_SIZE_TTL_MS) return mysqlSize;
+        mysqlSizeReadAt = now;
+        try {
+            mysqlSize = locked(() -> {
+                try (Statement stmt = connection.createStatement();
+                     ResultSet rs = stmt.executeQuery("SELECT COALESCE(SUM(data_length + index_length), 0) "
+                             + "FROM information_schema.TABLES WHERE table_schema = DATABASE()")) {
+                    return rs.next() ? rs.getLong(1) : 0L;
+                }
+            });
+        } catch (Throwable e) {
+            logger.warn("Could not read the size of the MySQL database: {}", e.getMessage());
+        }
+        return mysqlSize;
     }
 
     /** Times the database was reopened after a fatal error since the server started. */
@@ -445,6 +634,12 @@ public class DatabaseManager implements AutoCloseable {
     }
 
     private void initSchema() throws SQLException {
+        if (mysql) {
+            try (Statement stmt = connection.createStatement()) {
+                for (String table : MYSQL_SCHEMA) stmt.execute(table);
+            }
+            return;
+        }
         try (Statement stmt = connection.createStatement()) {
             // Table for files
             stmt.execute("""
@@ -512,10 +707,10 @@ public class DatabaseManager implements AutoCloseable {
 
     /** Bans a file name (already normalized by the caller). */
     public void addBannedName(String name, String reason) {
+        if (tooLongToBan(name)) return;
         try {
             locked(() -> {
-                try (PreparedStatement ps = connection.prepareStatement(
-                        "MERGE INTO banned_names (name, reason) KEY (name) VALUES (?, ?)")) {
+                try (PreparedStatement ps = connection.prepareStatement(sql.mergeBannedName())) {
                     ps.setString(1, name);
                     ps.setString(2, reason);
                     ps.executeUpdate();
@@ -546,10 +741,10 @@ public class DatabaseManager implements AutoCloseable {
      * date, and a ban of the administrator keeps its reason.
      */
     public void addBannedNameIfAbsent(String name, String reason) {
+        if (tooLongToBan(name)) return;
         try {
             locked(() -> {
-                try (PreparedStatement ps = connection.prepareStatement("INSERT INTO banned_names (name, reason) "
-                        + "SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM banned_names WHERE name = ?)")) {
+                try (PreparedStatement ps = connection.prepareStatement(sql.insertBannedNameIfAbsent())) {
                     ps.setString(1, name);
                     ps.setString(2, reason);
                     ps.setString(3, name);
@@ -560,6 +755,13 @@ public class DatabaseManager implements AutoCloseable {
         } catch (Throwable e) {
             logger.error("Circuit breaker prevented or caught error during addBannedNameIfAbsent: {}", e.getMessage());
         }
+    }
+
+    /** Whether {@code name} is longer than a banned name of this database can be; it is then not recorded. */
+    private boolean tooLongToBan(String name) {
+        if (name == null || name.length() <= sql.maxBannedNameLength()) return false;
+        logger.debug("Banned name of {} characters not recorded: longer than {}", name.length(), sql.maxBannedNameLength());
+        return true;
     }
 
     /** The banned names whose reason is not {@code excludedReason} (null: all of them), the most recent first. */
@@ -685,12 +887,11 @@ public class DatabaseManager implements AutoCloseable {
 
         try {
             connection.setAutoCommit(false);
-            try (PreparedStatement mergeFile = connection.prepareStatement(
-                         "MERGE INTO files (hash, name, size, type) KEY (hash) VALUES (?, ?, ?, ?)");
+            try (PreparedStatement mergeFile = connection.prepareStatement(sql.mergeFile());
                  PreparedStatement deleteTags = connection.prepareStatement("DELETE FROM file_tags WHERE file_hash = ?");
                  PreparedStatement insertTag = connection.prepareStatement(
                          "INSERT INTO file_tags (file_hash, tag_type, tag_name, tag_value_str, tag_value_blob) VALUES (?, ?, ?, ?, ?)");
-                 PreparedStatement mergeSources = connection.prepareStatement(MERGE_SOURCE_COUNT)) {
+                 PreparedStatement mergeSources = connection.prepareStatement(sql.mergeSourceCount())) {
                 for (FileMetadata meta : uniqueFiles.values()) {
                     mergeFile.setString(1, meta.hash());
                     mergeFile.setString(2, meta.name());
@@ -746,7 +947,7 @@ public class DatabaseManager implements AutoCloseable {
         if (files == null || files.isEmpty()) return;
         try {
             locked(() -> {
-                try (PreparedStatement mergeSources = connection.prepareStatement(MERGE_SOURCE_COUNT_OF_SAVED_FILE)) {
+                try (PreparedStatement mergeSources = connection.prepareStatement(sql.mergeSourceCountOfSavedFile())) {
                     for (FileMetadata meta : files) {
                         mergeSources.setString(1, meta.hash());
                         mergeSources.setInt(2, meta.sourceCount());
@@ -790,36 +991,63 @@ public class DatabaseManager implements AutoCloseable {
     private void forEachFileInternal(Consumer<FileMetadata> consumer) throws SQLException {
         // Type and tag names repeat on every row: one instance of each is kept
         Map<String, String> shared = new HashMap<>();
-        try (Statement stmt = connection.createStatement();
-             ResultSet rs = stmt.executeQuery("""
-                     SELECT f.hash, f.name, f.size, f.type, t.tag_type, t.tag_name, t.tag_value_str, t.tag_value_blob,
-                            s.source_count
-                     FROM files f LEFT JOIN file_sources s ON s.hash = f.hash
-                     LEFT JOIN file_tags t ON t.file_hash = f.hash ORDER BY f._ROWID_""")) {
-            String hash = null, name = null, type = null;
-            long size = 0;
-            int sourceCount = -1;
-            List<Tag> tags = new ArrayList<>();
-            while (rs.next()) {
-                String rowHash = rs.getString(1);
-                if (!rowHash.equals(hash)) {
-                    if (hash != null) consumer.accept(loaded(hash, name, size, type, tags, sourceCount));
-                    hash = rowHash;
-                    name = rs.getString(2);
-                    size = rs.getLong(3);
-                    type = share(shared, rs.getString(4));
-                    int count = rs.getInt(9);
-                    sourceCount = rs.wasNull() ? -1 : count;
-                    tags.clear();
-                }
-                String tagName = rs.getString(6);
-                if (tagName != null) {
-                    Tag tag = readTag(rs.getByte(5), share(shared, tagName), rs.getString(7), rs.getBytes(8));
-                    if (tag != null) tags.add(tag);
-                }
+        if (!mysql) {
+            try (Statement stmt = connection.createStatement();
+                 ResultSet rs = stmt.executeQuery("""
+                         SELECT f.hash, f.name, f.size, f.type, t.tag_type, t.tag_name, t.tag_value_str, t.tag_value_blob,
+                                s.source_count
+                         FROM files f LEFT JOIN file_sources s ON s.hash = f.hash
+                         LEFT JOIN file_tags t ON t.file_hash = f.hash ORDER BY f._ROWID_""")) {
+                readFiles(rs, shared, consumer);
             }
-            if (hash != null) consumer.accept(loaded(hash, name, size, type, tags, sourceCount));
+            return;
         }
+        // Connector/J reads a whole result set into memory: page after page of files, each one a range of the
+        // primary key, which also keeps every query short on a remote server
+        try (PreparedStatement page = connection.prepareStatement(MYSQL_LOAD_PAGE)) {
+            String after = "";
+            while (true) {
+                page.setString(1, after);
+                page.setInt(2, MYSQL_LOAD_PAGE_FILES);
+                try (ResultSet rs = page.executeQuery()) {
+                    after = readFiles(rs, shared, consumer);
+                }
+                if (after == null) return;
+            }
+        }
+    }
+
+    /**
+     * Hands the files of {@code rs} to {@code consumer}, its rows being grouped by file.
+     *
+     * @return the hash of the last file, null if there was none
+     */
+    private static String readFiles(ResultSet rs, Map<String, String> shared, Consumer<FileMetadata> consumer)
+            throws SQLException {
+        String hash = null, name = null, type = null;
+        long size = 0;
+        int sourceCount = -1;
+        List<Tag> tags = new ArrayList<>();
+        while (rs.next()) {
+            String rowHash = rs.getString(1);
+            if (!rowHash.equals(hash)) {
+                if (hash != null) consumer.accept(loaded(hash, name, size, type, tags, sourceCount));
+                hash = rowHash;
+                name = rs.getString(2);
+                size = rs.getLong(3);
+                type = share(shared, rs.getString(4));
+                int count = rs.getInt(9);
+                sourceCount = rs.wasNull() ? -1 : count;
+                tags.clear();
+            }
+            String tagName = rs.getString(6);
+            if (tagName != null) {
+                Tag tag = readTag(rs.getByte(5), share(shared, tagName), rs.getString(7), rs.getBytes(8));
+                if (tag != null) tags.add(tag);
+            }
+        }
+        if (hash != null) consumer.accept(loaded(hash, name, size, type, tags, sourceCount));
+        return hash;
     }
 
     /** A file read from the database, its source count taken from file_sources when higher than its old tag. */
@@ -867,8 +1095,7 @@ public class DatabaseManager implements AutoCloseable {
     public void saveMetricsSample(long sampledAt, int files, int clients, long keepSince) {
         try {
             locked(() -> {
-                try (PreparedStatement merge = connection.prepareStatement(
-                             "MERGE INTO metrics_history (sampled_at, files, clients) KEY (sampled_at) VALUES (?, ?, ?)");
+                try (PreparedStatement merge = connection.prepareStatement(sql.mergeMetricsSample());
                      PreparedStatement prune = connection.prepareStatement(
                              "DELETE FROM metrics_history WHERE sampled_at < ?")) {
                     merge.setLong(1, sampledAt);
@@ -917,8 +1144,7 @@ public class DatabaseManager implements AutoCloseable {
     }
 
     private void setStatInternal(String key, long value) throws SQLException {
-        try (PreparedStatement ps = connection.prepareStatement(
-                "MERGE INTO stats (stat_key, stat_value) KEY (stat_key) VALUES (?, ?)")) {
+        try (PreparedStatement ps = connection.prepareStatement(sql.mergeStat())) {
             ps.setString(1, key);
             ps.setLong(2, value);
             ps.executeUpdate();

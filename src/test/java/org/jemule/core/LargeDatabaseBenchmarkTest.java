@@ -196,4 +196,51 @@ class LargeDatabaseBenchmarkTest {
             System.out.printf("addFile: %.2f ms per file (with H2 write)%n", (System.nanoTime() - start) / 1e6 / 1000);
         }
     }
+
+    /**
+     * The same database imported into MySQL, then loaded from it twice: right after the import, and again with the
+     * InnoDB buffer pool warm, as when only the eD2K server restarts. Needs -Pmysql.url (its tables are dropped).
+     */
+    @Test
+    void largeDatabaseOnMySql(@TempDir Path dir) throws Exception {
+        String url = System.getProperty("jemule.test.mysql.url");
+        org.junit.jupiter.api.Assumptions.assumeTrue(url != null && !url.isBlank(), "no MySQL server given (-Pmysql.url)");
+        String user = System.getProperty("jemule.test.mysql.user", "root");
+        String password = System.getProperty("jemule.test.mysql.password", "");
+        try (Connection c = DriverManager.getConnection(url, user, password); java.sql.Statement stmt = c.createStatement()) {
+            for (String table : List.of("file_tags", "file_sources", "files", "stats", "metrics_history", "banned_names")) {
+                stmt.execute("DROP TABLE IF EXISTS " + table);
+            }
+        }
+        int count = Integer.getInteger("jemule.benchmark.files", 1_000_000);
+        String dbPath = dir.resolve("bench").toString();
+        fill(dbPath, count, vocabulary(new Random(7)));
+        System.out.printf("%n=== MySQL benchmark: %,d files ===%n", count);
+        org.jemule.config.DatabaseConfig mysql =
+                new org.jemule.config.DatabaseConfig(org.jemule.config.DatabaseConfig.Type.MYSQL, url, user, password, true);
+
+        long start = System.nanoTime();
+        try (DatabaseManager db = new DatabaseManager(mysql, dbPath, 50.0f, 10, 60)) {
+            System.out.printf("H2 import: %.1f s, %,d MB in MySQL%n", (System.nanoTime() - start) / 1e9,
+                    db.fileSize() / 1024 / 1024);
+        }
+        for (String run : List.of("after the import", "buffer pool warm")) {
+            long heapBefore = usedHeapMb();
+            try (DatabaseManager db = new DatabaseManager(mysql, dbPath, 50.0f, 10, 60)) {
+                start = System.nanoTime();
+                FileIndex index = new FileIndex(db);
+                System.out.printf("Startup load (%s): %,d files in %.1f s, index %,d MB%n", run, index.fileCount(),
+                        (System.nanoTime() - start) / 1e9, usedHeapMb() - heapBefore);
+                if (run.startsWith("buffer")) {
+                    start = System.nanoTime();
+                    for (int i = 0; i < 1000; i++) {
+                        index.addFile(new FileMetadata(String.format("%032x", i), "new file " + i + ".avi", 1000L,
+                                "Video", List.of(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, 1))));
+                    }
+                    System.out.printf("addFile: %.2f ms per file (with MySQL write)%n",
+                            (System.nanoTime() - start) / 1e6 / 1000);
+                }
+            }
+        }
+    }
 }

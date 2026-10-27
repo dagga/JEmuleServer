@@ -61,7 +61,8 @@ You can start the server directly via Gradle:
 ```
 
 This task starts the JVM with `-Djava.net.preferIPv4Stack=true` (IPv4 only) and `-XX:ThreadPriorityPolicy=1`; use
-the JAR for IPv6.
+the JAR for IPv6. When a `server.properties.local` file exists (git-ignored, for the local database user and password
+of a development machine), it is used instead of `server.properties`.
 
 ### Manual JAR Launch
 
@@ -260,6 +261,64 @@ Once the load is over, the server checks every 10 minutes and compacts the file 
 less than 50% of it is used, the same way: the database is closed for the few seconds of the rewrite, the writes wait
 meanwhile, and the sizes are logged. Without it, the writes of a running server made the file grow from 200 MB to
 1.4 GB in 15 hours; H2's own background compaction neither prevents that growth nor shrinks the file.
+
+### MySQL database
+
+Instead of the H2 file, the server can keep its database on a MySQL 8 server (MariaDB works too), on the same machine
+or on another one:
+
+```properties
+databaseType=mysql
+databaseUrl=jdbc:mysql://127.0.0.1:3306/jemule
+databaseUser=jemule
+# or empty, and the JEMULE_DATABASE_PASSWORD environment variable
+databasePassword=...
+```
+
+The database and its user are created once; the server creates its tables:
+
+```sql
+CREATE DATABASE jemule CHARACTER SET utf8mb4;
+CREATE USER 'jemule'@'localhost' IDENTIFIED BY '...';
+GRANT ALL PRIVILEGES ON jemule.* TO 'jemule'@'localhost';
+```
+
+What changes with MySQL:
+
+- **The JVM heap only holds the index.** H2 keeps its page cache and write buffers in the heap; MySQL keeps its
+  cache, the InnoDB buffer pool, in its own process. An OutOfMemoryError of the server no longer closes the database.
+- **The startup load reads from the buffer pool** when MySQL kept running: restarting the eD2K server does not read
+  the database from the disk again. Give `innodb_buffer_pool_size` at least the size of the database (shown in the
+  Overview), RAM permitting; `innodb_buffer_pool_dump_at_shutdown` (on by default) keeps it warm across MySQL
+  restarts too.
+- **No compaction:** InnoDB reuses the space it frees, so the startup and online compactions of H2, and the writes
+  they hold back, are gone.
+- **A remote server** costs a round trip per batch: the writes run on the ingestion thread, never on the clients',
+  and the startup load reads 5,000 files per query. Over the Internet, add `sslMode=REQUIRED` to the URL. A lost
+  connection is reopened at the next database operation, as H2 is after a fatal error (`databaseReopens`).
+
+MySQL 8 has no query cache any more (removed in 8.0), so the searches stay answered by the index in the heap, as with
+H2.
+
+Measured with `./gradlew benchmark -Pfiles=1000000 -Pmysql.url=... -Pmysql.user=... -Pmysql.password=...` (MySQL 8.4
+on the same machine, 1 GB buffer pool): the H2 database of 1,000,000 files is imported in 28 s and takes 195 MB in
+MySQL; the startup load takes 12 s instead of 17 s from H2; the index takes the same heap, and H2 keeps a few more MB
+of cache in it. A write of 10,000 files costs 0.02 ms per file, as with H2; a single file written alone costs about
+2 ms (a commit, synced to the disk), 1 ms with `innodb_flush_log_at_trx_commit=2`, which syncs once a second like H2.
+
+#### Moving an H2 database to MySQL
+
+1. Stop the server, and keep a copy of `jemule_db.mv.db`.
+2. Create the MySQL database and its user as above, and set `databaseType=mysql` and the connection settings in
+   `server.properties`, leaving `databasePath` on the H2 database.
+3. Start the server. Finding the MySQL database without files and the H2 file at `databasePath`, it copies the files,
+   their tags and source counts, the banned names, the metrics history and the statistics (the Kad node keeps its ID)
+   before anything else, logging its progress. An import interrupted halfway resumes at the next start, after the
+   last file copied.
+4. The H2 file is no longer used: keep it as a backup, or delete it.
+
+`databaseImportFromH2=false` skips the import. To go back to H2, set `databaseType=h2`: the server starts from the H2
+file as it was when the import was done.
 
 ## Configuration
 
