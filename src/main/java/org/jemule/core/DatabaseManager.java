@@ -27,6 +27,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.sql.*;
+import java.time.Instant;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -58,7 +60,8 @@ public class DatabaseManager implements AutoCloseable {
 
     /**
      * The statements written differently for H2 and MySQL: H2's MERGE ... KEY is INSERT ... ON DUPLICATE KEY UPDATE
-     * in MySQL (VALUES() rather than a row alias, which MariaDB does not know). The parameters are the same.
+     * in MySQL (VALUES() rather than a row alias, which MariaDB does not know). The parameters are the same, but for
+     * the ban date that MySQL takes after the reason ({@link #mySqlTimestamp}).
      */
     record Sql(String mergeFile, String mergeSourceCount, String mergeSourceCountOfSavedFile, String mergeBannedName,
                String insertBannedNameIfAbsent, String mergeMetricsSample, String mergeStat, int maxBannedNameLength) {
@@ -83,8 +86,9 @@ public class DatabaseManager implements AutoCloseable {
                     + "ON DUPLICATE KEY UPDATE source_count = VALUES(source_count)",
             "INSERT INTO file_sources (hash, source_count) SELECT ?, ? FROM files WHERE hash = ? "
                     + "ON DUPLICATE KEY UPDATE source_count = VALUES(source_count)",
-            "INSERT INTO banned_names (name, reason) VALUES (?, ?) ON DUPLICATE KEY UPDATE reason = VALUES(reason)",
-            "INSERT INTO banned_names (name, reason) SELECT ?, ? FROM DUAL "
+            "INSERT INTO banned_names (name, reason, added_at) VALUES (?, ?, ?) "
+                    + "ON DUPLICATE KEY UPDATE reason = VALUES(reason)",
+            "INSERT INTO banned_names (name, reason, added_at) SELECT ?, ?, ? FROM DUAL "
                     + "WHERE NOT EXISTS (SELECT 1 FROM banned_names WHERE name = ?)",
             "INSERT INTO metrics_history (sampled_at, files, clients) VALUES (?, ?, ?) "
                     + "ON DUPLICATE KEY UPDATE files = VALUES(files), clients = VALUES(clients)",
@@ -714,6 +718,7 @@ public class DatabaseManager implements AutoCloseable {
                 try (PreparedStatement ps = connection.prepareStatement(sql.mergeBannedName())) {
                     ps.setString(1, name);
                     ps.setString(2, reason);
+                    if (mysql) ps.setString(3, mySqlTimestamp(Timestamp.from(Instant.now())));
                     ps.executeUpdate();
                 }
                 return null;
@@ -746,9 +751,11 @@ public class DatabaseManager implements AutoCloseable {
         try {
             locked(() -> {
                 try (PreparedStatement ps = connection.prepareStatement(sql.insertBannedNameIfAbsent())) {
-                    ps.setString(1, name);
-                    ps.setString(2, reason);
-                    ps.setString(3, name);
+                    int i = 1;
+                    ps.setString(i++, name);
+                    ps.setString(i++, reason);
+                    if (mysql) ps.setString(i++, mySqlTimestamp(Timestamp.from(Instant.now())));
+                    ps.setString(i, name);
                     ps.executeUpdate();
                 }
                 return null;
@@ -756,6 +763,17 @@ public class DatabaseManager implements AutoCloseable {
         } catch (Throwable e) {
             logger.error("Circuit breaker prevented or caught error during addBannedNameIfAbsent: {}", e.getMessage());
         }
+    }
+
+    private static final DateTimeFormatter MYSQL_TIMESTAMP = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSSSSS");
+
+    /**
+     * A ban date for MySQL, as text. The dates come from this JVM, like H2's CURRENT_TIMESTAMP, so that those imported
+     * from H2 and the new ones agree whatever the server's time zone; as text because Connector/J drops the fractions
+     * of a second for MariaDB 10, whose version it reads as 5.5.5.
+     */
+    static String mySqlTimestamp(Timestamp time) {
+        return time == null ? null : time.toLocalDateTime().format(MYSQL_TIMESTAMP);
     }
 
     /** Whether {@code name} is longer than a banned name of this database can be; it is then not recorded. */

@@ -264,7 +264,7 @@ meanwhile, and the sizes are logged. Without it, the writes of a running server 
 
 ### MySQL database
 
-Instead of the H2 file, the server can keep its database on a MySQL 8 server (MariaDB works too), on the same machine
+Instead of the H2 file, the server can keep its database on a MySQL 8 server or a MariaDB 10.11+ one (the test suite passes on both), on the same machine
 or on another one:
 
 ```properties

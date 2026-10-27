@@ -157,7 +157,7 @@ final class H2ToMySqlImport {
                 }
                 merge.setString(1, name);
                 merge.setString(2, rs.getString(2));
-                merge.setTimestamp(3, rs.getTimestamp(3));
+                merge.setString(3, DatabaseManager.mySqlTimestamp(rs.getTimestamp(3)));
                 merge.addBatch();
                 if (++rows % SMALL_TABLE_BATCH_ROWS == 0) merge.executeBatch();
             }
