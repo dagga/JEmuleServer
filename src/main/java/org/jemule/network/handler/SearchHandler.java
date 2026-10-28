@@ -63,10 +63,13 @@ public class SearchHandler {
             query = null;
         }
 
+        // Another server's search (its relay or index update session) gets the local results only: that server
+        // searches Kad and the other servers itself
+        boolean fromServer = context.isFromServer();
         // Index full: the search is played on the relay server, whose results come first; never one of the relay
         // server's own searches (its index update logs in here as a client)
         org.jemule.network.ServerRelay relay = context.getServerRelay();
-        CompletableFuture<List<FileMetadata>> relayed = relay == null || query == null
+        CompletableFuture<List<FileMetadata>> relayed = relay == null || query == null || fromServer
                 || relay.isRelayServer(context.getSocket().getInetAddress())
                 ? null : relay.forkSearch(data, org.jemule.network.ServerRelay.MAX_PAGES);
         LinkedHashMap<String, FileMetadata> dedupMap = new LinkedHashMap<>();
@@ -87,7 +90,8 @@ public class SearchHandler {
             }
         }
 
-        CompletableFuture<List<FileMetadata>> remoteResults = startRemoteSearches(context, query, data);
+        // Its keywords are not offered to the index update either: the two servers would send them back and forth
+        CompletableFuture<List<FileMetadata>> remoteResults = fromServer ? null : startRemoteSearches(context, query, data);
         if (relayed != null) {
             remoteResults = remoteResults == null ? relayed : remoteResults.thenCombine(relayed.exceptionally(e -> List.of()),
                     (remote, fromRelay) -> java.util.stream.Stream.concat(fromRelay.stream(), remote.stream()).toList());

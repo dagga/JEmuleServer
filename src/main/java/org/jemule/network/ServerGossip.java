@@ -138,6 +138,16 @@ final class ServerGossip {
         return false;
     }
 
+    /** Whether an address is an eD2K server: a configured peer, or a verified one. */
+    boolean isServer(InetAddress address) {
+        if (address == null) return false;
+        if (trusted.contains(address)) return true;
+        for (Endpoint endpoint : verified.keySet()) {
+            if (endpoint.address().equals(address)) return true;
+        }
+        return false;
+    }
+
     Collection<VerifiedPeer> verifiedPeers() {
         if (ipFilter != null) {
             verified.keySet().removeIf(endpoint -> blocked(endpoint.address()));

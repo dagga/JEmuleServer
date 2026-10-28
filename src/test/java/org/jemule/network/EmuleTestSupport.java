@@ -60,6 +60,7 @@ public final class EmuleTestSupport {
         private OutputStream wrappedOut;
         private org.jemule.core.OfferFilesV1 offerFilesV1 = new org.jemule.core.OfferFilesV1();
         private boolean disconnected;
+        private boolean fromServer;
 
         public FakeContext(Socket socket, ServerConfig config, ClientRegistry registry, FileIndex fileIndex) {
             this.socket = socket;
@@ -99,6 +100,10 @@ public final class EmuleTestSupport {
         @Override public void disconnect() throws IOException { disconnected = true; }
 
         public boolean isDisconnected() { return disconnected; }
+
+        /** Makes the client another eD2K server, as {@link Server#isPeerServer} would find it. */
+        public void setFromServer(boolean fromServer) { this.fromServer = fromServer; }
+        @Override public boolean isFromServer() { return fromServer; }
 
         @Override public org.jemule.core.OfferFilesV1 getOfferFilesV1() { return offerFilesV1; }
         public void setOfferFilesV1(org.jemule.core.OfferFilesV1 offerFilesV1) { this.offerFilesV1 = offerFilesV1; }

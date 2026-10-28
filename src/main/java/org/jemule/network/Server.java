@@ -463,6 +463,16 @@ public class Server {
         return serverRelay;
     }
 
+    /**
+     * Whether an address is another eD2K server: a configured or verified peer, or the relay server. What such a
+     * server asks (its relay and index update sessions, its UDP global searches) gets the local answer only: it
+     * searches Kad and the other servers itself, and a search sent on from here would come back to it, or loop
+     * between servers through the index updates.
+     */
+    public boolean isPeerServer(InetAddress address) {
+        return serverGossip.isServer(address) || serverRelay.isRelayServer(address);
+    }
+
     /** True when a server announces at least 90% of its maximum users. */
     private boolean nearlyFull(ServerGossip.Endpoint endpoint) {
         return serverGossip.serverViews().stream()
@@ -1318,8 +1328,10 @@ public class Server {
         }
 
         sendGlobalSearchResults(reply, results, largeFiles);
-        // Index full: also played on the relay server, unless the search comes from it, and its other files follow
-        java.util.concurrent.CompletableFuture<List<FileMetadata>> relayed = serverRelay.isRelayServer(reply.address())
+        // Sent by another server for one of its clients: that server searches Kad and the other servers itself
+        boolean fromServer = isPeerServer(reply.address());
+        // Index full: also played on the relay server, unless the search comes from a server, and its other files follow
+        java.util.concurrent.CompletableFuture<List<FileMetadata>> relayed = fromServer
                 ? null : serverRelay.forkSearch(tree, 1);
         if (relayed != null) {
             java.util.Set<String> sent = new java.util.HashSet<>();
@@ -1339,7 +1351,8 @@ public class Server {
         }
 
         // Only searched on Kad: forwarding it to other eD2K servers could make it loop between servers
-        GlobalSearchForwarder.Outcome outcome = globalSearchForwarder.forward(query, reply.address());
+        GlobalSearchForwarder.Outcome outcome = fromServer ? globalSearchForwarder.fromServer()
+                : globalSearchForwarder.forward(query, reply.address());
         log.info("UDP global search from {}: {} ({} local results, Kad: {})", reply.address().getHostAddress(),
                 org.jemule.network.handler.HandlerUtils.sanitize(query.toString()), results.size(),
                 outcome.name().toLowerCase(java.util.Locale.ROOT).replace('_', ' '));
