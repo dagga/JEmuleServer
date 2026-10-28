@@ -1,9 +1,9 @@
 # JEmuleServer
 
-JEmuleServer is an eMule server written in Java (version 1.4.1).
+JEmuleServer is an eMule server written in Java (version 1.4.2).
 
 Downloads (installers and JAR) are on the [releases page](https://github.com/dagga/JEmuleServer/releases); the changes
-of each version are described in `doc/release-notes-v<version>.md` (latest: [1.4.1](doc/release-notes-v1.4.1.md)).
+of each version are described in `doc/release-notes-v<version>.md` (latest: [1.4.2](doc/release-notes-v1.4.2.md)).
 
 ## Why this project?
 
@@ -27,7 +27,7 @@ Building requires a JDK 25 (Gradle toolchain; Gradle downloads it when the machi
 ./gradlew build
 ```
 
-The JAR file will be generated in `build/libs/JEmuleServer-1.4.1.jar`.
+The JAR file will be generated in `build/libs/JEmuleServer-1.4.2.jar`.
 
 ## Installation from the release packages
 
@@ -70,7 +70,7 @@ Once the project is compiled, you can start the server with the following comman
 client thread blocked in a `synchronized` block holds its carrier thread, which on one CPU stalls every client):
 
 ```bash
-java -XX:MaxRAMPercentage=75 -XX:ThreadPriorityPolicy=1 --add-modules=jdk.httpserver -jar build/libs/JEmuleServer-1.4.1.jar [config_file] [port]
+java -XX:MaxRAMPercentage=75 -XX:ThreadPriorityPolicy=1 --add-modules=jdk.httpserver -jar build/libs/JEmuleServer-1.4.2.jar [config_file] [port]
 ```
 
 - `-XX:ThreadPriorityPolicy=1`: on Linux, the JVM ignores thread priorities without it. The server runs its threads
@@ -117,7 +117,8 @@ written to the index reaches the searches within a second.
 The heap only keeps what changes all the time or is searched by substring: the online sources of the files, the
 dictionary of the name words and of the media tag values, and the writes not yet visible to the searches. On the
 production database of the new reference server (2,398,695 files, October 28, 2026), the index took 110 MB of heap
-(about 46 bytes per file) and 349 MB of disk (about 145 bytes per file), against 561 MB of heap for the index of 1.3.
+(about 46 bytes per file) and 371 MB of disk with 1.4.2 (about 155 bytes per file), against 561 MB of heap for the
+index of 1.3.
 The operating system keeps the index files it reads in its page cache: RAM left free outside the heap speeds the
 searches up. New files are refused, as at `maxFiles`, when the disk of the index has less than 512 MB free.
 
