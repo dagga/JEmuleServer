@@ -53,8 +53,8 @@ public class DatabaseManager implements AutoCloseable {
     static final String SCHEMA_VERSION_KEY = "schema_version";
     /** Rows of file_tags read per transaction, so that a migration never holds much memory. */
     private static final int MIGRATION_BATCH_ROWS = 50_000;
-    /** Files read per query when loading a MySQL database: the driver reads a whole result set into memory. */
-    static final int MYSQL_LOAD_PAGE_FILES = 5_000;
+    /** Files read per query when loading the database ({@link #forEachFile}). */
+    static final int LOAD_PAGE_FILES = 5_000;
     /** Time the size of a MySQL database is kept: the overview asks for it every few seconds. */
     private static final long MYSQL_SIZE_TTL_MS = 60_000;
 
@@ -154,6 +154,8 @@ public class DatabaseManager implements AutoCloseable {
             FROM (SELECT hash, name, size, type FROM files WHERE hash > ? ORDER BY hash LIMIT ?) f
             LEFT JOIN file_sources s ON s.hash = f.hash
             LEFT JOIN file_tags t ON t.file_hash = f.hash ORDER BY f.hash, t.id""";
+    /** {@link #MYSQL_LOAD_PAGE} on H2, whose file_tags has no id: its tags in insertion order. */
+    private static final String H2_LOAD_PAGE = MYSQL_LOAD_PAGE.replace("t.id", "t._ROWID_");
 
     private final boolean mysql;
     private final Sql sql;
@@ -1022,24 +1024,14 @@ public class DatabaseManager implements AutoCloseable {
     private void forEachFileInternal(Consumer<FileMetadata> consumer) throws SQLException {
         // Type and tag names repeat on every row: one instance of each is kept
         Map<String, String> shared = new HashMap<>();
-        if (!mysql) {
-            try (Statement stmt = connection.createStatement();
-                 ResultSet rs = stmt.executeQuery("""
-                         SELECT f.hash, f.name, f.size, f.type, t.tag_type, t.tag_name, t.tag_value_str, t.tag_value_blob,
-                                s.source_count
-                         FROM files f LEFT JOIN file_sources s ON s.hash = f.hash
-                         LEFT JOIN file_tags t ON t.file_hash = f.hash ORDER BY f._ROWID_""")) {
-                readFiles(rs, shared, consumer);
-            }
-            return;
-        }
-        // Connector/J reads a whole result set into memory: page after page of files, each one a range of the
-        // primary key, which also keeps every query short on a remote server
-        try (PreparedStatement page = connection.prepareStatement(MYSQL_LOAD_PAGE)) {
+        // Page after page of files, each one a range of the primary key: Connector/J reads a whole result set into
+        // memory, and H2 sorted the whole join of a single query in a temporary file (in java.io.tmpdir, which may
+        // be a tmpfs in RAM: 382 MB for 2.2 million files); short queries also suit a remote MySQL server
+        try (PreparedStatement page = connection.prepareStatement(mysql ? MYSQL_LOAD_PAGE : H2_LOAD_PAGE)) {
             String after = "";
             while (true) {
                 page.setString(1, after);
-                page.setInt(2, MYSQL_LOAD_PAGE_FILES);
+                page.setInt(2, LOAD_PAGE_FILES);
                 try (ResultSet rs = page.executeQuery()) {
                     after = readFiles(rs, shared, consumer);
                 }

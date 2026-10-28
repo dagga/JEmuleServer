@@ -170,6 +170,22 @@ class FileIndexTest {
     }
 
     @Test
+    void anIndexTheDatabaseCouldNotFillIsRebuiltAtTheNextStart(@TempDir Path dir) {
+        // A database read that fails after one file (/tmp full, a lost connection...)
+        DatabaseManager db = org.mockito.Mockito.mock(DatabaseManager.class);
+        org.mockito.Mockito.when(db.forEachFile(org.mockito.ArgumentMatchers.any())).thenAnswer(call -> {
+            java.util.function.Consumer<FileMetadata> consumer = call.getArgument(0);
+            consumer.accept(file("11111111111111111111111111111111", "linux one.iso", 2));
+            return false;
+        });
+        try (FileIndex index = new FileIndex(db, null, ChildAbuseFilter.defaults(), dir.resolve("db.index"))) {
+            assertEquals(1, index.fileCount());
+        }
+        org.mockito.Mockito.verify(db, org.mockito.Mockito.never())
+                .setStat(org.mockito.ArgumentMatchers.eq(FileIndex.INDEX_TOKEN_STAT), org.mockito.ArgumentMatchers.anyLong());
+    }
+
+    @Test
     void anotherIndexOnTheSameDirectoryStaysInTheHeap(@TempDir Path dir) {
         try (FileIndex first = new FileIndex(null, null, ChildAbuseFilter.defaults(), dir);
              FileIndex second = new FileIndex(null, null, ChildAbuseFilter.defaults(), dir)) {

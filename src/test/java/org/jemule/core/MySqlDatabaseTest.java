@@ -131,7 +131,7 @@ class MySqlDatabaseTest {
 
     @Test
     void theLoadReadsPageAfterPage() throws Exception {
-        int total = DatabaseManager.MYSQL_LOAD_PAGE_FILES * 2 + 3;
+        int total = DatabaseManager.LOAD_PAGE_FILES * 2 + 3;
         try (DatabaseManager db = open()) {
             List<FileMetadata> files = new ArrayList<>();
             for (int i = 0; i < total; i++) files.add(file(i, "file " + i + ".avi", i % 5));
