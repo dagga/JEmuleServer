@@ -133,8 +133,8 @@ public class FileIndex implements AutoCloseable {
     static final String INDEX_TOKEN_STAT = "file_index_token";
     /** Commit data of the index: its format, the token of its clean close, the keywords its files were checked with. */
     private static final String FORMAT_KEY = "format", TOKEN_KEY = "token", FILTER_KEY = "filter";
-    /** Version of the documents: an index of another version is rebuilt. */
-    private static final String FORMAT = "1";
+    /** Version of the documents and of their codec: an index of another version is rebuilt. */
+    private static final String FORMAT = "2";
     /** Value of {@link #pending} for a removed file. */
     private static final Object REMOVED = new Object();
 
@@ -237,6 +237,13 @@ public class FileIndex implements AutoCloseable {
                 log.warn("The file index at {} is used by another server: this one keeps its index in the heap", path);
                 opened.close();
                 opened = new ByteBuffersDirectory();
+                reopen = false;
+                opening = new IndexWriter(opened, writerConfig(false));
+            } catch (IOException | IllegalArgumentException e) {
+                // An index this version cannot read (written by another version with another codec, or damaged): it
+                // is rebuilt from the database anyway, its files go first
+                log.warn("The file index at {} cannot be read ({}): rebuilt from the database", path, e.toString());
+                for (String file : opened.listAll()) opened.deleteFile(file);
                 reopen = false;
                 opening = new IndexWriter(opened, writerConfig(false));
             }
@@ -374,6 +381,7 @@ public class FileIndex implements AutoCloseable {
     private static IndexWriterConfig writerConfig(boolean reopen) {
         return new IndexWriterConfig()
                 .setOpenMode(reopen ? IndexWriterConfig.OpenMode.APPEND : IndexWriterConfig.OpenMode.CREATE)
+                .setCodec(new FileIndexCodec())
                 .setRAMBufferSizeMB(32)
                 .setMergeScheduler(mergeScheduler())
                 .setCommitOnClose(false);

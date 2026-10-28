@@ -147,6 +147,29 @@ class FileIndexTest {
     }
 
     @Test
+    void anIndexThisVersionCannotReadIsRebuilt(@TempDir Path dir) throws Exception {
+        Path indexPath = dir.resolve("db.index");
+        try (DatabaseManager db = new DatabaseManager(dir.resolve("db").toString())) {
+            try (FileIndex index = new FileIndex(db, null, ChildAbuseFilter.defaults(), indexPath)) {
+                index.addFile(file("11111111111111111111111111111111", "linux one.iso", 2));
+            }
+            // As an older version finds the index of a newer one: its codec unknown
+            try (Stream<Path> files = Files.list(indexPath)) {
+                for (Path file : files.filter(f -> f.getFileName().toString().startsWith("segments_")).toList()) {
+                    byte[] bytes = Files.readAllBytes(file);
+                    String text = new String(bytes, java.nio.charset.StandardCharsets.ISO_8859_1)
+                            .replace(FileIndexCodec.NAME, "JEmuleFileIndex9");
+                    Files.write(file, text.getBytes(java.nio.charset.StandardCharsets.ISO_8859_1));
+                }
+            }
+            try (FileIndex index = new FileIndex(db, null, ChildAbuseFilter.defaults(), indexPath)) {
+                assertFalse(index.reused());
+                assertEquals(List.of("11111111111111111111111111111111"), hashes(index.searchComplex(LINUX, 10)));
+            }
+        }
+    }
+
+    @Test
     void anotherIndexOnTheSameDirectoryStaysInTheHeap(@TempDir Path dir) {
         try (FileIndex first = new FileIndex(null, null, ChildAbuseFilter.defaults(), dir);
              FileIndex second = new FileIndex(null, null, ChildAbuseFilter.defaults(), dir)) {
