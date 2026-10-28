@@ -48,8 +48,15 @@ public class DatabaseManager implements AutoCloseable {
     static final int ONLINE_MIN_FILL_RATE = 50;
     /** Smaller files are not compacted while the server runs: little to gain, and their fill rate is not reliable. */
     static final long ONLINE_MIN_FILE_BYTES = 64L * 1024 * 1024;
-    /** Version of the schema written by this code, kept in the stats table. Databases without it are version 1. */
+    /** Version of the H2 schema written by this code, kept in the stats table. Databases without it are version 1. */
     static final long SCHEMA_VERSION = 3;
+    /**
+     * Version of the MySQL schema written by this code. Version 4: the hashes on 16 bytes (BINARY) instead of 32
+     * hexadecimal characters, and the source count of a file in files instead of a table of its own.
+     */
+    static final long MYSQL_SCHEMA_VERSION = 4;
+    /** Files copied per statement by the migration of a MySQL database to version 4. */
+    private static final int MYSQL_MIGRATION_PAGE_FILES = 50_000;
     static final String SCHEMA_VERSION_KEY = "schema_version";
     /** Rows of file_tags read per transaction, so that a migration never holds much memory. */
     private static final int MIGRATION_BATCH_ROWS = 50_000;
@@ -61,7 +68,8 @@ public class DatabaseManager implements AutoCloseable {
     /**
      * The statements written differently for H2 and MySQL: H2's MERGE ... KEY is INSERT ... ON DUPLICATE KEY UPDATE
      * in MySQL (VALUES() rather than a row alias, which MariaDB does not know). The parameters are the same, but for
-     * the ban date that MySQL takes after the reason ({@link #mySqlTimestamp}).
+     * the ban date that MySQL takes after the reason ({@link #mySqlTimestamp}), and the source counts, which MySQL
+     * keeps in files ({@link #bindSourceCount}). The hashes are bound by {@link #setHash}.
      */
     record Sql(String mergeFile, String mergeSourceCount, String mergeSourceCountOfSavedFile, String mergeBannedName,
                String insertBannedNameIfAbsent, String mergeMetricsSample, String mergeStat, int maxBannedNameLength) {
@@ -82,10 +90,9 @@ public class DatabaseManager implements AutoCloseable {
     static final Sql MYSQL_SQL = new Sql(
             "INSERT INTO files (hash, name, size, type) VALUES (?, ?, ?, ?) "
                     + "ON DUPLICATE KEY UPDATE name = VALUES(name), size = VALUES(size), type = VALUES(type)",
-            "INSERT INTO file_sources (hash, source_count) VALUES (?, ?) "
-                    + "ON DUPLICATE KEY UPDATE source_count = VALUES(source_count)",
-            "INSERT INTO file_sources (hash, source_count) SELECT ?, ? FROM files WHERE hash = ? "
-                    + "ON DUPLICATE KEY UPDATE source_count = VALUES(source_count)",
+            // In files: a file not saved yet has no row to update, as wanted
+            "UPDATE files SET source_count = ? WHERE hash = ?",
+            "UPDATE files SET source_count = ? WHERE hash = ?",
             "INSERT INTO banned_names (name, reason, added_at) VALUES (?, ?, ?) "
                     + "ON DUPLICATE KEY UPDATE reason = VALUES(reason)",
             "INSERT INTO banned_names (name, reason, added_at) SELECT ?, ?, ? FROM DUAL "
@@ -98,21 +105,23 @@ public class DatabaseManager implements AutoCloseable {
             768);
 
     /**
-     * MySQL tables: the same columns as H2's. Hashes in ASCII, binary collations so that names compare as in H2
-     * (MySQL's default ones ignore case and accents), ban dates to the microsecond as in H2 (MySQL rounds them to the
-     * second by default). The tags of a file are clustered under its hash, in their order.
+     * MySQL files table (schema version 4), named {@code %1$s}: the MD4 hash on its 16 bytes, which every random
+     * insert and every tag repeats (32 characters until version 3), and the source count of the file, null when
+     * unknown (a table of its own until version 3: one more key and row header per file).
      */
-    private static final List<String> MYSQL_SCHEMA = List.of(
-            """
-            CREATE TABLE IF NOT EXISTS files (
-                hash VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL PRIMARY KEY,
+    private static final String MYSQL_FILES = """
+            CREATE TABLE IF NOT EXISTS %1$s (
+                hash BINARY(16) NOT NULL PRIMARY KEY,
                 name VARCHAR(1024) NOT NULL,
                 size BIGINT NOT NULL,
-                type VARCHAR(255)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin""",
-            """
-            CREATE TABLE IF NOT EXISTS file_tags (
-                file_hash VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+                type VARCHAR(255),
+                source_count INT
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin""";
+
+    /** MySQL tags table (schema version 4), named {@code %1$s}, of the files table {@code %2$s}. */
+    private static final String MYSQL_FILE_TAGS = """
+            CREATE TABLE IF NOT EXISTS %1$s (
+                file_hash BINARY(16) NOT NULL,
                 id BIGINT NOT NULL AUTO_INCREMENT,
                 tag_type TINYINT,
                 tag_name VARCHAR(255),
@@ -120,14 +129,17 @@ public class DatabaseManager implements AutoCloseable {
                 tag_value_blob MEDIUMBLOB,
                 PRIMARY KEY (file_hash, id),
                 KEY (id),
-                FOREIGN KEY (file_hash) REFERENCES files(hash) ON DELETE CASCADE
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin""",
-            """
-            CREATE TABLE IF NOT EXISTS file_sources (
-                hash VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL PRIMARY KEY,
-                source_count INT NOT NULL,
-                FOREIGN KEY (hash) REFERENCES files(hash) ON DELETE CASCADE
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin""",
+                FOREIGN KEY (file_hash) REFERENCES %2$s(hash) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin""";
+
+    /**
+     * MySQL tables: the columns of H2's, but the hashes ({@link #MYSQL_FILES}). Binary collations so that names
+     * compare as in H2 (MySQL's default ones ignore case and accents), ban dates to the microsecond as in H2 (MySQL
+     * rounds them to the second by default). The tags of a file are clustered under its hash, in their order.
+     */
+    private static final List<String> MYSQL_SCHEMA = List.of(
+            MYSQL_FILES.formatted("files"),
+            MYSQL_FILE_TAGS.formatted("file_tags", "files"),
             """
             CREATE TABLE IF NOT EXISTS stats (
                 stat_key VARCHAR(255) NOT NULL PRIMARY KEY,
@@ -147,15 +159,19 @@ public class DatabaseManager implements AutoCloseable {
                 KEY (added_at)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin""");
 
-    /** One page of files with their sources and tags, in hash order (MySQL). */
+    /** One page of files with their source counts and tags, in hash order (MySQL). */
     private static final String MYSQL_LOAD_PAGE = """
+            SELECT f.hash, f.name, f.size, f.type, t.tag_type, t.tag_name, t.tag_value_str, t.tag_value_blob,
+                   f.source_count
+            FROM (SELECT hash, name, size, type, source_count FROM files WHERE hash > ? ORDER BY hash LIMIT ?) f
+            LEFT JOIN file_tags t ON t.file_hash = f.hash ORDER BY f.hash, t.id""";
+    /** One page of files with their sources and tags, in hash order (H2, whose file_tags has no id). */
+    private static final String H2_LOAD_PAGE = """
             SELECT f.hash, f.name, f.size, f.type, t.tag_type, t.tag_name, t.tag_value_str, t.tag_value_blob,
                    s.source_count
             FROM (SELECT hash, name, size, type FROM files WHERE hash > ? ORDER BY hash LIMIT ?) f
             LEFT JOIN file_sources s ON s.hash = f.hash
-            LEFT JOIN file_tags t ON t.file_hash = f.hash ORDER BY f.hash, t.id""";
-    /** {@link #MYSQL_LOAD_PAGE} on H2, whose file_tags has no id: its tags in insertion order. */
-    private static final String H2_LOAD_PAGE = MYSQL_LOAD_PAGE.replace("t.id", "t._ROWID_");
+            LEFT JOIN file_tags t ON t.file_hash = f.hash ORDER BY f.hash, t._ROWID_""";
 
     private final boolean mysql;
     private final Sql sql;
@@ -290,16 +306,19 @@ public class DatabaseManager implements AutoCloseable {
             logger.error("Could not read the database schema version: {}", e.getMessage());
             return;
         }
-        if (version >= SCHEMA_VERSION) return;
         if (mysql) {
-            // MySQL tables are created at the current version; the older ones were H2 only
+            if (version >= MYSQL_SCHEMA_VERSION) return;
+            // MySQL tables are created at the current version, and version 3 was the first MySQL one
             try {
-                setStatInternal(SCHEMA_VERSION_KEY, SCHEMA_VERSION);
+                if (version == 3) migrateMySqlToV4();
+                setStatInternal(SCHEMA_VERSION_KEY, MYSQL_SCHEMA_VERSION);
             } catch (SQLException e) {
-                logger.error("Could not write the database schema version: {}", e.getMessage());
+                logger.error("Database migration to schema version {} failed (retried at the next start): {}",
+                        MYSQL_SCHEMA_VERSION, e.getMessage(), e);
             }
             return;
         }
+        if (version >= SCHEMA_VERSION) return;
         try {
             long start = System.currentTimeMillis();
             boolean changed = false;
@@ -312,6 +331,97 @@ public class DatabaseManager implements AutoCloseable {
         } catch (SQLException e) {
             logger.error("Database migration to schema version {} failed (retried at the next start): {}",
                     SCHEMA_VERSION, e.getMessage(), e);
+        }
+    }
+
+    /**
+     * MySQL version 4: files and file_tags are copied into new tables with the hashes on 16 bytes and the source
+     * counts of file_sources in files, page by page in hash order, then swapped with the old ones, which go with
+     * file_sources. A migration stopped before the swap starts over at the next start; one stopped after it only
+     * drops what is left of the old tables. A hash that is not 32 hexadecimal digits, which no client sends, is not
+     * copied.
+     */
+    private void migrateMySqlToV4() throws SQLException {
+        try (Statement stmt = connection.createStatement()) {
+            if (filesHashIsBinary()) {
+                // Swapped already: only the old tables may be left
+                for (String table : List.of("file_tags_v3", "file_sources", "files_v3")) stmt.execute("DROP TABLE IF EXISTS " + table);
+                return;
+            }
+            long total = countRows("files");
+            logger.info("Database migration to schema version 4: {} files (hashes on 16 bytes, source counts in "
+                    + "files)", String.format("%,d", total));
+            long start = System.currentTimeMillis();
+            stmt.execute("DROP TABLE IF EXISTS file_tags_v4");
+            stmt.execute("DROP TABLE IF EXISTS files_v4");
+            stmt.execute(MYSQL_FILES.formatted("files_v4"));
+            stmt.execute(MYSQL_FILE_TAGS.formatted("file_tags_v4", "files_v4"));
+            try (PreparedStatement nextBound = connection.prepareStatement(
+                         "SELECT hash FROM files WHERE hash > ? ORDER BY hash LIMIT 1 OFFSET ?");
+                 PreparedStatement copyFiles = connection.prepareStatement("""
+                         INSERT IGNORE INTO files_v4 (hash, name, size, type, source_count)
+                         SELECT UNHEX(f.hash), f.name, f.size, f.type, s.source_count
+                         FROM files f LEFT JOIN file_sources s ON s.hash = f.hash
+                         WHERE f.hash > ? AND f.hash <= ? AND f.hash REGEXP '^[0-9A-Fa-f]{32}$'""");
+                 PreparedStatement copyTags = connection.prepareStatement("""
+                         INSERT IGNORE INTO file_tags_v4 (file_hash, id, tag_type, tag_name, tag_value_str, tag_value_blob)
+                         SELECT UNHEX(file_hash), id, tag_type, tag_name, tag_value_str, tag_value_blob FROM file_tags
+                         WHERE file_hash > ? AND file_hash <= ? AND file_hash REGEXP '^[0-9A-Fa-f]{32}$'""")) {
+                String after = "";
+                long done = 0;
+                int lastReported = 0;
+                while (true) {
+                    nextBound.setString(1, after);
+                    nextBound.setInt(2, MYSQL_MIGRATION_PAGE_FILES - 1);
+                    String last;
+                    try (ResultSet rs = nextBound.executeQuery()) {
+                        last = rs.next() ? rs.getString(1) : null;
+                    }
+                    if (last == null) {
+                        // The last page: up to the greatest hash
+                        try (PreparedStatement max = connection.prepareStatement("SELECT MAX(hash) FROM files WHERE hash > ?")) {
+                            max.setString(1, after);
+                            try (ResultSet rs = max.executeQuery()) {
+                                last = rs.next() ? rs.getString(1) : null;
+                            }
+                        }
+                        if (last == null) break;
+                    }
+                    for (PreparedStatement copy : List.of(copyFiles, copyTags)) {
+                        copy.setString(1, after);
+                        copy.setString(2, last);
+                        copy.executeUpdate();
+                    }
+                    after = last;
+                    done += MYSQL_MIGRATION_PAGE_FILES;
+                    int percent = total == 0 ? 100 : (int) (Math.min(done, total) * 100 / total);
+                    if (percent >= lastReported + 10) {
+                        lastReported = percent;
+                        logger.info("Database migration to schema version 4: {}%", percent);
+                    }
+                }
+            }
+            long copied = countRows("files_v4");
+            if (copied < total) {
+                logger.warn("Database migration to schema version 4: {} files whose hash is not 32 hexadecimal digits "
+                        + "(or the same hash in another case) left out", String.format("%,d", total - copied));
+            }
+            // The child tables follow the renamed files tables
+            stmt.execute("RENAME TABLE file_tags TO file_tags_v3, files TO files_v3, files_v4 TO files, "
+                    + "file_tags_v4 TO file_tags");
+            for (String table : List.of("file_tags_v3", "file_sources", "files_v3")) stmt.execute("DROP TABLE IF EXISTS " + table);
+            logger.info("Database migration to schema version 4 done in {} s: {} files, {} tags",
+                    (System.currentTimeMillis() - start) / 1000, String.format("%,d", copied),
+                    String.format("%,d", countRows("file_tags")));
+        }
+    }
+
+    /** Whether the hashes of the MySQL files table are on 16 bytes (schema version 4). */
+    private boolean filesHashIsBinary() throws SQLException {
+        try (Statement stmt = connection.createStatement();
+             ResultSet rs = stmt.executeQuery("SELECT DATA_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = "
+                     + "DATABASE() AND TABLE_NAME = 'files' AND COLUMN_NAME = 'hash'")) {
+            return rs.next() && "binary".equalsIgnoreCase(rs.getString(1));
         }
     }
 
@@ -873,7 +983,7 @@ public class DatabaseManager implements AutoCloseable {
         try {
             locked(() -> {
                 try (PreparedStatement ps = connection.prepareStatement("DELETE FROM files WHERE hash = ?")) {
-                    ps.setString(1, hash);
+                    setHash(ps, 1, hash);
                     ps.executeUpdate();
                 }
                 return null;
@@ -902,9 +1012,17 @@ public class DatabaseManager implements AutoCloseable {
 
     private void saveFilesInternal(Collection<FileMetadata> files) throws SQLException {
         Map<String, FileMetadata> uniqueFiles = new LinkedHashMap<>();
+        int notHashes = 0;
         for (FileMetadata file : files) {
-            if (file != null) uniqueFiles.put(file.hash(), file);
+            if (file == null) continue;
+            // MySQL keeps the hashes on 16 bytes: anything else, which no client sends, is not saved
+            if (mysql && hashBytes(file.hash()) == null) {
+                notHashes++;
+                continue;
+            }
+            uniqueFiles.put(file.hash(), file);
         }
+        if (notHashes > 0) logger.debug("{} file(s) not saved: their hash is not 32 hexadecimal digits", notHashes);
         if (uniqueFiles.isEmpty()) return;
 
         try {
@@ -915,13 +1033,13 @@ public class DatabaseManager implements AutoCloseable {
                          "INSERT INTO file_tags (file_hash, tag_type, tag_name, tag_value_str, tag_value_blob) VALUES (?, ?, ?, ?, ?)");
                  PreparedStatement mergeSources = connection.prepareStatement(sql.mergeSourceCount())) {
                 for (FileMetadata meta : uniqueFiles.values()) {
-                    mergeFile.setString(1, meta.hash());
+                    setHash(mergeFile, 1, meta.hash());
                     mergeFile.setString(2, meta.name());
                     mergeFile.setLong(3, meta.size());
                     mergeFile.setString(4, meta.type());
                     mergeFile.addBatch();
 
-                    deleteTags.setString(1, meta.hash());
+                    setHash(deleteTags, 1, meta.hash());
                     deleteTags.addBatch();
                 }
                 mergeFile.executeBatch();
@@ -929,13 +1047,12 @@ public class DatabaseManager implements AutoCloseable {
 
                 for (FileMetadata meta : uniqueFiles.values()) {
                     if (meta.sourceCount() > 0) {
-                        mergeSources.setString(1, meta.hash());
-                        mergeSources.setInt(2, meta.sourceCount());
+                        bindSourceCount(mergeSources, meta.hash(), meta.sourceCount(), false);
                         mergeSources.addBatch();
                     }
                     for (Tag tag : meta.tags()) {
-                        if (Tag.NAME_SOURCES.equals(tag.name())) continue; // in file_sources
-                        insertTag.setString(1, meta.hash());
+                        if (Tag.NAME_SOURCES.equals(tag.name())) continue; // a column of its own
+                        setHash(insertTag, 1, meta.hash());
                         insertTag.setByte(2, tag.type());
                         insertTag.setString(3, tag.name());
                         if (tag.value() instanceof byte[] bytes) {
@@ -975,9 +1092,8 @@ public class DatabaseManager implements AutoCloseable {
                     connection.setAutoCommit(false);
                     try (PreparedStatement mergeSources = connection.prepareStatement(sql.mergeSourceCountOfSavedFile())) {
                         for (FileMetadata meta : files) {
-                            mergeSources.setString(1, meta.hash());
-                            mergeSources.setInt(2, meta.sourceCount());
-                            mergeSources.setString(3, meta.hash());
+                            if (mysql && hashBytes(meta.hash()) == null) continue;
+                            bindSourceCount(mergeSources, meta.hash(), meta.sourceCount(), true);
                             mergeSources.addBatch();
                         }
                         mergeSources.executeBatch();
@@ -1030,7 +1146,8 @@ public class DatabaseManager implements AutoCloseable {
         try (PreparedStatement page = connection.prepareStatement(mysql ? MYSQL_LOAD_PAGE : H2_LOAD_PAGE)) {
             String after = "";
             while (true) {
-                page.setString(1, after);
+                if (after.isEmpty() && mysql) page.setBytes(1, new byte[0]); // before every hash
+                else setHash(page, 1, after);
                 page.setInt(2, LOAD_PAGE_FILES);
                 try (ResultSet rs = page.executeQuery()) {
                     after = readFiles(rs, shared, consumer);
@@ -1045,14 +1162,14 @@ public class DatabaseManager implements AutoCloseable {
      *
      * @return the hash of the last file, null if there was none
      */
-    private static String readFiles(ResultSet rs, Map<String, String> shared, Consumer<FileMetadata> consumer)
+    private String readFiles(ResultSet rs, Map<String, String> shared, Consumer<FileMetadata> consumer)
             throws SQLException {
         String hash = null, name = null, type = null;
         long size = 0;
         int sourceCount = -1;
         List<Tag> tags = new ArrayList<>();
         while (rs.next()) {
-            String rowHash = rs.getString(1);
+            String rowHash = hash(rs, 1);
             if (!rowHash.equals(hash)) {
                 if (hash != null) consumer.accept(loaded(hash, name, size, type, tags, sourceCount));
                 hash = rowHash;
@@ -1073,7 +1190,53 @@ public class DatabaseManager implements AutoCloseable {
         return hash;
     }
 
-    /** A file read from the database, its source count taken from file_sources when higher than its old tag. */
+    /**
+     * Binds a file hash: as it is written in H2; on its 16 bytes in MySQL (null, matching nothing, for a hash that is
+     * not 32 hexadecimal digits).
+     */
+    void setHash(PreparedStatement ps, int index, String hash) throws SQLException {
+        if (!mysql) {
+            ps.setString(index, hash);
+            return;
+        }
+        byte[] bytes = hashBytes(hash);
+        if (bytes == null) ps.setNull(index, Types.BINARY);
+        else ps.setBytes(index, bytes);
+    }
+
+    /** A file hash read from the database: from MySQL, in lower case, as the clients' hashes are written. */
+    String hash(ResultSet rs, int column) throws SQLException {
+        if (!mysql) return rs.getString(column);
+        byte[] bytes = rs.getBytes(column);
+        return bytes == null ? null : java.util.HexFormat.of().formatHex(bytes);
+    }
+
+    /** The 16 bytes of a hash of 32 hexadecimal digits, null for anything else. */
+    static byte[] hashBytes(String hash) {
+        if (hash == null || hash.length() != 32) return null;
+        try {
+            return java.util.HexFormat.of().parseHex(hash);
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    /**
+     * Binds the source count statements of {@link Sql}: (hash, count) for H2's file_sources, plus the hash again to
+     * check that the file is saved; (count, hash) for MySQL's files.
+     */
+    private void bindSourceCount(PreparedStatement ps, String hash, int count, boolean ofSavedFile) throws SQLException {
+        if (mysql) {
+            ps.setInt(1, count);
+            setHash(ps, 2, hash);
+            return;
+        }
+        ps.setString(1, hash);
+        ps.setInt(2, count);
+        if (ofSavedFile) ps.setString(3, hash);
+    }
+
+    /** A file read from the database, its source count taken from its column when higher than its old tag. */
     private static FileMetadata loaded(String hash, String name, long size, String type, List<Tag> tags,
                                        int sourceCount) {
         if (sourceCount >= 0) {

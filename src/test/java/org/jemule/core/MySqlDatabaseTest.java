@@ -53,7 +53,8 @@ class MySqlDatabaseTest {
     void dropTables() throws Exception {
         Assumptions.assumeTrue(URL != null && !URL.isBlank(), "no MySQL server given (-Pmysql.url)");
         try (Connection c = DriverManager.getConnection(URL, USER, PASSWORD); Statement stmt = c.createStatement()) {
-            for (String table : List.of("file_tags", "file_sources", "files", "stats", "metrics_history", "banned_names")) {
+            for (String table : List.of("file_tags", "file_sources", "files", "file_tags_v4", "files_v4", "file_tags_v3",
+                    "files_v3", "stats", "metrics_history", "banned_names")) {
                 stmt.execute("DROP TABLE IF EXISTS " + table);
             }
         }
@@ -71,8 +72,9 @@ class MySqlDatabaseTest {
         return new DatabaseManager(mysql(importFromH2), tempDir.resolve("old").toString(), 50.0f, 10, 60);
     }
 
+    /** A hash as the clients' are written, and as MySQL gives them back: in lower case. */
     private static String hash(int i) {
-        return String.format("%032X", i);
+        return String.format("%032x", i);
     }
 
     private static FileMetadata file(int i, String name, int sources) {
@@ -126,7 +128,7 @@ class MySqlDatabaseTest {
             assertEquals(1, db.loadFiles().size());
         }
         assertEquals(2, count("file_tags"), "the tags of the deleted file went with it");
-        assertEquals(1, count("file_sources"));
+        assertEquals(1, count("files WHERE source_count IS NOT NULL"));
     }
 
     @Test
@@ -173,7 +175,7 @@ class MySqlDatabaseTest {
             db.setStat("kad_node_id_high", 42);
             db.setStat("kad_node_id_high", 43);
             assertEquals(43, db.getStat("kad_node_id_high", 0));
-            assertEquals(DatabaseManager.SCHEMA_VERSION, db.getStat(DatabaseManager.SCHEMA_VERSION_KEY, 0));
+            assertEquals(DatabaseManager.MYSQL_SCHEMA_VERSION, db.getStat(DatabaseManager.SCHEMA_VERSION_KEY, 0));
 
             db.saveMetricsSample(1_000, 10, 1, 0);
             db.saveMetricsSample(2_000, 20, 2, 0);
@@ -251,7 +253,7 @@ class MySqlDatabaseTest {
     }
 
     @Test
-    void anInterruptedImportResumesAfterTheLastFileCopied() throws Exception {
+    void anInterruptedImportStartsOver() throws Exception {
         int files = H2ToMySqlImport.PAGE_FILES * 2 + 10;
         writeH2Database(files);
         try (DatabaseManager db = open(true)) {
@@ -259,7 +261,7 @@ class MySqlDatabaseTest {
         }
         // As if the import had stopped after its first page
         try (Connection c = DriverManager.getConnection(URL, USER, PASSWORD); Statement stmt = c.createStatement()) {
-            stmt.execute("DELETE FROM files WHERE hash > '" + hash(H2ToMySqlImport.PAGE_FILES - 1) + "'");
+            stmt.execute("DELETE FROM files WHERE hash > UNHEX('" + hash(H2ToMySqlImport.PAGE_FILES - 1) + "')");
             stmt.execute("UPDATE stats SET stat_value = " + H2ToMySqlImport.IN_PROGRESS
                     + " WHERE stat_key = '" + H2ToMySqlImport.STATE_KEY + "'");
         }
@@ -269,6 +271,73 @@ class MySqlDatabaseTest {
             assertEquals(files, db.loadFiles().size());
         }
         assertEquals(files * 2L, count("file_tags"), "no tag copied twice");
+    }
+
+    @Test
+    void aVersion3DatabaseIsMigratedToVersion4() throws Exception {
+        try (Connection c = DriverManager.getConnection(URL, USER, PASSWORD); Statement stmt = c.createStatement()) {
+            // The tables of 1.3 to 1.4.2
+            stmt.execute("""
+                    CREATE TABLE files (hash VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL PRIMARY KEY,
+                    name VARCHAR(1024) NOT NULL, size BIGINT NOT NULL, type VARCHAR(255))
+                    ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin""");
+            stmt.execute("""
+                    CREATE TABLE file_tags (file_hash VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+                    id BIGINT NOT NULL AUTO_INCREMENT, tag_type TINYINT, tag_name VARCHAR(255), tag_value_str MEDIUMTEXT,
+                    tag_value_blob MEDIUMBLOB, PRIMARY KEY (file_hash, id), KEY (id),
+                    FOREIGN KEY (file_hash) REFERENCES files(hash) ON DELETE CASCADE)
+                    ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin""");
+            stmt.execute("""
+                    CREATE TABLE file_sources (hash VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL PRIMARY KEY,
+                    source_count INT NOT NULL, FOREIGN KEY (hash) REFERENCES files(hash) ON DELETE CASCADE)
+                    ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin""");
+            stmt.execute("CREATE TABLE stats (stat_key VARCHAR(255) NOT NULL PRIMARY KEY, stat_value BIGINT)");
+            stmt.execute("INSERT INTO stats VALUES ('schema_version', 3), ('kad_node_id_high', 42)");
+            int files = 2 * 50_000 + 7; // three pages of the migration
+            StringBuilder rows = new StringBuilder();
+            for (int i = 0; i < files; i++) {
+                if (rows.length() > 0) rows.append(',');
+                rows.append("('").append(hash(i)).append("', 'file ").append(i).append(".avi', ").append(i).append(", 'Video')");
+                if (i % 5_000 == 4_999 || i == files - 1) {
+                    stmt.execute("INSERT INTO files VALUES " + rows);
+                    rows.setLength(0);
+                }
+            }
+            stmt.execute("INSERT INTO files VALUES ('ABCDEF0123456789ABCDEF0123456789', 'upper case.avi', 1, NULL),"
+                    + " ('not-a-md4-hash', 'never sent by a client.avi', 2, NULL)");
+            stmt.execute("INSERT INTO file_tags (file_hash, tag_type, tag_name, tag_value_str) VALUES ('" + hash(70_000)
+                    + "', 2, 'artist', 'first'), ('" + hash(70_000) + "', 3, 'length', '42'),"
+                    + " ('not-a-md4-hash', 2, 'artist', 'gone')");
+            stmt.execute("INSERT INTO file_sources VALUES ('" + hash(70_000) + "', 9), ('ABCDEF0123456789ABCDEF0123456789', 3)");
+
+            try (DatabaseManager db = open()) {
+                assertEquals(DatabaseManager.MYSQL_SCHEMA_VERSION, db.getStat(DatabaseManager.SCHEMA_VERSION_KEY, 0));
+                assertEquals(42, db.getStat("kad_node_id_high", 0));
+                Map<String, FileMetadata> loaded = byHash(db.loadFiles());
+                assertEquals(files + 1, loaded.size(), "the hash that is not one is left out");
+                FileMetadata tagged = loaded.get(hash(70_000));
+                assertEquals(9, tagged.sourceCount());
+                assertEquals(List.of("first", 42), values(tagged), "tags in their order");
+                assertEquals(3, loaded.get("abcdef0123456789abcdef0123456789").sourceCount(), "upper case read back in lower");
+                assertEquals(0, loaded.get(hash(5)).sourceCount());
+                db.saveSourceCounts(List.of(loaded.get(hash(5)).withSourceCount(4)));
+                assertEquals(4, byHash(db.loadFiles()).get(hash(5)).sourceCount());
+            }
+            try (ResultSet rs = stmt.executeQuery("SELECT DATA_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = "
+                    + "DATABASE() AND TABLE_NAME = 'files' AND COLUMN_NAME = 'hash'")) {
+                assertTrue(rs.next());
+                assertEquals("binary", rs.getString(1));
+            }
+            try (ResultSet rs = stmt.executeQuery("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = "
+                    + "DATABASE() AND TABLE_NAME IN ('file_sources', 'files_v3', 'file_tags_v3', 'files_v4', 'file_tags_v4')")) {
+                rs.next();
+                assertEquals(0, rs.getLong(1), "the old tables are gone");
+            }
+            assertEquals(2, count("file_tags"));
+        }
+        try (DatabaseManager db = open()) {
+            assertEquals(2 * 50_000 + 8, db.loadFiles().size(), "migrated once");
+        }
     }
 
     @Test
