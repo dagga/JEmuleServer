@@ -1,9 +1,9 @@
 # JEmuleServer
 
-JEmuleServer is an eMule server written in Java (version 1.3).
+JEmuleServer is an eMule server written in Java (version 1.4).
 
 Downloads (installers and JAR) are on the [releases page](https://github.com/dagga/JEmuleServer/releases); the changes
-of each version are described in `doc/release-notes-v<version>.md` (latest: [1.2.9](doc/release-notes-v1.2.9.md)).
+of each version are described in `doc/release-notes-v<version>.md` (latest: [1.4](doc/release-notes-v1.4.md)).
 
 ## Why this project?
 
@@ -27,7 +27,7 @@ Building requires a JDK 25 (Gradle toolchain; Gradle downloads it when the machi
 ./gradlew build
 ```
 
-The JAR file will be generated in `build/libs/JEmuleServer-1.3.jar`.
+The JAR file will be generated in `build/libs/JEmuleServer-1.4.jar`.
 
 ## Installation from the release packages
 
@@ -70,7 +70,7 @@ Once the project is compiled, you can start the server with the following comman
 client thread blocked in a `synchronized` block holds its carrier thread, which on one CPU stalls every client):
 
 ```bash
-java -XX:MaxRAMPercentage=75 -XX:ThreadPriorityPolicy=1 --add-modules=jdk.httpserver -jar build/libs/JEmuleServer-1.3.jar [config_file] [port]
+java -XX:MaxRAMPercentage=75 -XX:ThreadPriorityPolicy=1 --add-modules=jdk.httpserver -jar build/libs/JEmuleServer-1.4.jar [config_file] [port]
 ```
 
 - `-XX:ThreadPriorityPolicy=1`: on Linux, the JVM ignores thread priorities without it. The server runs its threads
@@ -104,13 +104,25 @@ JVM options used by the server:
 
 ### Memory sizing
 
-Every known file is kept in memory for the searches: its MD4 hash, name, size, type, source count and the media tags
-searches filter on, plus its entries in the inverted index of the name words. The files are stored by number in
-arrays of primitive values (the MD4 hash as two 64-bit values) rather than as one object each; only the files with
-online sources or media tags get an object of their own; the names follow each other in one byte array and the
-inverted index keeps its file numbers as variable-length gaps. This comes to about 270 bytes of heap per file since
-1.2.24 (350 before). Only the tags searches filter on are kept (source count, artist, album, title, length,
-bitrate, codec, rating).
+Since 1.4 the known files are indexed with [Lucene](https://lucene.apache.org/), on disk: the directory
+`<databasePath>.index` next to the H2 database (with MySQL too), read through mmap, outside the heap. The index holds
+the MD4 hash, name, size, type and source count of each file, the words of its name and the media tags searches filter
+on (source count, artist, album, title, length, bitrate, codec, rating). The database stays the reference: a clean
+stop records the same token in the index and in the database, and the next start reopens the index at once if both
+still hold it. Otherwise (a crash or a `kill -9`, a restored backup, other child abuse keywords) the start rebuilds the
+index from the database, which takes about as long as loading the files did up to 1.3. After changing the database by
+other means than the server, delete the directory while the server is stopped: the next start rebuilds it. A file
+written to the index reaches the searches within a second.
+
+The heap only keeps what changes all the time or is searched by substring: the online sources of the files, the
+dictionary of the name words and of the media tag values, and the writes not yet visible to the searches. On the
+production database of the new reference server (2,398,695 files, October 28, 2026), the index took 110 MB of heap
+(about 46 bytes per file) and 349 MB of disk (about 145 bytes per file), against 561 MB of heap for the index of 1.3.
+The operating system keeps the index files it reads in its page cache: RAM left free outside the heap speeds the
+searches up. New files are refused, as at `maxFiles`, when the disk of the index has less than 512 MB free.
+
+Up to 1.3 every file was kept in the heap, in arrays of primitive values: about 270 bytes per file since 1.2.24 (350
+before). The calibrations below were measured with that index; the heap they give is now more than the server needs.
 
 Two production calibrations are kept, each with its configuration file in `config/`:
 

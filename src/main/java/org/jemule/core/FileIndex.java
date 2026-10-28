@@ -19,36 +19,163 @@
 
 package org.jemule.core;
 
+import org.apache.lucene.document.Document;
+import org.apache.lucene.document.Field;
+import org.apache.lucene.document.LongPoint;
+import org.apache.lucene.document.NumericDocValuesField;
+import org.apache.lucene.document.StoredField;
+import org.apache.lucene.document.StringField;
+import org.apache.lucene.index.ConcurrentMergeScheduler;
+import org.apache.lucene.index.DirectoryReader;
+import org.apache.lucene.index.IndexWriter;
+import org.apache.lucene.index.IndexWriterConfig;
+import org.apache.lucene.index.LeafReaderContext;
+import org.apache.lucene.index.MergePolicy;
+import org.apache.lucene.index.MergeScheduler;
+import org.apache.lucene.index.MultiTerms;
+import org.apache.lucene.index.NumericDocValues;
+import org.apache.lucene.index.SegmentInfos;
+import org.apache.lucene.index.StoredFields;
+import org.apache.lucene.index.Term;
+import org.apache.lucene.index.Terms;
+import org.apache.lucene.index.TermsEnum;
+import org.apache.lucene.search.BooleanClause.Occur;
+import org.apache.lucene.search.BooleanQuery;
+import org.apache.lucene.search.DocIdSetIterator;
+import org.apache.lucene.search.FieldDoc;
+import org.apache.lucene.search.IndexSearcher;
+import org.apache.lucene.search.MatchAllDocsQuery;
+import org.apache.lucene.search.MatchNoDocsQuery;
+import org.apache.lucene.search.PrefixQuery;
+import org.apache.lucene.search.Query;
+import org.apache.lucene.search.ScoreDoc;
+import org.apache.lucene.search.ScoreMode;
+import org.apache.lucene.search.Scorer;
+import org.apache.lucene.search.SearcherManager;
+import org.apache.lucene.search.Sort;
+import org.apache.lucene.search.SortField;
+import org.apache.lucene.search.TermInSetQuery;
+import org.apache.lucene.search.TermQuery;
+import org.apache.lucene.search.TopDocs;
+import org.apache.lucene.search.TopFieldDocs;
+import org.apache.lucene.search.Weight;
+import org.apache.lucene.store.ByteBuffersDirectory;
+import org.apache.lucene.store.Directory;
+import org.apache.lucene.store.FSDirectory;
+import org.apache.lucene.store.LockObtainFailedException;
+import org.apache.lucene.util.Bits;
+import org.apache.lucene.util.BytesRef;
 import org.jemule.core.event.EventManager;
 import org.jemule.core.event.FileEvent;
+import org.jemule.protocol.FileTypes;
+import org.jemule.protocol.Tag;
 import org.jemule.security.ChildAbuseFilter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentSkipListMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.LongAdder;
-import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.concurrent.locks.StampedLock;
 
 /**
  * Manages the global file index for the server.
- * Provides fast full-text and complex search capabilities using an inverted index.
  * <p>
- * The files are stored by number in a {@link FileTable}; the {@link FileMetadata} returned are built from it on
- * demand, their source map being the live one. The searches read under a read lock, so that they run in parallel;
- * adding or removing a file takes the write lock for that file only.
+ * The files and the words of their names live in a Lucene index, on disk next to the database and read through mmap,
+ * outside the heap. The database stays the reference: a clean close records the same token in the index and in the
+ * database, and the next start reopens the index only if both still hold it, with the same child abuse keywords;
+ * otherwise (a crash, a restored backup, other keywords) it rebuilds the index from the database. The heap only
+ * keeps what changes all the time or must be scanned by substring: the online sources of the files ({@link
+ * #liveSources}), the dictionary of the words and of the media tag values, and the writes not yet visible to the
+ * searches.
+ * <p>
+ * A file name keyword matches the files with a word containing it, found by the {@link WordDictionary}, so that each
+ * keyword becomes the set of those words. A query that translates exactly (name keywords, size, source count, type,
+ * extension, media tags and their AND / OR / NOT) is answered by Lucene alone, sorted by source count; any other query
+ * (complete sources, a tag given by name) takes Lucene's candidates and tests each with {@link SearchQuery#test}.
+ * <p>
+ * The writes reach the searches at the next refresh: at the next search by default, every second on a running server
+ * ({@link #refreshEvery}). The lookups by hash (publishing, {@link #contains}, {@link #removeFile}) see them at once:
+ * the files written since the last refresh are kept in {@link #pending}.
  */
-public class FileIndex {
+public class FileIndex implements AutoCloseable {
     private static final Logger log = LoggerFactory.getLogger(FileIndex.class);
     private static final Comparator<FileMetadata> SOURCE_COUNT_ORDER =
             Comparator.comparingInt(FileMetadata::sourceCount).reversed();
-    private final FileTable table = new FileTable();
-    /** Guards {@link #table} and the postings of {@link #invertedIndex}. */
-    private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
-    private final ConcurrentSkipListMap<String, Postings> invertedIndex = new ConcurrentSkipListMap<>();
-    /** Words of {@link #invertedIndex}, searched by substring. */
+    /** Lucene fields: the hash in lower case for hexadecimal hashes ({@link #id}), the hash as stored, the name... */
+    private static final String ID = "id", HASH = "hash", NAME = "name", TYPE = "type", SIZE = "size", SOURCES = "src",
+            WORD = "w", EFFECTIVE_TYPE = "t", EXTENSION = "ext", TAGS = "tags";
+    /** Media tags indexed for the filters; a file only gets the first tag of each, as {@link SearchQuery} reads it. */
+    private static final byte[] STRING_TAGS = {SearchQuery.ID_MEDIA_ARTIST, SearchQuery.ID_MEDIA_ALBUM,
+            SearchQuery.ID_MEDIA_TITLE, SearchQuery.ID_MEDIA_CODEC};
+    private static final byte[] NUMERIC_TAGS = {SearchQuery.ID_MEDIA_LENGTH, SearchQuery.ID_MEDIA_BITRATE,
+            SearchQuery.ID_FILERATING};
+    /** Tags whose value is too long for a Lucene term (32,766 bytes) on some file, by field: those files get tested. */
+    private static final String LONG_TAG = "longtag";
+    private static final int MAX_TERM_BYTES = 32_766;
+    private static final Sort BY_SOURCES = new Sort(new SortField(SOURCES, SortField.Type.LONG, true));
+    /** Writes kept for the lookups beyond which the index is refreshed at once, whatever the refresh period. */
+    static final int MAX_UNREFRESHED = 20_000;
+    /** Database stat holding the token of the last clean close of the index ({@link #close}). */
+    static final String INDEX_TOKEN_STAT = "file_index_token";
+    /** Commit data of the index: its format, the token of its clean close, the keywords its files were checked with. */
+    private static final String FORMAT_KEY = "format", TOKEN_KEY = "token", FILTER_KEY = "filter";
+    /** Version of the documents: an index of another version is rebuilt. */
+    private static final String FORMAT = "1";
+    /** Value of {@link #pending} for a removed file. */
+    private static final Object REMOVED = new Object();
+
+    private final Directory directory;
+    private final IndexWriter writer;
+    private final SearcherManager searchers;
+    /**
+     * Taken for reading by every write of the index, with the record of the write in {@link #pending}; for writing
+     * by a refresh, to set aside the writes its new searcher will see. A StampedLock: a ReentrantReadWriteLock may
+     * lose a read lock to an OutOfMemoryError, and then never let a refresh through.
+     */
+    private final StampedLock lock = new StampedLock();
+    /** Files written since the last refresh, by {@link #id}: their last state (without sources), or {@link #REMOVED}. */
+    private volatile Map<String, Object> pending = new ConcurrentHashMap<>();
+    /** The writes of {@link #pending} a running refresh makes visible, looked up until it ends. */
+    private volatile Map<String, Object> refreshing = Map.of();
+    private final Object refreshLock = new Object();
+    /** The writes of a file are made one at a time: the lookup of its state and its write go together. */
+    private final Object[] stripes = new Object[64];
+    /** Indexed files: read without any lock (admin, metrics, full index). */
+    private final AtomicInteger indexedFiles = new AtomicInteger();
+    /** Online sources of the files that have some, by {@link #id}: never an empty map. */
+    private final ConcurrentHashMap<String, ConcurrentHashMap<String, ClientState>> liveSources = new ConcurrentHashMap<>();
+    /** Every word of the index, for {@link WordDictionary}; a word left without file stays until the restart. */
+    private final Set<String> words = ConcurrentHashMap.newKeySet();
+    /** Words of {@link #words}, searched by substring. */
     private final WordDictionary dictionary = new WordDictionary();
+    /** Distinct normalized values of each string media tag, by field; a value left without file stays. */
+    private final Map<String, Set<String>> tagValues = new ConcurrentHashMap<>();
+    /** Fields of the string tags too long to be indexed on some file. */
+    private final Set<String> longTags = ConcurrentHashMap.newKeySet();
+    /** Refreshes the index on a running server; null when the searches refresh it. */
+    private volatile ScheduledExecutorService refresher;
+    private volatile boolean closed;
+    /** Whether the index is on disk, to be reopened by the next start. */
+    private final boolean onDisk;
+    /** Whether the index of the last run was reopened instead of rebuilt. */
+    private final boolean reused;
+    /** Fingerprint of the child abuse keywords the indexed files were checked with when the index was built. */
+    private final String checkedWith;
+
     private final DatabaseManager db;
     /** Runs the database writes: the caller's thread by default, the ingestion thread on a running server. */
     private volatile java.util.concurrent.Executor persistence = Runnable::run;
@@ -67,7 +194,7 @@ public class FileIndex {
     };
     /** Most files indexed: new hashes beyond it are refused (Integer.MAX_VALUE: no limit). */
     private volatile java.util.function.IntSupplier maxFiles = () -> Integer.MAX_VALUE;
-    /** True when the heap cannot take more files: new hashes are refused too. */
+    /** True when the heap or the disk cannot take more files: new hashes are refused too. */
     private volatile java.util.function.BooleanSupplier heapFull = () -> false;
     /** New hashes refused because the index was full (since server start). */
     private final LongAdder refusedFull = new LongAdder();
@@ -83,49 +210,157 @@ public class FileIndex {
     });
 
     /**
-     * Constructs a FileIndex, optionally loading existing files from the database. Files of the database that the
-     * child abuse filter rejects are deleted from it instead of being loaded.
+     * Constructs a FileIndex, loading the files of the database into a new Lucene index. Files of the database that
+     * the child abuse filter rejects are deleted from it instead of being loaded.
      *
      * @param db           The database manager for persistence.
      * @param eventManager The event manager for broadcasting file events.
      * @param abuseFilter  The child abuse filter applied to every published or loaded file.
+     * @param path         Directory of the Lucene index, emptied first; null for an index in the heap (tests).
      */
-    public FileIndex(DatabaseManager db, EventManager eventManager, ChildAbuseFilter abuseFilter) {
+    public FileIndex(DatabaseManager db, EventManager eventManager, ChildAbuseFilter abuseFilter, Path path) {
         this.db = db;
         this.eventManager = eventManager;
         this.abuseFilter = abuseFilter;
-        if (db != null) {
+        for (int i = 0; i < stripes.length; i++) stripes[i] = new Object();
+        Directory opened = null;
+        IndexWriter opening;
+        String keywords = String.valueOf(abuseFilter.fingerprint());
+        boolean reopen = false;
+        try {
+            opened = path == null ? new ByteBuffersDirectory() : FSDirectory.open(Files.createDirectories(path));
+            reopen = path != null && db != null && matchesDatabase(opened, db, keywords);
             try {
-                // The files are indexed while they are read; the child abuse files are deleted afterwards, the
-                // database being locked during the read
-                List<FileMetadata> rejected = new ArrayList<>();
-                db.forEachFile(meta -> {
-                    if (abuseFilter.matches(meta.name())) {
-                        rejected.add(meta);
-                    } else {
-                        indexInMemory(meta);
-                    }
-                });
-                for (FileMetadata meta : rejected) {
-                    recordChildAbuseName(meta.name());
-                    db.deleteFile(meta.hash());
-                }
-                if (!rejected.isEmpty()) {
-                    log.warn("Deleted {} child abuse file(s) from the database", rejected.size());
-                }
-                // The arrays grew by half at a time while loading: their free slots go
-                lock.writeLock().lock();
-                try {
-                    invertedIndex.values().forEach(Postings::trim);
-                    table.trim();
-                } finally {
-                    lock.writeLock().unlock();
-                }
-            } catch (Exception e) {
-                // If DB fails during load, we continue with empty memory index
-                // DatabaseManager with CircuitBreaker should handle specific errors
+                opening = new IndexWriter(opened, writerConfig(reopen));
+            } catch (LockObtainFailedException e) {
+                // Another server of this JVM (tests) or of this machine on the same database path
+                log.warn("The file index at {} is used by another server: this one keeps its index in the heap", path);
+                opened.close();
+                opened = new ByteBuffersDirectory();
+                reopen = false;
+                opening = new IndexWriter(opened, writerConfig(false));
             }
+            // Committed without token: until a clean close records one, the next start rebuilds the index. On a
+            // rebuild, the files of the index of the last run go now, before the new one takes their room on the disk
+            opening.setLiveCommitData(Map.of(FORMAT_KEY, FORMAT).entrySet());
+            opening.commit();
+            searchers = new SearcherManager(opening, null);
+        } catch (IOException e) {
+            if (opened != null) {
+                try {
+                    opened.close();
+                } catch (IOException ignored) {
+                    // already failing
+                }
+            }
+            throw new UncheckedIOException("Cannot open the file index at " + path, e);
         }
+        directory = opened;
+        writer = opening;
+        onDisk = directory instanceof FSDirectory;
+        reused = reopen;
+        checkedWith = keywords;
+        long start = System.nanoTime();
+        if (reused) {
+            try {
+                readDictionaries();
+            } catch (IOException e) {
+                throw new UncheckedIOException("Cannot read the file index at " + path, e);
+            }
+            log.info("File index reopened at {}: {} files, {} ms", path, fileCount(), (System.nanoTime() - start) / 1_000_000);
+        } else if (db != null) {
+            try {
+                load(db);
+            } catch (Exception e) {
+                // If DB fails during load, we continue with the files read so far
+                // DatabaseManager with CircuitBreaker should handle specific errors
+                log.error("Loading the files of the database failed: {}", e.toString());
+            }
+            log.info("File index built from the database{}: {} files, {} s", path == null ? "" : " at " + path,
+                    fileCount(), (System.nanoTime() - start) / 1_000_000_000);
+        }
+    }
+
+    /**
+     * Whether the index in {@code directory} holds the files of the database: closed cleanly with the token the
+     * database holds, in the current format, its files checked with the current child abuse keywords.
+     */
+    private static boolean matchesDatabase(Directory directory, DatabaseManager db, String keywords) {
+        try {
+            if (!DirectoryReader.indexExists(directory)) return false;
+            Map<String, String> data = SegmentInfos.readLatestCommit(directory).getUserData();
+            long token = db.getStat(INDEX_TOKEN_STAT, 0);
+            boolean matches = token != 0 && String.valueOf(token).equals(data.get(TOKEN_KEY))
+                    && FORMAT.equals(data.get(FORMAT_KEY)) && keywords.equals(data.get(FILTER_KEY));
+            if (!matches) {
+                log.info("File index rebuilt: {}", data.get(TOKEN_KEY) == null ? "the last run did not close it"
+                        : !String.valueOf(token).equals(data.get(TOKEN_KEY)) ? "the database changed since"
+                        : !FORMAT.equals(data.get(FORMAT_KEY)) ? "another format" : "other child abuse keywords");
+            }
+            return matches;
+        } catch (IOException | RuntimeException e) {
+            log.warn("Cannot read the file index of the last run ({}): it is rebuilt", e.toString());
+            return false;
+        }
+    }
+
+    /** The words, the media tag values and the file count of a reopened index. */
+    private void readDictionaries() throws IOException {
+        IndexSearcher searcher = acquire();
+        try {
+            for (LeafReaderContext leaf : searcher.getIndexReader().leaves()) {
+                for (BytesRef term : terms(leaf, WORD)) {
+                    String word = term.utf8ToString();
+                    if (words.add(word)) dictionary.add(word);
+                }
+                for (byte id : STRING_TAGS) {
+                    for (BytesRef value : terms(leaf, tagField(id))) values(tagField(id)).add(value.utf8ToString());
+                }
+                for (BytesRef field : terms(leaf, LONG_TAG)) longTags.add(field.utf8ToString());
+            }
+            indexedFiles.set(searcher.getIndexReader().numDocs());
+        } finally {
+            release(searcher);
+        }
+    }
+
+    /** The terms of a field in a leaf, read once. */
+    private static Iterable<BytesRef> terms(LeafReaderContext leaf, String field) throws IOException {
+        Terms terms = leaf.reader().terms(field);
+        TermsEnum it = terms == null ? TermsEnum.EMPTY : terms.iterator();
+        return () -> new Iterator<>() {
+            private BytesRef next = advance();
+
+            private BytesRef advance() {
+                try {
+                    return it.next();
+                } catch (IOException e) {
+                    throw new UncheckedIOException(e);
+                }
+            }
+
+            @Override
+            public boolean hasNext() {
+                return next != null;
+            }
+
+            @Override
+            public BytesRef next() {
+                if (next == null) throw new NoSuchElementException();
+                BytesRef current = BytesRef.deepCopyOf(next);
+                next = advance();
+                return current;
+            }
+        };
+    }
+
+    /** Whether the index of the last run was reopened instead of rebuilt from the database. */
+    boolean reused() {
+        return reused;
+    }
+
+    public FileIndex(DatabaseManager db, EventManager eventManager, ChildAbuseFilter abuseFilter) {
+        this(db, eventManager, abuseFilter, null);
     }
 
     public FileIndex(DatabaseManager db, EventManager eventManager) {
@@ -134,6 +369,118 @@ public class FileIndex {
 
     public FileIndex(DatabaseManager db) {
         this(db, null);
+    }
+
+    private static IndexWriterConfig writerConfig(boolean reopen) {
+        return new IndexWriterConfig()
+                .setOpenMode(reopen ? IndexWriterConfig.OpenMode.APPEND : IndexWriterConfig.OpenMode.CREATE)
+                .setRAMBufferSizeMB(32)
+                .setMergeScheduler(mergeScheduler())
+                .setCommitOnClose(false);
+    }
+
+    /** Merges segments at the priority of the ingestion, below the clients and the searches. */
+    private static MergeScheduler mergeScheduler() {
+        return new ConcurrentMergeScheduler() {
+            @Override
+            protected synchronized MergeThread getMergeThread(MergeSource mergeSource, MergePolicy.OneMerge merge)
+                    throws IOException {
+                MergeThread thread = super.getMergeThread(mergeSource, merge);
+                thread.setPriority(ServerThreads.Tier.INGESTION.priority);
+                return thread;
+            }
+        };
+    }
+
+    /**
+     * Indexes every file of the database; of two hashes differing by case, the first one read. The child abuse files
+     * are deleted afterwards, the database being locked during the read.
+     */
+    private void load(DatabaseManager db) throws IOException {
+        List<FileMetadata> rejected = new ArrayList<>();
+        Md4Set seen = new Md4Set();
+        Set<String> seenOthers = new HashSet<>();
+        IOException[] failure = new IOException[1];
+        db.forEachFile(meta -> {
+            if (failure[0] != null) return;
+            if (abuseFilter.matches(meta.name())) {
+                rejected.add(meta);
+                return;
+            }
+            String id = id(meta.hash());
+            if (!(Md4Set.parse(id) == null ? seenOthers.add(id) : seen.add(id))) return;
+            try {
+                writer.addDocument(document(meta.indexed(), meta.sourceCount()));
+                indexedFiles.incrementAndGet();
+            } catch (IOException e) {
+                failure[0] = e;
+            }
+        });
+        if (failure[0] != null) throw failure[0];
+        for (FileMetadata meta : rejected) {
+            recordChildAbuseName(meta.name());
+            db.deleteFile(meta.hash());
+        }
+        if (!rejected.isEmpty()) {
+            log.warn("Deleted {} child abuse file(s) from the database", rejected.size());
+        }
+        searchers.maybeRefreshBlocking();
+    }
+
+    /**
+     * Refreshes the index every {@code millis} milliseconds on a thread of the ingestion tier, instead of at the next
+     * search: the searches never wait for a refresh, and see the writes at most that late.
+     */
+    public void refreshEvery(long millis) {
+        ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(
+                ServerThreads.factory(ServerThreads.Tier.INGESTION, "index-refresh"));
+        scheduler.scheduleWithFixedDelay(() -> {
+            try {
+                refresh();
+            } catch (RuntimeException e) {
+                log.error("Refreshing the file index failed: {}", e.toString());
+            }
+        }, millis, millis, TimeUnit.MILLISECONDS);
+        ScheduledExecutorService previous = refresher;
+        refresher = scheduler;
+        if (previous != null) previous.shutdownNow();
+    }
+
+    /** Makes the writes visible to the searches at once. */
+    public void refresh() {
+        synchronized (refreshLock) {
+            if (closed) return;
+            Map<String, Object> swapped;
+            long stamp = lock.writeLock();
+            try {
+                swapped = pending;
+                if (swapped.isEmpty()) return;
+                refreshing = swapped;
+                pending = new ConcurrentHashMap<>();
+            } finally {
+                lock.unlockWrite(stamp);
+            }
+            try {
+                searchers.maybeRefreshBlocking();
+            } catch (IOException e) {
+                // The writes stay looked up, the later ones first
+                stamp = lock.writeLock();
+                try {
+                    swapped.forEach(pending::putIfAbsent);
+                } finally {
+                    lock.unlockWrite(stamp);
+                }
+                throw new UncheckedIOException(e);
+            } finally {
+                refreshing = Map.of();
+            }
+        }
+        searchCache.clear();
+    }
+
+    /** Before a search: the writes made since the last refresh, unless a thread refreshes the index regularly. */
+    private void refreshForSearch() {
+        if (refresher == null && !pending.isEmpty()) refresh();
     }
 
     /**
@@ -184,15 +531,15 @@ public class FileIndex {
     }
 
     /**
-     * Limits the index: once {@code maxFiles} files are indexed or {@code heapFull} says so, files of unknown hashes
-     * are refused, whatever channel brings them; known files still get their new sources.
+     * Limits the index: once {@code maxFiles} files are indexed or {@code full} says so (heap or disk), files of
+     * unknown hashes are refused, whatever channel brings them; known files still get their new sources.
      */
-    public void setCapacity(java.util.function.IntSupplier maxFiles, java.util.function.BooleanSupplier heapFull) {
+    public void setCapacity(java.util.function.IntSupplier maxFiles, java.util.function.BooleanSupplier full) {
         this.maxFiles = maxFiles;
-        this.heapFull = heapFull;
+        this.heapFull = full;
     }
 
-    /** True when new files are refused: maxFiles reached, or the heap full. */
+    /** True when new files are refused: maxFiles reached, or the heap or the disk full. */
     public boolean isFull() {
         return fileCount() >= maxFiles.getAsInt() || heapFull.getAsBoolean();
     }
@@ -224,14 +571,14 @@ public class FileIndex {
     }
 
     /**
-     * Adds a group of files to the in-memory index and persists changed entries in one database transaction.
+     * Adds a group of files to the index and persists changed entries in one database transaction.
      */
     public List<FileMetadata> addFiles(Collection<FileMetadata> files) {
         return addFiles(files, FileSource.UNKNOWN);
     }
 
     /**
-     * Adds a group of files to the in-memory index, recording their ingestion channel for the monitoring counters.
+     * Adds a group of files to the index, recording their ingestion channel for the monitoring counters.
      */
     public List<FileMetadata> addFiles(Collection<FileMetadata> files, FileSource source) {
         if (files == null || files.isEmpty()) return List.of();
@@ -257,56 +604,75 @@ public class FileIndex {
         // Checked before the lock: a full index refuses the new hashes of every channel at once
         boolean full = isFull();
         FileMetadata incoming = meta.indexed();
+        String id = id(incoming.hash());
         boolean isNew = false;
         boolean isNewHash = false;
         boolean sourceCountChanged = false;
         FileMetadata replaced = null;
         FileMetadata stored;
-        lock.writeLock().lock();
-        try {
-            int id = table.find(incoming.hash());
-            FileMetadata existing = id < 0 ? null : table.view(id);
-            if (existing == null && full) {
-                refusedFull.increment();
-                return null;
-            }
-            if (existing == null || (existing.sources().isEmpty() && !incoming.sources().isEmpty())) {
-                // unknown file, or a file without online source (e.g. loaded from the database) published by a
-                // client: take the new metadata, under the hash the database knows. A search result of a known hash
-                // keeps the entry below.
-                FileMetadata selected = existing == null ? incoming : withHash(incoming, existing.hash());
-                int knownSources = existing == null ? 0 : existing.sourceCount();
-                if (selected.sourceCount() < knownSources) {
-                    selected = selected.withSourceCount(knownSources);
+        synchronized (stripe(id)) {
+            long stamp = lock.readLock();
+            try {
+                FileMetadata existing = stored(id);
+                if (existing == null && full) {
+                    refusedFull.increment();
+                    return null;
                 }
-                isNew = true;
-                isNewHash = existing == null;
-                replaced = existing;
-                stored = selected;
-                if (existing == null) {
-                    id = table.add(stored);
+                ConcurrentHashMap<String, ClientState> live = liveSources.get(id);
+                if (existing == null || (live == null && !incoming.sources().isEmpty())) {
+                    // unknown file, or a file without online source (e.g. loaded from the database) published by a
+                    // client: take the new metadata, under the hash the database knows. A search result of a known
+                    // hash keeps the entry below.
+                    FileMetadata selected = existing == null ? incoming : withHash(incoming, existing.hash());
+                    int knownSources = existing == null ? 0 : existing.sourceCount();
+                    if (selected.sourceCount() < knownSources) {
+                        selected = selected.withSourceCount(knownSources);
+                    }
+                    isNew = true;
+                    isNewHash = existing == null;
+                    replaced = existing;
+                    stored = selected;
+                    if (!stored.sources().isEmpty()) liveSources.put(id, stored.sources());
+                    int count = stored.sourceCount();
+                    if (existing == null) {
+                        writer.addDocument(document(stored, count));
+                        indexedFiles.incrementAndGet();
+                    } else if (sameContent(existing, stored)) {
+                        // Published again as it is indexed: only its count may change
+                        if (count != existing.sourceCount()) {
+                            writer.updateNumericDocValue(new Term(ID, id), SOURCES, count);
+                        }
+                    } else {
+                        writer.updateDocument(new Term(ID, id), document(stored, count));
+                    }
+                    pending.put(id, withoutSources(stored, count));
                 } else {
-                    table.set(id, stored);
+                    if (!incoming.sources().isEmpty()) {
+                        live = liveSources.compute(id, (k, sources) -> {
+                            if (sources == null) sources = new ConcurrentHashMap<>();
+                            sources.putAll(incoming.sources());
+                            return sources;
+                        });
+                    }
+                    int indexedCount = existing.sourceCount();
+                    int knownCount = Math.max(indexedCount, live == null ? 0 : live.size());
+                    int mergedSourceCount = Math.max(knownCount, incoming.sourceCount());
+                    sourceCountChanged = mergedSourceCount > knownCount;
+                    // The count of the index is raised to the online sources too, so that the searches sort and
+                    // filter on it as on the files they return
+                    if (mergedSourceCount != indexedCount) {
+                        writer.updateNumericDocValue(new Term(ID, id), SOURCES, mergedSourceCount);
+                        pending.put(id, withoutSources(existing, mergedSourceCount));
+                    }
+                    stored = withSources(withoutSources(existing, mergedSourceCount), live);
                 }
-                // A file published again under the same name keeps its words; under another name, it is reindexed
-                if (replaced == null || !Objects.equals(replaced.name(), stored.name())) {
-                    if (replaced != null) unindexTokens(id, replaced.name());
-                    indexTokens(id, stored.name());
-                }
-            } else {
-                existing.sources().putAll(incoming.sources());
-                int mergedSourceCount = Math.max(existing.sourceCount(), incoming.sourceCount());
-                if (mergedSourceCount > existing.sourceCount()) {
-                    sourceCountChanged = true;
-                    stored = existing.withSourceCount(mergedSourceCount);
-                    table.set(id, stored);
-                } else {
-                    stored = existing;
-                }
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            } finally {
+                lock.unlockRead(stamp);
             }
-        } finally {
-            lock.writeLock().unlock();
         }
+        if (pending.size() > MAX_UNREFRESHED) refresh();
         if (isNew) {
             if (isNewHash) {
                 newFilesBySource.computeIfAbsent(source, k -> new LongAdder()).increment();
@@ -334,23 +700,35 @@ public class FileIndex {
                 : new FileMetadata(hash, meta.name(), meta.size(), meta.type(), meta.tags(), meta.sources());
     }
 
+    /** Whether the index would hold the same document for both files, but their source count. */
+    private static boolean sameContent(FileMetadata a, FileMetadata b) {
+        return a.hash().equals(b.hash()) && Objects.equals(a.name(), b.name()) && a.size() == b.size()
+                && Objects.equals(a.type(), b.type()) && Arrays.equals(encodeTags(a.tags()), encodeTags(b.tags()));
+    }
+
+    /** The file as the index stores it: no online source, {@code count} as its source count. */
+    private static FileMetadata withoutSources(FileMetadata meta, int count) {
+        return FileMetadata.withoutSources(meta.hash(), meta.name(), meta.size(), meta.type(),
+                meta.withSourceCount(count).tags());
+    }
+
+    /** A file of the index with its online sources, when it has some. */
+    private static FileMetadata withSources(FileMetadata stored, ConcurrentHashMap<String, ClientState> sources) {
+        return sources == null ? stored
+                : new FileMetadata(stored.hash(), stored.name(), stored.size(), stored.type(), stored.tags(), sources);
+    }
+
     /**
      * Removes a disconnected client from the sources of every file it offered. Files left without any
      * source stay indexed and searchable, like the files loaded from the database.
      */
     public void removeSource(ClientState client) {
         String key = sourceKey(client);
-        lock.readLock().lock();
-        try {
-            for (String hash : client.publishedHashes()) {
-                int id = table.find(hash);
-                ConcurrentHashMap<String, ClientState> sources = id < 0 ? null : table.sources(id);
-                if (sources != null) {
-                    sources.remove(key);
-                }
-            }
-        } finally {
-            lock.readLock().unlock();
+        for (String hash : client.publishedHashes()) {
+            liveSources.computeIfPresent(id(hash), (k, sources) -> {
+                sources.remove(key);
+                return sources.isEmpty() ? null : sources;
+            });
         }
         client.publishedHashes().clear();
     }
@@ -362,17 +740,26 @@ public class FileIndex {
      * @return true if the file was indexed
      */
     public boolean removeFile(String hash) {
+        if (hash == null) return false;
+        String id = id(hash);
         String hashToDelete;
-        lock.writeLock().lock();
-        try {
-            int id = table.find(hash);
-            if (id < 0) return false;
-            hashToDelete = table.hash(id);
-            unindexTokens(id, table.name(id));
-            table.remove(id);
-        } finally {
-            lock.writeLock().unlock();
+        synchronized (stripe(id)) {
+            long stamp = lock.readLock();
+            try {
+                FileMetadata existing = stored(id);
+                if (existing == null) return false;
+                hashToDelete = existing.hash();
+                writer.deleteDocuments(new Term(ID, id));
+                pending.put(id, REMOVED);
+                liveSources.remove(id);
+                indexedFiles.decrementAndGet();
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            } finally {
+                lock.unlockRead(stamp);
+            }
         }
+        if (pending.size() > MAX_UNREFRESHED) refresh();
         searchCache.clear();
         if (db != null) {
             sealPendingWrites();
@@ -389,17 +776,27 @@ public class FileIndex {
     public int removeFilesNamed(String name) {
         String wanted = name == null ? "" : name.strip().toLowerCase(Locale.ROOT);
         if (wanted.isEmpty()) return 0;
+        // Such a file has every word of the name, and only those
+        BooleanQuery.Builder candidates = new BooleanQuery.Builder().add(new MatchAllDocsQuery(), Occur.FILTER);
+        for (String word : new LinkedHashSet<>(List.of(Keywords.split(wanted)))) {
+            candidates.add(new TermQuery(new Term(WORD, word)), Occur.FILTER);
+        }
         List<String> hashes = new ArrayList<>();
-        lock.readLock().lock();
+        refreshForSearch();
+        IndexSearcher searcher = acquire();
         try {
-            table.forEach(id -> {
-                String indexed = table.name(id);
-                if (indexed.length() >= wanted.length() && indexed.strip().toLowerCase(Locale.ROOT).equals(wanted)) {
-                    hashes.add(table.hash(id));
+            forEachMatch(searcher, candidates.build(), (stored, doc, count) -> {
+                Document fields = stored.document(doc, Set.of(HASH, NAME));
+                String indexed = fields.get(NAME);
+                if (indexed != null && indexed.length() >= wanted.length()
+                        && indexed.strip().toLowerCase(Locale.ROOT).equals(wanted)) {
+                    hashes.add(fields.get(HASH));
                 }
             });
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
         } finally {
-            lock.readLock().unlock();
+            release(searcher);
         }
         int removed = 0;
         for (String hash : hashes) {
@@ -423,7 +820,7 @@ public class FileIndex {
      * Writes queued and not started yet: the files published one by one join the same transaction instead of a
      * transaction each (which MySQL syncs to the disk, about 2 ms). Guarded by {@link #pendingLock}.
      */
-    private PendingWrites pending;
+    private PendingWrites pendingWrites;
     private final Object pendingLock = new Object();
 
     /** The writes of one transaction, the last state of each file kept. */
@@ -452,10 +849,10 @@ public class FileIndex {
         if (db == null || writes.files().isEmpty() && writes.sourceCounts().isEmpty()) return;
         PendingWrites started = null;
         synchronized (pendingLock) {
-            if (pending == null || pending.size() >= MAX_PENDING_WRITES) {
-                pending = started = new PendingWrites();
+            if (pendingWrites == null || pendingWrites.size() >= MAX_PENDING_WRITES) {
+                pendingWrites = started = new PendingWrites();
             }
-            pending.add(writes);
+            pendingWrites.add(writes);
         }
         if (started != null) {
             PendingWrites batch = started;
@@ -473,30 +870,14 @@ public class FileIndex {
      */
     private void sealPendingWrites() {
         synchronized (pendingLock) {
-            pending = null;
+            pendingWrites = null;
         }
     }
 
     private void sealPendingWrites(PendingWrites batch) {
         synchronized (pendingLock) {
-            if (pending == batch) pending = null;
+            if (pendingWrites == batch) pendingWrites = null;
         }
-    }
-
-    /** Called with the write lock held. */
-    private void unindexTokens(int id, String name) {
-        for (String t : words(name)) {
-            invertedIndex.computeIfPresent(t, (k, ids) -> {
-                ids.remove(id);
-                return ids.size() == 0 ? null : ids;
-            });
-        }
-    }
-
-    /** Distinct words of a file name, each indexed once. */
-    private static Set<String> words(String name) {
-        if (name == null) return Set.of();
-        return new LinkedHashSet<>(Arrays.asList(Keywords.split(name)));
     }
 
     /** Key of a client in {@link FileMetadata#sources()}: unique per connection (several clients may share one IP). */
@@ -504,27 +885,31 @@ public class FileIndex {
         return String.valueOf(client.connectionId());
     }
 
-    private void indexInMemory(FileMetadata meta) {
-        FileMetadata indexed = meta.indexed();
-        lock.writeLock().lock();
-        try {
-            if (table.find(indexed.hash()) >= 0) return; // the same hash in another case
-            indexTokens(table.add(indexed), indexed.name());
-        } finally {
-            lock.writeLock().unlock();
-        }
+    /** Key of a file in the index: a hexadecimal hash in lower case (case ignored), any other hash as it is. */
+    static String id(String hash) {
+        return Md4Set.parse(hash) == null ? hash : hash.toLowerCase(Locale.ROOT);
     }
 
-    /** Called with the write lock held. */
-    private void indexTokens(int id, String name) {
-        for (String t : words(name)) {
-            Postings ids = invertedIndex.get(t);
-            if (ids == null) {
-                invertedIndex.put(t, new Postings(id));
-                dictionary.add(t); // once in the index, so that a dictionary rebuild cannot miss it
-            } else {
-                ids.add(id);
-            }
+    private Object stripe(String id) {
+        return stripes[id.hashCode() & (stripes.length - 1)];
+    }
+
+    /**
+     * The file stored under {@code id} without its online sources, its source count as indexed: as written since the
+     * last refresh, or as the searcher sees it; null if none. Called under the stripe of the file.
+     */
+    private FileMetadata stored(String id) throws IOException {
+        Object written = pending.get(id);
+        if (written == null) written = refreshing.get(id);
+        if (written != null) return written == REMOVED ? null : (FileMetadata) written;
+        IndexSearcher searcher = acquire();
+        try {
+            TopFieldDocs top = searcher.search(new TermQuery(new Term(ID, id)), 1, BY_SOURCES);
+            if (top.scoreDocs.length == 0) return null;
+            ScoreDoc hit = top.scoreDocs[0];
+            return file(searcher.storedFields().document(hit.doc), (Long) ((FieldDoc) hit).fields[0]);
+        } finally {
+            release(searcher);
         }
     }
 
@@ -538,16 +923,10 @@ public class FileIndex {
      * @return A list of {@link ClientState} representing sources.
      */
     public List<ClientState> getSources(String hash, ClientState requester, int limit) {
-        List<ClientState> all;
-        lock.readLock().lock();
-        try {
-            int id = table.find(hash);
-            ConcurrentHashMap<String, ClientState> sources = id < 0 ? null : table.sources(id);
-            if (sources == null || sources.isEmpty()) return Collections.emptyList();
-            all = new ArrayList<>(sources.values());
-        } finally {
-            lock.readLock().unlock();
-        }
+        if (hash == null) return Collections.emptyList();
+        ConcurrentHashMap<String, ClientState> sources = liveSources.get(id(hash));
+        if (sources == null || sources.isEmpty()) return Collections.emptyList();
+        List<ClientState> all = new ArrayList<>(sources.values());
         if (all.isEmpty()) return Collections.emptyList();
         if (all.size() <= limit && requester == null) {
             Collections.shuffle(all);
@@ -586,105 +965,266 @@ public class FileIndex {
      *
      * @param query The parsed {@link SearchQuery}.
      * @param limit The maximum number of results.
-     * @return A list of matching {@link FileMetadata}.
+     * @return A list of matching {@link FileMetadata}, the most sources first.
      */
     public List<FileMetadata> searchComplex(SearchQuery query, int limit) {
         if (eventManager != null) {
             eventManager.broadcast(new FileEvent(FileEvent.SEARCHED, query.toString(), "", "Complex search executed"));
         }
         if (limit <= 0) return List.of();
-        List<FileMetadata> results = new ArrayList<>();
-        lock.readLock().lock();
+        refreshForSearch();
+        IndexSearcher searcher = acquire();
         try {
-            List<Postings> postings = candidates(query);
-            if (postings == null) {
-                // No keyword constrains the file name (e.g. a type or size filter alone): every file is tested
-                table.forEach(id -> {
-                    FileMetadata meta = table.view(id);
-                    if (query.test(meta)) results.add(meta);
-                });
-            } else {
-                // Only the files indexed under a word containing a keyword are tested; a file may appear in
-                // several sets
-                BitSet tested = new BitSet();
-                for (Postings ids : postings) {
-                    ids.forEach(id -> {
-                        if (tested.get(id)) return;
-                        tested.set(id);
-                        FileMetadata meta = table.view(id);
-                        if (query.test(meta)) results.add(meta);
-                    });
-                }
-            }
+            Translation translation = translate(query);
+            if (translation.exact()) return topBySources(searcher, translation.query(), limit);
+            Query candidates = translation.query();
+            if (onlyFilesWithSources(query)) candidates = withSourcesOnly(searcher, candidates);
+            return tested(searcher, candidates, query, limit);
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
         } finally {
-            lock.readLock().unlock();
+            release(searcher);
         }
         // A file indexed before the keywords were reloaded may match them now: the senders of the results check
         // every file once more (SearchHandler, Server's UDP global search)
+    }
+
+    private List<FileMetadata> topBySources(IndexSearcher searcher, Query query, int limit) throws IOException {
+        int n = Math.min(limit, searcher.count(query));
+        if (n == 0) return List.of();
+        TopFieldDocs top = searcher.search(query, n, BY_SOURCES);
+        StoredFields stored = searcher.storedFields();
+        List<FileMetadata> results = new ArrayList<>(top.scoreDocs.length);
+        for (ScoreDoc hit : top.scoreDocs) {
+            results.add(result(stored.document(hit.doc), (Long) ((FieldDoc) hit).fields[0]));
+        }
+        return results;
+    }
+
+    /** Every candidate is loaded and tested with the query. */
+    private List<FileMetadata> tested(IndexSearcher searcher, Query candidates, SearchQuery query, int limit)
+            throws IOException {
+        List<FileMetadata> results = new ArrayList<>();
+        forEachMatch(searcher, candidates, (stored, doc, count) -> {
+            FileMetadata meta = result(stored.document(doc), count);
+            if (query.test(meta)) results.add(meta);
+        });
         return results.stream()
                 .sorted(SOURCE_COUNT_ORDER)
                 .limit(limit)
                 .toList();
     }
 
+    /** A document matching a query: its leaf's stored fields, its number in the leaf and its source count. */
+    private interface Match {
+        void accept(StoredFields stored, int doc, long sourceCount) throws IOException;
+    }
+
+    private static void forEachMatch(IndexSearcher searcher, Query query, Match match) throws IOException {
+        Weight weight = searcher.createWeight(searcher.rewrite(query), ScoreMode.COMPLETE_NO_SCORES, 1f);
+        for (LeafReaderContext leaf : searcher.getIndexReader().leaves()) {
+            Scorer scorer = weight.scorer(leaf);
+            if (scorer == null) continue;
+            Bits live = leaf.reader().getLiveDocs();
+            NumericDocValues sources = leaf.reader().getNumericDocValues(SOURCES);
+            StoredFields stored = leaf.reader().storedFields();
+            DocIdSetIterator it = scorer.iterator();
+            for (int doc = it.nextDoc(); doc != DocIdSetIterator.NO_MORE_DOCS; doc = it.nextDoc()) {
+                if (live != null && !live.get(doc)) continue;
+                long count = sources != null && sources.advanceExact(doc) ? sources.longValue() : 0;
+                match.accept(stored, doc, count);
+            }
+        }
+    }
+
     /**
-     * Files that may match a query: every match belongs to one of the returned sets, or null when the query does
-     * not constrain the file name. A file name keyword matches a name that contains it ({@link
-     * SearchQuery.TermQuery}); made of letters and digits only, it can only lie inside one word of the name, so the
-     * files to test are those indexed under the words containing it. Called with the read lock held.
+     * True when a file without online source cannot match the query: a filter on the complete sources, which only
+     * the online sources give, rejects it.
      */
-    private List<Postings> candidates(SearchQuery query) {
+    private static boolean onlyFilesWithSources(SearchQuery query) {
         return switch (query) {
-            case SearchQuery.TermQuery t when t.id() == SearchQuery.ID_FILENAME -> {
-                List<Postings> best = null;
-                long bestSize = Long.MAX_VALUE;
-                for (String token : Keywords.split(t.term())) {
-                    // Every word of the keyword must be in the name: the rarest one is enough to select the files
-                    List<Postings> sets = new ArrayList<>();
-                    long size = 0;
-                    for (String word : dictionary.wordsContaining(token, invertedIndex.keySet())) {
-                        Postings ids = invertedIndex.get(word);
-                        if (ids != null) {
-                            sets.add(ids);
-                            size += ids.size();
-                        }
-                    }
-                    if (size < bestSize) {
-                        best = sets;
-                        bestSize = size;
-                    }
-                }
-                yield best != null ? best : List.of(); // a keyword without any letter/digit matches nothing
-            }
-            case SearchQuery.AndQuery a -> smallest(candidates(a.left()), candidates(a.right()));
-            case SearchQuery.NotQuery n -> candidates(n.left());
-            case SearchQuery.OrQuery o -> {
-                List<Postings> left = candidates(o.left());
-                List<Postings> right = candidates(o.right());
-                if (left == null || right == null) yield null;
-                List<Postings> both = new ArrayList<>(left);
-                both.addAll(right);
-                yield both;
-            }
-            default -> null;
+            case SearchQuery.NumericQuery n when n.id() == SearchQuery.ID_COMPLETE_SOURCES ->
+                    !n.test(FileMetadata.withoutSources("", "", 0, null, List.of()));
+            case SearchQuery.AndQuery a -> onlyFilesWithSources(a.left()) || onlyFilesWithSources(a.right());
+            case SearchQuery.OrQuery o -> onlyFilesWithSources(o.left()) && onlyFilesWithSources(o.right());
+            case SearchQuery.NotQuery n -> onlyFilesWithSources(n.left());
+            case null, default -> false;
         };
     }
 
-    private static List<Postings> smallest(List<Postings> a, List<Postings> b) {
-        if (a == null) return b;
-        if (b == null) return a;
-        return total(a) <= total(b) ? a : b;
+    /** The candidates restricted to the files with online sources, when these are fewer. */
+    private Query withSourcesOnly(IndexSearcher searcher, Query candidates) throws IOException {
+        List<BytesRef> ids = new ArrayList<>();
+        for (String id : liveSources.keySet()) ids.add(new BytesRef(id));
+        if (ids.isEmpty()) return new MatchNoDocsQuery();
+        if (ids.size() >= searcher.count(candidates)) return candidates;
+        return new BooleanQuery.Builder().add(candidates, Occur.FILTER).add(new TermInSetQuery(ID, ids), Occur.FILTER)
+                .build();
     }
 
-    private static long total(List<Postings> sets) {
-        long n = 0;
-        for (Postings s : sets) n += s.size();
-        return n;
+    /** Whether {@code query} is answered by Lucene alone, no file tested (for the comparison with the heap index). */
+    boolean isExact(SearchQuery query) {
+        return translate(query).exact();
+    }
+
+    /** A Lucene query and whether it selects exactly the files the search query matches. */
+    private record Translation(Query query, boolean exact) {
+        static final Translation ALL = new Translation(new MatchAllDocsQuery(), true);
+        static final Translation NONE = new Translation(new MatchNoDocsQuery(), true);
+        static final Translation CANDIDATES_ALL = new Translation(new MatchAllDocsQuery(), false);
+    }
+
+    private Translation translate(SearchQuery query) {
+        return switch (query) {
+            case SearchQuery.TermQuery t -> switch (t.id()) {
+                case SearchQuery.ID_FILENAME -> nameQuery(t.term());
+                case SearchQuery.ID_FILETYPE -> new Translation(
+                        new TermQuery(new Term(EFFECTIVE_TYPE, t.term().toLowerCase(Locale.ROOT))), true);
+                // An extension with a dot ("tar.gz") is not one indexed word
+                case SearchQuery.ID_FORMAT -> t.term().contains(".") ? Translation.CANDIDATES_ALL : new Translation(
+                        new TermQuery(new Term(EXTENSION, t.term().toLowerCase(Locale.ROOT))), true);
+                case SearchQuery.ID_MEDIA_CODEC, SearchQuery.ID_MEDIA_TITLE, SearchQuery.ID_MEDIA_ALBUM,
+                     SearchQuery.ID_MEDIA_ARTIST -> tagQuery(t.id(), t.term());
+                default -> Translation.ALL;
+            };
+            case SearchQuery.NumericQuery n -> switch (n.id()) {
+                case SearchQuery.ID_FILESIZE -> new Translation(range(n.operator(), n.value(), SIZE_RANGE), true);
+                case SearchQuery.ID_SOURCES -> new Translation(range(n.operator(), n.value(), SOURCES_RANGE), true);
+                case SearchQuery.ID_MEDIA_LENGTH, SearchQuery.ID_MEDIA_BITRATE, SearchQuery.ID_FILERATING ->
+                        new Translation(range(n.operator(), n.value(), tagRange(n.id())), true);
+                // Counted on the online sources, which stay in the heap
+                case SearchQuery.ID_COMPLETE_SOURCES -> Translation.CANDIDATES_ALL;
+                default -> Translation.ALL;
+            };
+            case SearchQuery.AndQuery a -> {
+                Translation left = translate(a.left()), right = translate(a.right());
+                yield new Translation(new BooleanQuery.Builder().add(left.query(), Occur.FILTER)
+                        .add(right.query(), Occur.FILTER).build(), left.exact() && right.exact());
+            }
+            case SearchQuery.OrQuery o -> {
+                Translation left = translate(o.left()), right = translate(o.right());
+                yield new Translation(new BooleanQuery.Builder().add(left.query(), Occur.SHOULD)
+                        .add(right.query(), Occur.SHOULD).setMinimumNumberShouldMatch(1).build(),
+                        left.exact() && right.exact());
+            }
+            case SearchQuery.NotQuery n -> {
+                Translation left = translate(n.left()), right = translate(n.right());
+                // Only an exact right side can be excluded: its candidates may hold files it does not match
+                yield right.exact()
+                        ? new Translation(new BooleanQuery.Builder().add(left.query(), Occur.FILTER)
+                                .add(new MatchAllDocsQuery(), Occur.FILTER).add(right.query(), Occur.MUST_NOT).build(),
+                                left.exact())
+                        : new Translation(left.query(), false);
+            }
+            // Lambdas of the parser (a tag given by name): they match every file, but tested to be sure
+            case null, default -> Translation.CANDIDATES_ALL;
+        };
     }
 
     /**
-     * Executes a simple keyword-based search.
-     * Supports prefix matching and uses a result cache for performance.
+     * A name keyword: for each of its words, the files with an indexed word containing it. Exact: a word of the
+     * keyword (letters and digits only) can only lie inside one word of the name.
+     */
+    private Translation nameQuery(String term) {
+        String[] tokens = Keywords.split(term);
+        if (tokens.length == 0) return Translation.NONE; // a keyword without any letter/digit matches nothing
+        BooleanQuery.Builder all = new BooleanQuery.Builder();
+        for (String token : tokens) {
+            List<BytesRef> containing = new ArrayList<>();
+            for (String word : dictionary.wordsContaining(token, words)) containing.add(new BytesRef(word));
+            if (containing.isEmpty()) return Translation.NONE;
+            all.add(new TermInSetQuery(WORD, containing), Occur.FILTER);
+        }
+        return new Translation(all.build(), true);
+    }
+
+    /**
+     * A string media tag containing {@code term} (both normalized): the files with one of the values of the
+     * dictionary that contain it. Exact unless a file has a value of that tag too long to be indexed.
+     */
+    private Translation tagQuery(byte id, String term) {
+        String field = tagField(id);
+        String text = Keywords.normalize(term);
+        List<BytesRef> containing = new ArrayList<>();
+        for (String value : values(field)) {
+            if (value.contains(text)) containing.add(new BytesRef(value));
+        }
+        Query values = containing.isEmpty() ? new MatchNoDocsQuery() : new TermInSetQuery(field, containing);
+        if (!longTags.contains(field)) return new Translation(values, true);
+        return new Translation(new BooleanQuery.Builder().add(values, Occur.SHOULD)
+                .add(new TermQuery(new Term(LONG_TAG, field)), Occur.SHOULD).build(), false);
+    }
+
+    /** A numeric field: the files with a value in [lo, hi], and those with a value at all. */
+    private interface RangeField {
+        Query between(long lo, long hi);
+
+        Query present();
+    }
+
+    private static final RangeField SIZE_RANGE = new RangeField() {
+        public Query between(long lo, long hi) {
+            return LongPoint.newRangeQuery(SIZE, lo, hi);
+        }
+
+        public Query present() {
+            return new MatchAllDocsQuery();
+        }
+    };
+
+    private static final RangeField SOURCES_RANGE = new RangeField() {
+        public Query between(long lo, long hi) {
+            return NumericDocValuesField.newSlowRangeQuery(SOURCES, lo, hi);
+        }
+
+        public Query present() {
+            return new MatchAllDocsQuery();
+        }
+    };
+
+    /** A numeric media tag: a file without it matches no comparison, as in {@link SearchQuery.NumericQuery}. */
+    private static RangeField tagRange(byte id) {
+        String field = numericField(id);
+        return new RangeField() {
+            public Query between(long lo, long hi) {
+                return LongPoint.newRangeQuery(field, lo, hi);
+            }
+
+            public Query present() {
+                return LongPoint.newRangeQuery(field, Long.MIN_VALUE, Long.MAX_VALUE);
+            }
+        };
+    }
+
+    /** The values satisfying {@code <value> <operator> v}, strict operators as in {@link SearchQuery.NumericQuery}. */
+    private static Query range(byte operator, long v, RangeField field) {
+        return switch (operator) {
+            case SearchQuery.OP_EQUAL -> field.between(v, v);
+            case SearchQuery.OP_GREATER -> v == Long.MAX_VALUE ? new MatchNoDocsQuery() : field.between(v + 1, Long.MAX_VALUE);
+            case SearchQuery.OP_LESS -> v == Long.MIN_VALUE ? new MatchNoDocsQuery() : field.between(Long.MIN_VALUE, v - 1);
+            case SearchQuery.OP_GREATER_EQUAL -> field.between(v, Long.MAX_VALUE);
+            case SearchQuery.OP_LESS_EQUAL -> field.between(Long.MIN_VALUE, v);
+            case SearchQuery.OP_NOTEQUAL -> new BooleanQuery.Builder().add(field.present(), Occur.FILTER)
+                    .add(field.between(v, v), Occur.MUST_NOT).build();
+            default -> field.present();
+        };
+    }
+
+    private static String tagField(byte id) {
+        return "tag" + Integer.toHexString(id & 0xFF);
+    }
+
+    private static String numericField(byte id) {
+        return "num" + Integer.toHexString(id & 0xFF);
+    }
+
+    private Set<String> values(String field) {
+        return tagValues.computeIfAbsent(field, f -> ConcurrentHashMap.newKeySet());
+    }
+
+    /**
+     * Executes a simple keyword-based search: every word of the query must start a word of the name.
+     * Uses a result cache for performance.
      *
      * @param query The textual query string.
      * @param limit The maximum number of results.
@@ -694,17 +1234,10 @@ public class FileIndex {
         if (eventManager != null) {
             eventManager.broadcast(new FileEvent(FileEvent.SEARCHED, query, "", "Search executed: " + query));
         }
+        if (limit <= 0) return List.of();
+        refreshForSearch();
         if (query == null || query.trim().isEmpty()) {
-            List<FileMetadata> all = new ArrayList<>();
-            lock.readLock().lock();
-            try {
-                table.forEach(id -> {
-                    if (all.size() < limit) all.add(table.view(id));
-                });
-            } finally {
-                lock.readLock().unlock();
-            }
-            return all;
+            return inIndexOrder(new MatchAllDocsQuery(), limit);
         }
 
         String queryLower = Keywords.normalize(query).trim();
@@ -716,36 +1249,11 @@ public class FileIndex {
             return cached;
         }
 
-        List<FileMetadata> res = new ArrayList<>();
-        lock.readLock().lock();
-        try {
-            BitSet candidates = null;
-            for (String t : Keywords.split(queryLower)) {
-                if (t.isEmpty()) continue;
-
-                // Optimized prefix search via subMap (O(log n))
-                BitSet matches = new BitSet();
-                String nextPrefix = t.substring(0, t.length() - 1) + (char) (t.charAt(t.length() - 1) + 1);
-                for (Postings ids : invertedIndex.subMap(t, nextPrefix).values()) {
-                    ids.forEach(matches::set);
-                }
-
-                if (matches.isEmpty()) return Collections.emptyList();
-                if (candidates == null) {
-                    candidates = matches;
-                } else {
-                    candidates.and(matches);
-                }
-                if (candidates.isEmpty()) break;
-            }
-            if (candidates == null || candidates.isEmpty()) return Collections.emptyList();
-
-            for (int id = candidates.nextSetBit(0); id >= 0 && res.size() < limit; id = candidates.nextSetBit(id + 1)) {
-                res.add(table.view(id));
-            }
-        } finally {
-            lock.readLock().unlock();
-        }
+        String[] tokens = Keywords.split(queryLower);
+        if (tokens.length == 0) return Collections.emptyList();
+        BooleanQuery.Builder all = new BooleanQuery.Builder();
+        for (String t : tokens) all.add(new PrefixQuery(new Term(WORD, t)), Occur.FILTER);
+        List<FileMetadata> res = inIndexOrder(all.build(), limit);
 
         // Cache the result
         searchCache.put(cacheKey, res);
@@ -753,25 +1261,52 @@ public class FileIndex {
         return res;
     }
 
-    /** Number of distinct words of the inverted index. */
+    private List<FileMetadata> inIndexOrder(Query query, int limit) {
+        IndexSearcher searcher = acquire();
+        try {
+            int n = Math.min(limit, searcher.count(query));
+            if (n == 0) return new ArrayList<>();
+            TopDocs top = searcher.search(query, n, Sort.INDEXORDER);
+            StoredFields stored = searcher.storedFields();
+            List<FileMetadata> results = new ArrayList<>(top.scoreDocs.length);
+            for (ScoreDoc hit : top.scoreDocs) results.add(result(stored.document(hit.doc), sourceCount(searcher, hit.doc)));
+            return results;
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        } finally {
+            release(searcher);
+        }
+    }
+
+    private static long sourceCount(IndexSearcher searcher, int doc) throws IOException {
+        List<LeafReaderContext> leaves = searcher.getIndexReader().leaves();
+        LeafReaderContext leaf = leaves.get(org.apache.lucene.index.ReaderUtil.subIndex(doc, leaves));
+        NumericDocValues sources = leaf.reader().getNumericDocValues(SOURCES);
+        return sources != null && sources.advanceExact(doc - leaf.docBase) ? sources.longValue() : 0;
+    }
+
+    /** Number of distinct words of the index (the words left without file stay until the restart). */
     public int wordCount() {
-        return invertedIndex.size();
+        return words.size();
     }
 
     /**
      * The words indexed under the most files, most files first: at least 3 characters, not only digits, and
-     * not matching the child abuse filter.
+     * not matching the child abuse filter. The files removed since the last merge of their segment still count.
      */
     public List<String> topWords(int limit) {
         if (limit <= 0) return List.of();
         record Counted(String word, int files) {}
         PriorityQueue<Counted> top = new PriorityQueue<>(Comparator.comparingInt(Counted::files));
-        lock.readLock().lock();
+        refreshForSearch();
+        IndexSearcher searcher = acquire();
         try {
-            for (Map.Entry<String, Postings> entry : invertedIndex.entrySet()) {
-                String word = entry.getKey();
+            Terms terms = MultiTerms.getTerms(searcher.getIndexReader(), WORD);
+            TermsEnum it = terms == null ? TermsEnum.EMPTY : terms.iterator();
+            for (BytesRef term = it.next(); term != null; term = it.next()) {
+                String word = term.utf8ToString();
                 if (word.length() < 3 || word.chars().allMatch(Character::isDigit)) continue;
-                int files = entry.getValue().size();
+                int files = it.docFreq();
                 if (top.size() < limit) {
                     top.add(new Counted(word, files));
                 } else if (files > top.peek().files()) {
@@ -779,8 +1314,10 @@ public class FileIndex {
                     top.add(new Counted(word, files));
                 }
             }
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
         } finally {
-            lock.readLock().unlock();
+            release(searcher);
         }
         return top.stream()
                 .filter(c -> !abuseFilter.matches(c.word()))
@@ -796,11 +1333,18 @@ public class FileIndex {
 
     /** True if a file with this hash is indexed (case ignored for hexadecimal hashes). */
     public boolean contains(String hash) {
-        lock.readLock().lock();
+        if (hash == null) return false;
+        String id = id(hash);
+        Object written = pending.get(id);
+        if (written == null) written = refreshing.get(id);
+        if (written != null) return written != REMOVED;
+        IndexSearcher searcher = acquire();
         try {
-            return table.find(hash) >= 0;
+            return searcher.count(new TermQuery(new Term(ID, id))) > 0;
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
         } finally {
-            lock.readLock().unlock();
+            release(searcher);
         }
     }
 
@@ -810,12 +1354,12 @@ public class FileIndex {
      * @return The file count.
      */
     public int fileCount() {
-        lock.readLock().lock();
-        try {
-            return table.count();
-        } finally {
-            lock.readLock().unlock();
-        }
+        return indexedFiles.get();
+    }
+
+    /** The lock a refresh takes against the writes of the index, for the tests. */
+    StampedLock indexLock() {
+        return lock;
     }
 
     /** Number of new files (a hash not indexed before) inserted since server start, for one ingestion channel. */
@@ -836,5 +1380,221 @@ public class FileIndex {
     /** Total number of new files inserted since server start. */
     public long totalNewFiles() {
         return newFilesBySource.values().stream().mapToLong(LongAdder::sum).sum();
+    }
+
+    /** Size of the index files on disk (or in the heap for an index without directory). */
+    public long indexBytes() {
+        try {
+            long total = 0;
+            for (String file : directory.listAll()) {
+                try {
+                    total += directory.fileLength(file);
+                } catch (IOException e) {
+                    // deleted by a merge meanwhile
+                }
+            }
+            return total;
+        } catch (IOException e) {
+            return 0;
+        }
+    }
+
+    private IndexSearcher acquire() {
+        try {
+            return searchers.acquire();
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    private void release(IndexSearcher searcher) {
+        try {
+            searchers.release(searcher);
+        } catch (IOException e) {
+            log.debug("Releasing a searcher of the file index: {}", e.toString());
+        }
+    }
+
+    private Document document(FileMetadata meta, long sourceCount) {
+        Document doc = new Document();
+        doc.add(new StringField(ID, id(meta.hash()), Field.Store.NO));
+        doc.add(new StoredField(HASH, meta.hash()));
+        if (meta.name() != null) {
+            doc.add(new StoredField(NAME, meta.name()));
+            for (String word : new LinkedHashSet<>(List.of(Keywords.split(meta.name())))) {
+                doc.add(new StringField(WORD, word, Field.Store.NO));
+                if (words.add(word)) dictionary.add(word);
+            }
+            String lower = meta.name().toLowerCase(Locale.ROOT);
+            int dot = lower.lastIndexOf('.');
+            if (dot >= 0) doc.add(new StringField(EXTENSION, lower.substring(dot + 1), Field.Store.NO));
+        }
+        if (meta.type() != null) doc.add(new StoredField(TYPE, meta.type()));
+        String type = meta.type() == null || meta.type().isEmpty() ? FileTypes.fromFileName(meta.name()) : meta.type();
+        doc.add(new StringField(EFFECTIVE_TYPE, type.toLowerCase(Locale.ROOT), Field.Store.NO));
+        doc.add(new LongPoint(SIZE, meta.size()));
+        doc.add(new StoredField(SIZE, meta.size()));
+        doc.add(new NumericDocValuesField(SOURCES, sourceCount));
+        addMediaTags(doc, meta.tags());
+        byte[] tags = encodeTags(meta.tags());
+        if (tags != null) doc.add(new StoredField(TAGS, tags));
+        return doc;
+    }
+
+    /** The first string tag and the first integer tag of each ID, as {@link SearchQuery} reads them. */
+    private void addMediaTags(Document doc, List<Tag> tags) {
+        if (tags == null) return;
+        for (byte id : STRING_TAGS) {
+            String name = Tag.idName(id);
+            for (Tag tag : tags) {
+                if (!tag.name().equals(name) || !(tag.value() instanceof String value)) continue;
+                String field = tagField(id);
+                String normalized = Keywords.normalize(value);
+                if (normalized.getBytes(StandardCharsets.UTF_8).length > MAX_TERM_BYTES) {
+                    doc.add(new StringField(LONG_TAG, field, Field.Store.NO));
+                    longTags.add(field);
+                } else {
+                    doc.add(new StringField(field, normalized, Field.Store.NO));
+                    values(field).add(normalized);
+                }
+                break;
+            }
+        }
+        for (byte id : NUMERIC_TAGS) {
+            String name = Tag.idName(id);
+            for (Tag tag : tags) {
+                if (!tag.name().equals(name) || !tag.isInt()) continue;
+                doc.add(new LongPoint(numericField(id), tag.unsignedValue()));
+                break;
+            }
+        }
+    }
+
+    /** A file of the index as stored, without its online sources. */
+    private static FileMetadata file(Document doc, long sourceCount) {
+        List<Tag> tags = new ArrayList<>(decodeTags(doc.getBinaryValue(TAGS)));
+        // A file without known source has no FT_SOURCES tag, as it was published
+        if (sourceCount > 0) tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, (int) sourceCount));
+        return FileMetadata.withoutSources(doc.get(HASH), doc.get(NAME), doc.getField(SIZE).numericValue().longValue(),
+                doc.get(TYPE), tags);
+    }
+
+    /** A file found by a search, with its online sources when it has some. */
+    private FileMetadata result(Document doc, long sourceCount) {
+        FileMetadata stored = file(doc, sourceCount);
+        return withSources(stored, liveSources.get(id(stored.hash())));
+    }
+
+    /** The tags but the source count (a doc value of its own); null when there is none. */
+    private static byte[] encodeTags(List<Tag> tags) {
+        if (tags == null) return null;
+        List<Tag> kept = tags.stream().filter(t -> !Tag.NAME_SOURCES.equals(t.name()) && storable(t.value())).toList();
+        if (kept.isEmpty()) return null;
+        try (ByteArrayOutputStream bytes = new ByteArrayOutputStream(); DataOutputStream out = new DataOutputStream(bytes)) {
+            out.writeShort(kept.size());
+            for (Tag tag : kept) {
+                out.writeByte(tag.type());
+                writeBytes(out, tag.name().getBytes(StandardCharsets.UTF_8));
+                switch (tag.value()) {
+                    case String s -> { out.writeByte('S'); writeBytes(out, s.getBytes(StandardCharsets.UTF_8)); }
+                    case Integer i -> { out.writeByte('I'); out.writeInt(i); }
+                    case Long l -> { out.writeByte('L'); out.writeLong(l); }
+                    case Short s -> { out.writeByte('H'); out.writeShort(s); }
+                    case Byte b -> { out.writeByte('B'); out.writeByte(b); }
+                    case Float f -> { out.writeByte('F'); out.writeFloat(f); }
+                    case byte[] b -> { out.writeByte('Y'); writeBytes(out, b); }
+                    default -> throw new IllegalStateException("Tag value not stored: " + tag);
+                }
+            }
+            out.flush();
+            return bytes.toByteArray();
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    /** Whether a tag value is stored in the index; the other ones are dropped. */
+    private static boolean storable(Object value) {
+        return value instanceof String || value instanceof Integer || value instanceof Long || value instanceof Short
+                || value instanceof Byte || value instanceof Float || value instanceof byte[];
+    }
+
+    private static void writeBytes(DataOutputStream out, byte[] bytes) throws IOException {
+        out.writeInt(bytes.length);
+        out.write(bytes);
+    }
+
+    private static byte[] readBytes(DataInputStream in) throws IOException {
+        byte[] bytes = new byte[in.readInt()];
+        in.readFully(bytes);
+        return bytes;
+    }
+
+    private static List<Tag> decodeTags(BytesRef bytes) {
+        if (bytes == null) return List.of();
+        try (DataInputStream in = new DataInputStream(new ByteArrayInputStream(bytes.bytes, bytes.offset, bytes.length))) {
+            int n = in.readUnsignedShort();
+            List<Tag> tags = new ArrayList<>(n);
+            for (int i = 0; i < n; i++) {
+                byte type = in.readByte();
+                String name = new String(readBytes(in), StandardCharsets.UTF_8);
+                // The indexed tags are named by their ID: the names shared, as FileMetadata.indexed() gives them
+                if (name.length() == 1) name = Tag.idName(name.charAt(0));
+                Object value = switch (in.readByte()) {
+                    case 'S' -> new String(readBytes(in), StandardCharsets.UTF_8);
+                    case 'I' -> in.readInt();
+                    case 'L' -> in.readLong();
+                    case 'H' -> in.readShort();
+                    case 'B' -> in.readByte();
+                    case 'F' -> in.readFloat();
+                    case 'Y' -> readBytes(in);
+                    default -> throw new IllegalStateException("Unknown tag value kind");
+                };
+                tags.add(new Tag(type, name, value));
+            }
+            return tags;
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    /**
+     * Closes the index. On disk, it records the same new token in the index and in the database, for the next start
+     * to reopen it: to be called once the database writes are done (the persistence executor drained).
+     */
+    @Override
+    public void close() {
+        close(true);
+    }
+
+    /** Closes the index as a crash leaves it: without token, the next start rebuilds it (for the tests). */
+    void closeWithoutToken() {
+        close(false);
+    }
+
+    private void close(boolean recordToken) {
+        synchronized (refreshLock) {
+            if (closed) return;
+            closed = true;
+        }
+        ScheduledExecutorService scheduler = refresher;
+        if (scheduler != null) scheduler.shutdownNow();
+        try {
+            searchers.close();
+            if (recordToken && onDisk && db != null) {
+                long token;
+                do {
+                    token = java.util.concurrent.ThreadLocalRandom.current().nextLong();
+                } while (token == 0);
+                writer.setLiveCommitData(Map.of(FORMAT_KEY, FORMAT, TOKEN_KEY, String.valueOf(token),
+                        FILTER_KEY, checkedWith).entrySet());
+                writer.commit();
+                db.setStat(INDEX_TOKEN_STAT, token);
+            }
+            writer.close();
+            directory.close();
+        } catch (IOException | RuntimeException e) {
+            log.warn("Closing the file index: {}", e.toString());
+        }
     }
 }

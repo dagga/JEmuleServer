@@ -35,6 +35,7 @@ class GlobalSearchCompatibilityTest {
                 completeFile(hash("11111111111111111111111111111111"), "linux distribution.iso", 4_000_000_000L),
                 completeFile(hash("22222222222222222222222222222222"), "linux distribution dvd.iso", 8_000_000_000L),
                 completeFile(hash("33333333333333333333333333333333"), "other thing.avi", 1_000_000L)), new ByteArrayOutputStream());
+        server.getFileIndex().refresh(); // the running server's searches see the writes within a second
     }
 
     @AfterEach

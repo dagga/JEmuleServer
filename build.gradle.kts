@@ -7,7 +7,7 @@ plugins {
 }
 
 group = "org.jemule"
-version = "1.3"
+version = "1.4"
 
 configure<JavaPluginExtension> {
     toolchain {
@@ -29,6 +29,8 @@ dependencies {
     }
     "implementation"("io.github.resilience4j:resilience4j-circuitbreaker:2.2.0")
     "implementation"("io.github.resilience4j:resilience4j-all:2.2.0")
+    // The file index (FileIndex), on disk next to the database
+    "implementation"("org.apache.lucene:lucene-core:10.5.2")
     "testImplementation"("org.junit.jupiter:junit-jupiter:5.10.1")
     "testImplementation"("org.mockito:mockito-core:5.20.0")
     "testImplementation"("org.mockito:mockito-junit-jupiter:5.20.0")
@@ -102,6 +104,8 @@ tasks.named<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar>("shadowJ
     mergeServiceFiles()
     manifest {
         attributes["Main-Class"] = "org.jemule.Main"
+        // Lucene maps the index files through java.lang.foreign: no warning at each start
+        attributes["Enable-Native-Access"] = "ALL-UNNAMED"
     }
 }
 
