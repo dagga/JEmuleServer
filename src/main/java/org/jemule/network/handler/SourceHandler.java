@@ -36,15 +36,17 @@ public class SourceHandler {
 
         var sources = context.getFileIndex().getSources(hash, context.getState(), context.getConfig().maxSourcesPerFile());
         List<FoundSource> answer = FoundSource.of(reachableSources(sources));
-        // With few sources here, Kad is asked too: its sources come in a second answer
-        org.jemule.network.KadSourceService kad = context.getKadSourceService();
+        // With few sources here, Kad is asked too: its sources come in a second answer. Not for another server,
+        // which asks Kad and the other servers itself
+        boolean fromServer = context.isFromServer();
+        org.jemule.network.KadSourceService kad = fromServer ? null : context.getKadSourceService();
         if (kad != null) {
             answer = kad.onGetSources(context.getState(), hashBytes, requestedSize(data), obfu, answer);
         }
         byte[] response = obfu ? encodeObfu(hashBytes, answer) : encodePlain(hashBytes, answer);
         byte opcode = obfu ? OpCode.SOURCES_RESULT_OBFU.value : OpCode.FOUND_SOURCES.value;
         new Packet(Packet.PROTOCOL_ED2K, opcode, response).write(out, context.getState().isZlibSupported());
-        relaySources(context, data, hashBytes, obfu, answer);
+        if (!fromServer) relaySources(context, data, hashBytes, obfu, answer);
     }
 
     /** Index full: the relay server's HighID sources of the file follow in a second answer. */
