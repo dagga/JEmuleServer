@@ -1,9 +1,9 @@
 # JEmuleServer
 
-JEmuleServer is an eMule server written in Java (version 1.4).
+JEmuleServer is an eMule server written in Java (version 1.4.1).
 
 Downloads (installers and JAR) are on the [releases page](https://github.com/dagga/JEmuleServer/releases); the changes
-of each version are described in `doc/release-notes-v<version>.md` (latest: [1.4](doc/release-notes-v1.4.md)).
+of each version are described in `doc/release-notes-v<version>.md` (latest: [1.4.1](doc/release-notes-v1.4.1.md)).
 
 ## Why this project?
 
@@ -27,7 +27,7 @@ Building requires a JDK 25 (Gradle toolchain; Gradle downloads it when the machi
 ./gradlew build
 ```
 
-The JAR file will be generated in `build/libs/JEmuleServer-1.4.jar`.
+The JAR file will be generated in `build/libs/JEmuleServer-1.4.1.jar`.
 
 ## Installation from the release packages
 
@@ -70,7 +70,7 @@ Once the project is compiled, you can start the server with the following comman
 client thread blocked in a `synchronized` block holds its carrier thread, which on one CPU stalls every client):
 
 ```bash
-java -XX:MaxRAMPercentage=75 -XX:ThreadPriorityPolicy=1 --add-modules=jdk.httpserver -jar build/libs/JEmuleServer-1.4.jar [config_file] [port]
+java -XX:MaxRAMPercentage=75 -XX:ThreadPriorityPolicy=1 --add-modules=jdk.httpserver -jar build/libs/JEmuleServer-1.4.1.jar [config_file] [port]
 ```
 
 - `-XX:ThreadPriorityPolicy=1`: on Linux, the JVM ignores thread priorities without it. The server runs its threads
@@ -370,6 +370,12 @@ Set `ipFilterPath` to enable the IPv4 filter and its automatic daily refresh fro
 server. A downloaded filter is installed only when fewer than 10% of its normalized blocked ranges differ from the
 current filter. Larger changes and invalid downloads leave the current filter untouched and are recorded in the
 adjacent `<ipFilterPath>.trace` file. If no filter path is configured, automatic updates are disabled.
+
+The filter applies to the other eD2K servers (gossip, searches and source requests on other servers) and to the
+sources Kad returns, not to the clients connecting to this server. The servers are checked without the ranges of
+hosting providers ("hosting", "Cloud", "cloudflare:AS..." in their description, unless it also names a hostile activity
+such as AP2P, phishing, fraud or fake servers): the list is made for eMule clients, and nearly every eD2K server runs
+at a hosting provider. The servers listed in `serverPeers` are never blocked.
 
 ## Child Abuse Filter
 
