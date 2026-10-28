@@ -173,6 +173,11 @@ public class FileIndex implements AutoCloseable {
     private final boolean onDisk;
     /** Whether the index of the last run was reopened instead of rebuilt. */
     private final boolean reused;
+    /**
+     * False when the files of the database could not all be read: the index then gets no token at its close, so that
+     * the next start rebuilds it instead of reopening an incomplete index.
+     */
+    private volatile boolean complete = true;
     /** Fingerprint of the child abuse keywords the indexed files were checked with when the index was built. */
     private final String checkedWith;
 
@@ -281,7 +286,12 @@ public class FileIndex implements AutoCloseable {
             } catch (Exception e) {
                 // If DB fails during load, we continue with the files read so far
                 // DatabaseManager with CircuitBreaker should handle specific errors
+                complete = false;
                 log.error("Loading the files of the database failed: {}", e.toString());
+            }
+            if (!complete) {
+                log.error("The file index holds only the {} files read from the database: it is rebuilt at the next "
+                        + "start", fileCount());
             }
             log.info("File index built from the database{}: {} files, {} s", path == null ? "" : " at " + path,
                     fileCount(), (System.nanoTime() - start) / 1_000_000_000);
@@ -409,7 +419,7 @@ public class FileIndex implements AutoCloseable {
         Md4Set seen = new Md4Set();
         Set<String> seenOthers = new HashSet<>();
         IOException[] failure = new IOException[1];
-        db.forEachFile(meta -> {
+        boolean read = db.forEachFile(meta -> {
             if (failure[0] != null) return;
             if (abuseFilter.matches(meta.name())) {
                 rejected.add(meta);
@@ -425,6 +435,7 @@ public class FileIndex implements AutoCloseable {
             }
         });
         if (failure[0] != null) throw failure[0];
+        if (!read) complete = false; // the database logged why
         for (FileMetadata meta : rejected) {
             recordChildAbuseName(meta.name());
             db.deleteFile(meta.hash());
@@ -1568,7 +1579,8 @@ public class FileIndex implements AutoCloseable {
 
     /**
      * Closes the index. On disk, it records the same new token in the index and in the database, for the next start
-     * to reopen it: to be called once the database writes are done (the persistence executor drained).
+     * to reopen it, unless the database could not all be read: to be called once the database writes are done (the
+     * persistence executor drained).
      */
     @Override
     public void close() {
@@ -1589,7 +1601,7 @@ public class FileIndex implements AutoCloseable {
         if (scheduler != null) scheduler.shutdownNow();
         try {
             searchers.close();
-            if (recordToken && onDisk && db != null) {
+            if (recordToken && onDisk && db != null && complete) {
                 long token;
                 do {
                     token = java.util.concurrent.ThreadLocalRandom.current().nextLong();
