@@ -38,9 +38,9 @@ class ServerGossipTest {
 
     @Test
     void configuredServerPeersBypassTheIpFilter(@TempDir Path tempDir) throws Exception {
-        // A blocklist covering a whole hosting provider, the administrator's other server included (issue #59)
+        // A blocked range holding the administrator's other server (issue #59)
         Path filterFile = tempDir.resolve("ipfilter.dat");
-        Files.write(filterFile, List.of("192.0.2.0 - 192.0.2.255 , 000 , Cloud hosting"));
+        Files.write(filterFile, List.of("192.0.2.0 - 192.0.2.255 , 000 , fake emule servers | hosting"));
         IPFilter filter = new IPFilter();
         filter.loadFromFile(filterFile.toString());
 

@@ -123,9 +123,12 @@ final class ServerGossip {
         trusted = java.util.Set.copyOf(configured);
     }
 
-    /** Whether the IP filter blocks a server: never one of {@link #trusted}, which is logged once. */
+    /**
+     * Whether the IP filter blocks a server (its ranges of hosting providers left out): never one of {@link #trusted},
+     * which is logged once.
+     */
     private boolean blocked(InetAddress address) {
-        if (!ipFilter.isBlocked(address)) return false;
+        if (!ipFilter.isServerBlocked(address)) return false;
         if (!trusted.contains(address)) return true;
         if (trustedInBlockedRange.add(address)) {
             System.getLogger(ServerGossip.class.getName()).log(System.Logger.Level.WARNING,
@@ -521,7 +524,7 @@ final class ServerGossip {
             try {
                 InetAddress address = InetAddress.getByName(entry.substring(0, colon).trim());
                 int port = Integer.parseInt(entry.substring(colon + 1).trim());
-                if (ipFilter == null || !ipFilter.isBlocked(address)) {
+                if (ipFilter == null || !ipFilter.isServerBlocked(address)) {
                     endpoints.put(new Endpoint(address, port), Boolean.TRUE);
                 }
                 if (endpoints.size() > MAX_PEERS) {
