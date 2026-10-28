@@ -47,9 +47,10 @@ import java.util.stream.Stream;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
- * {@link FileIndex} against its Lucene prototype ({@link LuceneFileIndex}), loaded from the same database: the same
- * searches must give the same files (all of them, and the first 300 by source count), before and after the same
- * writes; the load, restart, heap, disk, search latency and throughput and the cost of the writes are measured.
+ * {@link FileIndex} on Lucene against the heap index of 1.3 ({@link HeapFileIndex}), loaded from the same database:
+ * the same searches must give the same files (all of them, and the first 300 by source count), before and after the
+ * same writes and the same clients publishing files; the load, heap, disk, search latency and throughput and the cost
+ * of the writes are measured.
  * <p>
  * The production run works on a copy of a real H2 database, outside the regular suite:
  * {@code ./gradlew benchmark --tests '*LuceneIndexComparisonTest' -Ph2=/path/to/jemule_db.mv.db -Pheap=4g -Pcpus=6}.
@@ -97,8 +98,8 @@ class LuceneIndexComparisonTest {
                 comparison.compare(searches, "loaded");
                 comparison.applySameWrites(new Random(9), 2_000);
                 comparison.compare(searches, "after the writes");
-                comparison.restartLucene();
-                comparison.compare(searches, "after a restart of Lucene");
+                comparison.publishByClients(new Random(13), 2_000);
+                comparison.compare(searches, "after clients published files");
             }
             assertEquals(List.of(), comparison.differences);
         }
@@ -128,8 +129,8 @@ class LuceneIndexComparisonTest {
                 comparison.throughput(searches);
                 comparison.applySameWrites(new Random(9), 20_000);
                 comparison.compare(searches, "after the writes");
-                comparison.restartLucene();
-                comparison.compare(searches, "after a restart of Lucene");
+                comparison.publishByClients(new Random(13), 20_000);
+                comparison.compare(searches, "after clients published files");
                 comparison.printSummary();
             }
         } finally {
@@ -143,8 +144,8 @@ class LuceneIndexComparisonTest {
         private final DatabaseManager db;
         private final Path lucenePath;
         private final boolean verbose;
-        private FileIndex current;
-        private LuceneFileIndex lucene;
+        private HeapFileIndex current;
+        private FileIndex lucene;
         final List<String> differences = new ArrayList<>();
         /** Lines of the summary table: what, FileIndex, Lucene. */
         private final List<String[]> summary = new ArrayList<>();
@@ -159,34 +160,24 @@ class LuceneIndexComparisonTest {
         void load() throws IOException {
             long base = usedHeapAfterGc();
             long start = System.nanoTime();
-            current = new FileIndex(db);
+            current = new HeapFileIndex(db);
             double currentLoad = seconds(start);
             current.setPersistenceExecutor(task -> { }); // the writes below are not timed with the database's
             long currentHeap = usedHeapAfterGc() - base;
             start = System.nanoTime();
-            lucene = new LuceneFileIndex(lucenePath);
-            lucene.build(db);
+            lucene = new FileIndex(db, null, org.jemule.security.ChildAbuseFilter.defaults(), lucenePath);
             double luceneBuild = seconds(start);
+            lucene.setPersistenceExecutor(task -> { });
             long luceneHeap = usedHeapAfterGc() - base - currentHeap;
             row("files indexed", String.format("%,d", current.fileCount()), String.format("%,d", lucene.fileCount()));
             row("distinct words", String.format("%,d", current.wordCount()), String.format("%,d", lucene.wordCount()));
             row("load from the database", String.format("%.1f s", currentLoad),
-                    String.format("%.1f s (build, the database already read once)", luceneBuild));
+                    String.format("%.1f s (the database already read once)", luceneBuild));
             row("heap after GC", mb(currentHeap), mb(luceneHeap) + " (words for the substrings included)");
-            row("disk", "- (the database only)", mb(lucene.diskBytes()) + " of index, read through mmap");
+            row("disk", "- (the database only)", mb(lucene.indexBytes()) + " of index, read through mmap");
             if (current.fileCount() != lucene.fileCount()) {
                 difference("indexed files: " + current.fileCount() + " in FileIndex, " + lucene.fileCount() + " in Lucene");
             }
-        }
-
-        /** Closes the Lucene index and opens it again: a server restart, without reading the database. */
-        void restartLucene() throws IOException {
-            lucene.commit();
-            lucene.close();
-            long start = System.nanoTime();
-            lucene = new LuceneFileIndex(lucenePath);
-            double open = seconds(start);
-            row("restart (open an existing index)", "- (load from the database again)", String.format("%.2f s", open));
         }
 
         /**
@@ -195,7 +186,7 @@ class LuceneIndexComparisonTest {
          * few without keyword.
          */
         List<Search> searches(Random random, int perFamily) throws IOException {
-            List<FileMetadata> sample = lucene.sampleFiles(perFamily * 4, random);
+            List<FileMetadata> sample = current.sampleFiles(perFamily * 4, random);
             List<String> sampled = new ArrayList<>();
             for (FileMetadata file : sample) {
                 String[] split = Keywords.split(file.name());
@@ -258,7 +249,13 @@ class LuceneIndexComparisonTest {
                         sampled.get((i + 3) % sampled.size()), SearchQuery.ID_MEDIA_TITLE))));
                 searches.add(new Search("+ complete sources (tested)", and(word, new SearchQuery.NumericQuery(
                         SearchQuery.ID_COMPLETE_SOURCES, SearchQuery.OP_LESS, 1))));
+                searches.add(new Search("+ complete sources > 0", and(random1, new SearchQuery.NumericQuery(
+                        SearchQuery.ID_COMPLETE_SOURCES, SearchQuery.OP_GREATER, 0))));
             }
+            searches.add(new Search("complete sources > 0 alone", new SearchQuery.NumericQuery(
+                    SearchQuery.ID_COMPLETE_SOURCES, SearchQuery.OP_GREATER, 0)));
+            searches.add(new Search("complete sources > 0 alone", new SearchQuery.NumericQuery(
+                    SearchQuery.ID_COMPLETE_SOURCES, SearchQuery.OP_GREATER_EQUAL, 2)));
             for (int i = 0; i < 3; i++) {
                 searches.add(new Search("no keyword", and(new SearchQuery.TermQuery(types[i], SearchQuery.ID_FILETYPE),
                         new SearchQuery.NumericQuery(SearchQuery.ID_FILESIZE, SearchQuery.OP_GREATER, 4_000_000_000L))));
@@ -366,7 +363,7 @@ class LuceneIndexComparisonTest {
          * them): new files, higher source counts of known ones, then deletions.
          */
         void applySameWrites(Random random, int count) throws IOException {
-            List<FileMetadata> known = lucene.sampleFiles(count, random);
+            List<FileMetadata> known = current.sampleFiles(count, random);
             List<String> words = new ArrayList<>();
             for (FileMetadata file : known.subList(0, Math.min(500, known.size()))) {
                 words.addAll(Arrays.asList(Keywords.split(file.name())));
@@ -405,9 +402,50 @@ class LuceneIndexComparisonTest {
             row(what + ", by 1,000", String.format("%.2f s", currentTime), String.format("%.2f s", seconds(start)));
         }
 
+        /**
+         * Clients of 50 files each publish known files and new ones, with their own source on each, to both indexes
+         * (a copy of each file for each, the source maps being the indexes' own): the searches on the source count
+         * and the complete sources then count the online sources.
+         */
+        void publishByClients(Random random, int count) throws IOException {
+            List<FileMetadata> known = current.sampleFiles(count / 2, random);
+            List<FileMetadata> files = new ArrayList<>(known);
+            for (int i = 0; i < count - known.size(); i++) {
+                files.add(FileMetadata.withoutSources(String.format("BB%030X", i), "published by a client " + i
+                        + (i % 3 == 0 ? ".avi" : ".flac"), 5_000L + i, i % 3 == 0 ? "Video" : "Audio",
+                        List.of(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, i % 7))));
+            }
+            Collections.shuffle(files, random);
+            double[] seconds = new double[2];
+            for (int from = 0; from < files.size(); from += 50) {
+                List<FileMetadata> offered = files.subList(from, Math.min(files.size(), from + 50));
+                ClientState client = new ClientState(java.net.InetAddress.getLoopbackAddress(), 4662, from,
+                        System.currentTimeMillis(), new java.util.concurrent.atomic.AtomicLong());
+                // A few files are partial on the client: not counted among the complete sources
+                for (int i = 0; i < offered.size(); i += 5) client.partialHashes().add(offered.get(i).hash());
+                long start = System.nanoTime();
+                for (FileMetadata file : offered) current.addFile(publishedBy(file, client));
+                seconds[0] += seconds(start);
+                start = System.nanoTime();
+                for (FileMetadata file : offered) lucene.addFile(publishedBy(file, client));
+                lucene.refresh();
+                seconds[1] += seconds(start);
+            }
+            row(String.format("%,d files published by clients", files.size()), String.format("%.2f s", seconds[0]),
+                    String.format("%.2f s", seconds[1]));
+        }
+
+        private static FileMetadata publishedBy(FileMetadata file, ClientState client) {
+            java.util.concurrent.ConcurrentHashMap<String, ClientState> sources = new java.util.concurrent.ConcurrentHashMap<>();
+            sources.put(FileIndex.sourceKey(client), client);
+            List<Tag> tags = file.tags() == null ? List.of() : file.tags().stream()
+                    .filter(t -> !Tag.NAME_SOURCES.equals(t.name())).toList();
+            return new FileMetadata(file.hash(), file.name(), file.size(), file.type(), tags, sources);
+        }
+
         void printSummary() {
             out.println();
-            out.printf("%-44s %-24s %s%n", "", "FileIndex (heap)", "Lucene prototype");
+            out.printf("%-44s %-24s %s%n", "", "HeapFileIndex (1.3)", "FileIndex (Lucene)");
             for (String[] line : summary) out.printf("%-44s %-24s %s%n", line[0], line[1], line[2]);
             out.printf("%n%d difference(s)%n", differences.size());
             differences.stream().limit(30).forEach(d -> out.println("  DIFFERENCE " + d));

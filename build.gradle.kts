@@ -29,8 +29,8 @@ dependencies {
     }
     "implementation"("io.github.resilience4j:resilience4j-circuitbreaker:2.2.0")
     "implementation"("io.github.resilience4j:resilience4j-all:2.2.0")
-    // Prototype of the file index on Lucene, compared with FileIndex (LuceneIndexComparisonTest)
-    "testImplementation"("org.apache.lucene:lucene-core:10.5.2")
+    // The file index (FileIndex), on disk next to the database
+    "implementation"("org.apache.lucene:lucene-core:10.5.2")
     "testImplementation"("org.junit.jupiter:junit-jupiter:5.10.1")
     "testImplementation"("org.mockito:mockito-core:5.20.0")
     "testImplementation"("org.mockito:mockito-junit-jupiter:5.20.0")

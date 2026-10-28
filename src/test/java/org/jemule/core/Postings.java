@@ -25,7 +25,7 @@ import java.util.function.IntConsumer;
  * Numbers ({@link FileTable}) of the files whose name contains one word of the inverted index, in increasing order,
  * each stored as its gap from the previous one in a variable-length integer: one or two bytes for the frequent
  * words, three for the rare ones, instead of four. The number of a word found in one file only is kept in a field,
- * without an array. Written under the write lock of {@link FileIndex} and read under its read lock. The caller must
+ * without an array. Written under the write lock of {@link HeapFileIndex} and read under its read lock. The caller must
  * not add a number twice.
  */
 final class Postings {
