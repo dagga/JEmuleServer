@@ -306,6 +306,11 @@ What changes with MySQL:
   restarts too.
 - **No compaction:** InnoDB reuses the space it frees, so the startup and online compactions of H2, and the writes
   they hold back, are gone.
+- **Smaller tables since schema version 4:** the hashes take their 16 bytes instead of 32 hexadecimal characters, and
+  the source count of a file is a column of `files` instead of a table of its own. A database of version 3 (1.3 to
+  1.4.2) is migrated at the first start: 34 s for 2,750,631 files, its files and tags taking 483 MB instead of 723 MB.
+  The random hashes split the pages of InnoDB as files arrive: `OPTIMIZE TABLE files, file_tags` with the server
+  stopped gives back that room.
 - **A remote server** costs a round trip per batch: the writes run on the ingestion thread, never on the clients',
   and the startup load reads 5,000 files per query. Over the Internet, add `sslMode=REQUIRED` to the URL. A lost
   connection is reopened at the next database operation, as H2 is after a fatal error (`databaseReopens`).

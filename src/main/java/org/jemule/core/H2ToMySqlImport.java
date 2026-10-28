@@ -30,9 +30,11 @@ import java.sql.Types;
 
 /**
  * Copies the H2 database of an older version into an empty MySQL database, at the first start with
- * {@code databaseType=mysql}. The rows are copied as they are, table by table: files, tags and source counts by pages
- * of {@link #PAGE_FILES} files in hash order, each page committed whole with its tags and counts. An import stopped
- * halfway (crash, restart) resumes after the last file copied, the greatest hash of the MySQL files table.
+ * {@code databaseType=mysql}. The rows are copied table by table: files with their source counts, and their tags, by
+ * pages of {@link #PAGE_FILES} files in hash order, each page committed whole. MySQL keeps the hashes on 16 bytes: a
+ * hash that is not 32 hexadecimal digits, which no client sends, is left out. An import stopped halfway (crash,
+ * restart) starts over at the next start, the files copied being written again and their tags replaced: the order of
+ * the 16 byte hashes is not the order of their text in H2 when the case of their letters differs.
  * <p>
  * The H2 database is opened by a {@link DatabaseManager} first, which brings it to the current schema version. It is
  * not modified otherwise, and stays as a backup.
@@ -84,7 +86,7 @@ final class H2ToMySqlImport {
             long stats = copyStats(h2);
             long samples = copyMetrics(h2);
             long names = copyBannedNames(h2);
-            long[] files = copyFiles(h2);
+            long[] files = copyFiles(h2, state == IN_PROGRESS);
             setState(DONE);
             logger.info("H2 database imported into MySQL in {} s: {} files, {} tags, {} source counts, {} banned names, "
                             + "{} metrics samples, {} statistics. {} is no longer used: keep it as a backup or delete it",
@@ -171,27 +173,30 @@ final class H2ToMySqlImport {
     }
 
     /**
-     * Files, tags and source counts, page by page in hash order, each page in one transaction.
+     * Files with their source counts, and their tags, page by page in hash order, each page in one transaction.
      *
+     * @param again whether a previous run copied part of the files: their tags are deleted before being copied
      * @return {files, tags, source counts} copied by this run
      */
-    private long[] copyFiles(Connection h2) throws SQLException {
+    private long[] copyFiles(Connection h2, boolean again) throws SQLException {
         long total = countRows(h2, "files");
-        String after = greatestHash();
-        long done = after.isEmpty() ? 0 : countRowsUpTo(h2, after);
-        long files = 0, tags = 0, sources = 0;
+        String after = "";
+        long done = 0;
+        long files = 0, tags = 0, sources = 0, notHashes = 0;
         int lastReported = -1;
-        try (PreparedStatement selectFiles = h2.prepareStatement(
-                     "SELECT hash, name, size, type FROM files WHERE hash > ? ORDER BY hash LIMIT ?");
+        try (PreparedStatement selectFiles = h2.prepareStatement("""
+                     SELECT f.hash, f.name, f.size, f.type, s.source_count FROM files f
+                     LEFT JOIN file_sources s ON s.hash = f.hash WHERE f.hash > ? ORDER BY f.hash LIMIT ?""");
              PreparedStatement selectTags = h2.prepareStatement("""
                      SELECT file_hash, tag_type, tag_name, tag_value_str, tag_value_blob FROM file_tags
                      WHERE file_hash > ? AND file_hash <= ? ORDER BY file_hash, _ROWID_""");
-             PreparedStatement selectSources = h2.prepareStatement(
-                     "SELECT hash, source_count FROM file_sources WHERE hash > ? AND hash <= ?");
-             PreparedStatement mergeFile = mysql.prepareStatement(sql.mergeFile());
+             PreparedStatement mergeFile = mysql.prepareStatement("""
+                     INSERT INTO files (hash, name, size, type, source_count) VALUES (?, ?, ?, ?, ?)
+                     ON DUPLICATE KEY UPDATE name = VALUES(name), size = VALUES(size), type = VALUES(type),
+                     source_count = VALUES(source_count)""");
+             PreparedStatement deleteTags = mysql.prepareStatement("DELETE FROM file_tags WHERE file_hash = ?");
              PreparedStatement insertTag = mysql.prepareStatement(
-                     "INSERT INTO file_tags (file_hash, tag_type, tag_name, tag_value_str, tag_value_blob) VALUES (?, ?, ?, ?, ?)");
-             PreparedStatement mergeSource = mysql.prepareStatement(sql.mergeSourceCount())) {
+                     "INSERT INTO file_tags (file_hash, tag_type, tag_name, tag_value_str, tag_value_blob) VALUES (?, ?, ?, ?, ?)")) {
             mysql.setAutoCommit(false);
             while (true) {
                 String first = after, last = null;
@@ -201,22 +206,40 @@ final class H2ToMySqlImport {
                 try (ResultSet rs = selectFiles.executeQuery()) {
                     while (rs.next()) {
                         last = rs.getString(1);
-                        mergeFile.setString(1, last);
+                        pageFiles++;
+                        if (DatabaseManager.hashBytes(last) == null) {
+                            notHashes++;
+                            continue;
+                        }
+                        target.setHash(mergeFile, 1, last);
                         mergeFile.setString(2, rs.getString(2));
                         mergeFile.setLong(3, rs.getLong(3));
                         mergeFile.setString(4, rs.getString(4));
+                        int count = rs.getInt(5);
+                        if (rs.wasNull()) {
+                            mergeFile.setNull(5, Types.INTEGER);
+                        } else {
+                            mergeFile.setInt(5, count);
+                            sources++;
+                        }
                         mergeFile.addBatch();
-                        pageFiles++;
+                        if (again) {
+                            target.setHash(deleteTags, 1, last);
+                            deleteTags.addBatch();
+                        }
                     }
                 }
                 if (last == null) break;
                 mergeFile.executeBatch();
+                if (again) deleteTags.executeBatch();
 
                 selectTags.setString(1, first);
                 selectTags.setString(2, last);
                 try (ResultSet rs = selectTags.executeQuery()) {
                     while (rs.next()) {
-                        insertTag.setString(1, rs.getString(1));
+                        String hash = rs.getString(1);
+                        if (DatabaseManager.hashBytes(hash) == null) continue;
+                        target.setHash(insertTag, 1, hash);
                         insertTag.setByte(2, rs.getByte(2));
                         insertTag.setString(3, rs.getString(3));
                         String text = rs.getString(4);
@@ -228,18 +251,6 @@ final class H2ToMySqlImport {
                     }
                 }
                 insertTag.executeBatch();
-
-                selectSources.setString(1, first);
-                selectSources.setString(2, last);
-                try (ResultSet rs = selectSources.executeQuery()) {
-                    while (rs.next()) {
-                        mergeSource.setString(1, rs.getString(1));
-                        mergeSource.setInt(2, rs.getInt(2));
-                        mergeSource.addBatch();
-                        sources++;
-                    }
-                }
-                mergeSource.executeBatch();
                 mysql.commit();
 
                 after = last;
@@ -258,25 +269,10 @@ final class H2ToMySqlImport {
         } finally {
             try { mysql.setAutoCommit(true); } catch (SQLException e) { /* ignore */ }
         }
-        return new long[]{files, tags, sources};
-    }
-
-    /** The greatest hash of the MySQL files table: the last file a previous run copied, "" if none. */
-    private String greatestHash() throws SQLException {
-        try (Statement stmt = mysql.createStatement(); ResultSet rs = stmt.executeQuery("SELECT MAX(hash) FROM files")) {
-            String hash = rs.next() ? rs.getString(1) : null;
-            return hash == null ? "" : hash;
+        if (notHashes > 0) {
+            logger.warn("H2 import: {} files whose hash is not 32 hexadecimal digits left out", notHashes);
         }
-    }
-
-    private static long countRowsUpTo(Connection h2, String hash) throws SQLException {
-        try (PreparedStatement ps = h2.prepareStatement("SELECT COUNT(*) FROM files WHERE hash <= ?")) {
-            ps.setString(1, hash);
-            try (ResultSet rs = ps.executeQuery()) {
-                rs.next();
-                return rs.getLong(1);
-            }
-        }
+        return new long[]{files - notHashes, tags, sources};
     }
 
     private static long countRows(Connection connection, String table) throws SQLException {

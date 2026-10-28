@@ -92,7 +92,12 @@ final class DatabaseEquivalence {
                     + "=" + text);
         }
         Collections.sort(tags);
-        return meta.hash() + "|" + meta.name() + "|" + meta.size() + "|" + meta.type() + "|" + meta.sourceCount() + "|" + tags;
+        return key(meta) + "|" + meta.name() + "|" + meta.size() + "|" + meta.type() + "|" + meta.sourceCount() + "|" + tags;
+    }
+
+    /** A file's hash compared in lower case: MySQL gives back the 16 bytes it keeps in lower case. */
+    private static String key(FileMetadata meta) {
+        return meta.hash().toLowerCase(Locale.ROOT);
     }
 
     private static long digest(String text) {
@@ -112,7 +117,7 @@ final class DatabaseEquivalence {
         long[] read = new long[1];
         long start = System.nanoTime();
         h2.forEachFile(meta -> {
-            h2Files.put(meta.hash(), digest(canonical(meta)));
+            h2Files.put(key(meta), digest(canonical(meta)));
             if (sample && read[0]++ % NAME_SAMPLE_EVERY == 0) {
                 sampledNames.add(meta.name());
                 sampledHashes.add(meta.hash());
@@ -124,11 +129,11 @@ final class DatabaseEquivalence {
         long[] extra = new long[1], same = new long[1];
         start = System.nanoTime();
         mysql.forEachFile(meta -> {
-            Long expected = h2Files.remove(meta.hash());
+            Long expected = h2Files.remove(key(meta));
             if (expected == null) {
                 if (extra[0]++ < EXAMPLES) difference("only in MySQL: " + canonical(meta));
             } else if (expected != digest(canonical(meta))) {
-                if (differing.size() < EXAMPLES) differing.add(meta.hash());
+                if (differing.size() < EXAMPLES) differing.add(key(meta));
                 else differing.add(null);
             } else {
                 same[0]++;
@@ -145,8 +150,8 @@ final class DatabaseEquivalence {
             Set<String> examples = new HashSet<>(differing);
             examples.remove(null);
             Map<String, String> h2Text = new HashMap<>(), mysqlText = new HashMap<>();
-            h2.forEachFile(meta -> { if (examples.contains(meta.hash())) h2Text.put(meta.hash(), canonical(meta)); });
-            mysql.forEachFile(meta -> { if (examples.contains(meta.hash())) mysqlText.put(meta.hash(), canonical(meta)); });
+            h2.forEachFile(meta -> { if (examples.contains(key(meta))) h2Text.put(key(meta), canonical(meta)); });
+            mysql.forEachFile(meta -> { if (examples.contains(key(meta))) mysqlText.put(key(meta), canonical(meta)); });
             for (String hash : examples) difference("different file:\n    H2    " + h2Text.get(hash) + "\n    MySQL " + mysqlText.get(hash));
             if (differing.size() > examples.size()) difference((differing.size() - examples.size()) + " more different files");
         }
@@ -253,7 +258,7 @@ final class DatabaseEquivalence {
             List<Integer>[] top = new List[2];
             for (int side = 0; side < 2; side++) {
                 all[side] = new HashSet<>();
-                for (FileMetadata meta : indexes[side].searchComplex(query, 1_000_000)) all[side].add(meta.hash());
+                for (FileMetadata meta : indexes[side].searchComplex(query, 1_000_000)) all[side].add(meta.hash().toLowerCase(Locale.ROOT));
                 long start = System.nanoTime();
                 List<FileMetadata> first = indexes[side].searchComplex(query, 300);
                 durations[side] += (System.nanoTime() - start) / 1e6;
