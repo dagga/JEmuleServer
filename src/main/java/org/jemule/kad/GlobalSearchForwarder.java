@@ -51,7 +51,7 @@ public final class GlobalSearchForwarder {
     private static final long MINUTE_MS = 60_000L;
 
     /** What became of one global search. */
-    public enum Outcome { FORWARDED, DISABLED, NO_KEYWORD, CHILD_ABUSE, DUPLICATE, RATE_LIMITED }
+    public enum Outcome { FORWARDED, DISABLED, NO_KEYWORD, CHILD_ABUSE, DUPLICATE, RATE_LIMITED, FROM_SERVER }
 
     private final Supplier<KadSearchBridge> bridge;
     private final ChildAbuseFilter abuseFilter;
@@ -76,6 +76,15 @@ public final class GlobalSearchForwarder {
         this.bridge = bridge;
         this.abuseFilter = abuseFilter;
         this.enabled = enabled;
+    }
+
+    /**
+     * A global search another eD2K server sent for one of its clients: not searched on Kad, which that server did
+     * itself. Counted among the received and skipped searches.
+     */
+    public Outcome fromServer() {
+        received.incrementAndGet();
+        return count(Outcome.FROM_SERVER);
     }
 
     public Outcome forward(SearchQuery query, InetAddress source) {

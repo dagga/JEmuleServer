@@ -103,6 +103,29 @@ class GlobalSearchCompatibilityTest {
     }
 
     @Test
+    void aGlobalSearchFromAnotherServerGetsTheLocalAnswerOnly() throws Exception {
+        // The requester (127.0.0.1) is a configured peer: it searches Kad itself, for its client
+        java.util.Properties props = new java.util.Properties();
+        props.setProperty("port", "14667");
+        props.setProperty("databasePath", "mem:peer_global_search_" + System.nanoTime());
+        props.setProperty("serverPeers", "127.0.0.1:4661");
+        props.setProperty("ipFilterPath", "");
+        props.setProperty("serverMetUrl", "");
+        props.setProperty("adminPort", "0");
+        props.setProperty("adminWebPort", "0");
+        server.stop();
+        server = new Server(org.jemule.config.ServerConfig.fromProperties(props), new ClientFactory());
+        org.jemule.kad.KadSearchBridge kad = mock(org.jemule.kad.KadSearchBridge.class);
+        server.setKadSearchBridge(kad);
+        assertTrue(server.isPeerServer(InetAddress.getLoopbackAddress()));
+
+        udpSearch(withHeader(0x98, new SearchTree().keyword("linux").toBytes()));
+        org.mockito.Mockito.verifyNoInteractions(kad);
+        assertEquals(1, server.getGlobalSearchForwarder().getReceived());
+        assertEquals(0, server.getGlobalSearchForwarder().getForwarded());
+    }
+
+    @Test
     void aChildAbuseGlobalSearchGetsNoAnswerAndIsNotSearchedOnKad() throws Exception {
         org.jemule.kad.KadSearchBridge kad = mock(org.jemule.kad.KadSearchBridge.class);
         server.setKadSearchBridge(kad);

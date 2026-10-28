@@ -26,6 +26,15 @@ public interface ClientContext {
     EventManager getEventManager();
     ClientFactory getClientFactory();
     default Server getServer() { return null; }
+    /**
+     * Whether the client is another eD2K server (its relay or index update sessions): it gets the local answers only,
+     * see {@link Server#isPeerServer}.
+     */
+    default boolean isFromServer() {
+        Server server = getServer();
+        Socket socket = getSocket();
+        return server != null && socket != null && server.isPeerServer(socket.getInetAddress());
+    }
     default KadSearchBridge getKadSearchBridge() {
         return getServer() != null ? getServer().getKadSearchBridge() : null;
     }
