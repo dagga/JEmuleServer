@@ -43,7 +43,7 @@ import java.util.function.IntConsumer;
  * the form it was stored in, which is the key of the file in the database. {@link #view} builds the
  * {@link FileMetadata} of a file on demand; its source map is the live one.
  * <p>
- * Not thread-safe: {@link FileIndex} guards it with its read-write lock.
+ * Not thread-safe: {@link HeapFileIndex} guards it with its read-write lock.
  */
 final class FileTable {
     private static final byte LOWER_CASE = 0;

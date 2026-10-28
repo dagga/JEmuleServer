@@ -25,6 +25,8 @@ Thumbs.db
 *.log
 /jemule_db.mv.db
 /jemule_db.trace.db
+# File index (Lucene), rebuilt from the database at each start
+/*.index/
 /ipfilter.dat
 /*.nodes.dat
 /ipfilter.dat.bin

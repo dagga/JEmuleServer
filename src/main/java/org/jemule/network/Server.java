@@ -179,9 +179,12 @@ public class Server {
     private static final long MB = 1024 * 1024;
     /**
      * Live heap per indexed file, everything included (Kad, clients, H2 cache): 365 MB of old generation for 1,521,140
-     * files in production with 1.2.24.
+     * files in production with 1.2.24, the index taking about 230 bytes of it; the Lucene index keeps about 46 bytes
+     * per file in the heap (110 MB for 2,398,695 files).
      */
-    static final long HEAP_BYTES_PER_FILE = 250;
+    static final long HEAP_BYTES_PER_FILE = 80;
+    /** Most time a write of the file index takes to reach the searches. */
+    static final long INDEX_REFRESH_MILLIS = 1_000;
 
     /**
      * Warns when the old generation is too small for the indexed files: the heap guard then refuses new files soon,
@@ -287,12 +290,16 @@ public class Server {
 
         this.db = dbMgr;
         this.abuseFilter = ChildAbuseFilter.load(config.childAbuseKeywordsPath());
-        this.fileIndex = new FileIndex(db, eventManager, abuseFilter);
+        java.nio.file.Path indexPath = fileIndexPath(config);
+        this.fileIndex = new FileIndex(db, eventManager, abuseFilter, indexPath);
         this.fileIndex.setPersistenceExecutor(ingestion);
-        // Every channel (clients, Kad, other servers) stops bringing new files at maxFiles or when the heap is full
+        this.fileIndex.refreshEvery(INDEX_REFRESH_MILLIS);
+        // Every channel (clients, Kad, other servers) stops bringing new files at maxFiles, or when the heap or the
+        // disk of the index is full
         this.heapGuard = org.jemule.core.HeapGuard.jvm();
+        org.jemule.core.DiskGuard diskGuard = org.jemule.core.DiskGuard.of(indexPath);
         // this.config: the field, which a settings change replaces, not the constructor parameter
-        this.fileIndex.setCapacity(() -> this.config.maxFiles(), heapGuard::full);
+        this.fileIndex.setCapacity(() -> this.config.maxFiles(), () -> heapGuard.full() || diskGuard.full());
         this.metricsHistory = new org.jemule.core.MetricsHistory(db);
         String heapWarning = heapWarning(Runtime.getRuntime().maxMemory(), heapGuard.maxBytes(), fileIndex.fileCount());
         if (heapWarning != null) {
@@ -332,6 +339,16 @@ public class Server {
             md5 = new byte[16];
         }
         System.arraycopy(md5, 0, serverHash, 0, 16);
+    }
+
+    /**
+     * Directory of the file index, next to the H2 database ({@code databasePath}.index, with MySQL too); null for a
+     * database in memory, whose index stays in the heap.
+     */
+    static java.nio.file.Path fileIndexPath(ServerConfig config) {
+        String path = config.databasePath();
+        if (path == null || path.isBlank() || path.trim().startsWith("mem:")) return null;
+        return java.nio.file.Path.of(path.trim() + ".index");
     }
 
     /** Cache of the downloaded Kad nodes.dat list, kept next to the H2 database when its path is a real file. */
@@ -1481,6 +1498,7 @@ public class Server {
         }
         // The files still waiting for ingestion are written before the database closes
         ingestion.close();
+        fileIndex.close();
         if (db != null) {
             try {
                 db.close();

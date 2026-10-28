@@ -37,7 +37,7 @@ public final class ChildAbuseFilter {
      * kept apart ({@link WordTerms}): in the regular expression, each of them would scan every word from each of its
      * letters, which made the whole filter cost about 13 µs per name.
      */
-    private record Rules(Terms banned, Terms minor, Terms sexual, Pattern age, int maxMinorAge) {
+    private record Rules(Terms banned, Terms minor, Terms sexual, Pattern age, int maxMinorAge, long fingerprint) {
     }
 
     /**
@@ -89,7 +89,29 @@ public final class ChildAbuseFilter {
                 : Pattern.compile("(?<!" + WORD_CHAR + ")(\\d{1,3}) ?(?:" + suffixes + ")(?!" + WORD_CHAR + ")");
         this.rules = new Rules(terms(props.getProperty("banned")), terms(props.getProperty("minor")),
                 terms(props.getProperty("sexual")), age,
-                Integer.parseInt(props.getProperty("maxMinorAge", "17").trim()));
+                Integer.parseInt(props.getProperty("maxMinorAge", "17").trim()), fingerprint(props));
+    }
+
+    /** Digest of the keyword lists: equal for two filters built from the same keywords. */
+    private static long fingerprint(Properties props) {
+        try {
+            java.security.MessageDigest sha = java.security.MessageDigest.getInstance("SHA-256");
+            for (String key : List.of("banned", "minor", "sexual", "ageSuffixes", "maxMinorAge")) {
+                String value = props.getProperty(key);
+                sha.update((key + "=" + (value == null ? "" : value.trim()) + "\n").getBytes(StandardCharsets.UTF_8));
+            }
+            return java.nio.ByteBuffer.wrap(sha.digest()).getLong();
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /**
+     * Identifies the keywords in use: it changes with them, so that the file index knows whether the files it holds
+     * were checked with the same keywords.
+     */
+    public long fingerprint() {
+        return rules.fingerprint();
     }
 
     public static ChildAbuseFilter fromProperties(Properties props) {
