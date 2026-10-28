@@ -25,7 +25,7 @@ class ServerGossipTest {
     private static final int CHALLENGE = 0x12345678;
 
     @Test
-    void filtersConfiguredServerSeedsMatchingIpFilter(@TempDir Path tempDir) throws IOException {
+    void parsingWithTheIpFilterDropsTheBlockedEndpoints(@TempDir Path tempDir) throws IOException {
         Path filterFile = tempDir.resolve("ipfilter.dat");
         Files.write(filterFile, List.of("192.0.2.10 - 192.0.2.10 , 000 , Blocked Seed"));
         IPFilter filter = new IPFilter();
@@ -34,10 +34,32 @@ class ServerGossipTest {
         var peers = ServerGossip.parseEndpoints("127.0.0.1:4661, 192.0.2.10:5000", filter);
         assertEquals(1, peers.size());
         assertEquals(InetAddress.getByName("127.0.0.1"), peers.iterator().next().address());
+    }
+
+    @Test
+    void configuredServerPeersBypassTheIpFilter(@TempDir Path tempDir) throws Exception {
+        // A blocklist covering a whole hosting provider, the administrator's other server included (issue #59)
+        Path filterFile = tempDir.resolve("ipfilter.dat");
+        Files.write(filterFile, List.of("192.0.2.0 - 192.0.2.255 , 000 , Cloud hosting"));
+        IPFilter filter = new IPFilter();
+        filter.loadFromFile(filterFile.toString());
 
         ServerGossip gossip = new ServerGossip("127.0.0.1:4661, 192.0.2.10:5000", filter);
-        assertEquals(1, gossip.candidateEndpoints().size());
-        assertEquals(InetAddress.getByName("127.0.0.1"), gossip.candidateEndpoints().iterator().next().address());
+        assertEquals(java.util.Set.of(new ServerGossip.Endpoint(InetAddress.getByName("127.0.0.1"), 4661),
+                new ServerGossip.Endpoint(InetAddress.getByName("192.0.2.10"), 5000)),
+                java.util.Set.copyOf(gossip.candidateEndpoints()));
+
+        byte[] statReq = ByteBuffer.allocate(6).order(ByteOrder.LITTLE_ENDIAN)
+                .put((byte) 0xE3).put((byte) 0x96).putInt(12345).array();
+        try (DatagramSocket socket = new DatagramSocket()) {
+            assertTrue(gossip.handle(socket, InetAddress.getByName("192.0.2.10"), 5004, statReq, false,
+                    InetAddress.getByName("127.0.0.1"), 4661, System.currentTimeMillis()), "its datagrams are heard");
+            assertFalse(gossip.handle(socket, InetAddress.getByName("192.0.2.11"), 4665, statReq, false,
+                    InetAddress.getByName("127.0.0.1"), 4661, System.currentTimeMillis()),
+                    "another server of the range stays blocked");
+        }
+        assertEquals(0, gossip.addServerMetCandidates(List.of(
+                new ServerGossip.Endpoint(InetAddress.getByName("192.0.2.12"), 4661))));
     }
 
     @Test
