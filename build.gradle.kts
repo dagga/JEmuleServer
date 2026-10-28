@@ -7,7 +7,7 @@ plugins {
 }
 
 group = "org.jemule"
-version = "1.3"
+version = "1.4"
 
 configure<JavaPluginExtension> {
     toolchain {
@@ -104,6 +104,8 @@ tasks.named<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar>("shadowJ
     mergeServiceFiles()
     manifest {
         attributes["Main-Class"] = "org.jemule.Main"
+        // Lucene maps the index files through java.lang.foreign: no warning at each start
+        attributes["Enable-Native-Access"] = "ALL-UNNAMED"
     }
 }
 

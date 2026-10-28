@@ -204,8 +204,9 @@ public class DatabaseManager implements AutoCloseable {
             // (the load at startup, a migration) keeps the old ones, the file grows by gigabytes; afterwards, it does
             // not shrink the file either. The file is compacted at startup instead (compactIfSparse), then while the
             // server runs (compactOnline). A 4 MB page cache instead of 16: the database is read
-            // once at startup, then only written to.
-            this.url = "jdbc:h2:" + dbPath + ";AUTO_COMPACT_FILL_RATE=0;CACHE_SIZE=4096";
+            // once at startup, then only written to. Not closed by H2's own shutdown hook: on SIGTERM, the server's
+            // hook still writes the files waiting for ingestion and the token of the file index before closing it.
+            this.url = "jdbc:h2:" + dbPath + ";AUTO_COMPACT_FILL_RATE=0;CACHE_SIZE=4096;DB_CLOSE_ON_EXIT=FALSE";
             this.user = "sa";
             this.password = "";
             this.file = new java.io.File(dbPath + ".mv.db");
