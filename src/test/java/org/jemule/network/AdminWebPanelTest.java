@@ -20,6 +20,9 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -433,6 +436,40 @@ class AdminWebPanelTest {
             assertTrue(samples.body().startsWith("{\"intervalSeconds\":300,\"points\":[["), samples.body());
             assertTrue(samples.body().contains(",1400,3]"), "only the sample of the last day: " + samples.body());
             assertFalse(samples.body().contains(",1000,2]"), samples.body());
+        }
+    }
+
+    @Test
+    void closingDoesNotWaitForARequestBlockedForEver() throws Exception {
+        Server server = mock(Server.class);
+        FileIndex index = mock(FileIndex.class);
+        when(server.getFileIndex()).thenReturn(index);
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch released = new CountDownLatch(1);
+        // Blocked as on the index lock of 1.2.29: not even an interruption ends the wait
+        when(index.fileCount()).thenAnswer(invocation -> {
+            entered.countDown();
+            while (released.getCount() > 0) {
+                try {
+                    released.await();
+                } catch (InterruptedException ignored) {
+                    // keeps waiting
+                }
+            }
+            return 0;
+        });
+        try {
+            AdminWebPanel panel = new AdminWebPanel(server);
+            panel.start(0);
+            HttpClient.newHttpClient().sendAsync(HttpRequest.newBuilder(
+                    URI.create("http://127.0.0.1:" + panel.port() + "/api/overview")).GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertTrue(entered.await(10, TimeUnit.SECONDS), "the request never reached the index");
+            long start = System.nanoTime();
+            CompletableFuture.runAsync(panel::close).get(AdminWebPanel.CLOSE_TIMEOUT_SECONDS + 10, TimeUnit.SECONDS);
+            assertTrue(System.nanoTime() - start >= TimeUnit.SECONDS.toNanos(AdminWebPanel.CLOSE_TIMEOUT_SECONDS - 1));
+        } finally {
+            released.countDown();
         }
     }
 }
