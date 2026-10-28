@@ -49,6 +49,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Loopback-only HTTP dashboard and JSON API for local server administration.
@@ -314,6 +315,8 @@ final class AdminWebPanel implements AutoCloseable {
     private final long startedAt = System.currentTimeMillis();
     private HttpServer http;
     private ExecutorService executor;
+    /** Longest wait for the running requests when the panel closes. */
+    static final int CLOSE_TIMEOUT_SECONDS = 5;
 
     AdminWebPanel(Server server) {
         this.server = server;
@@ -1001,7 +1004,16 @@ final class AdminWebPanel implements AutoCloseable {
     public synchronized void close() {
         stop();
         if (executor != null) {
-            executor.close();
+            // Not executor.close(), which waits for every request: one blocked for ever held back the shutdown
+            executor.shutdownNow();
+            try {
+                if (!executor.awaitTermination(CLOSE_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                    log.warn("Admin web requests still running {} s after the stop; the shutdown goes on",
+                            CLOSE_TIMEOUT_SECONDS);
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
             executor = null;
         }
     }

@@ -29,7 +29,7 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.atomic.LongAdder;
-import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.concurrent.locks.StampedLock;
 
 /**
  * Manages the global file index for the server.
@@ -44,8 +44,15 @@ public class FileIndex {
     private static final Comparator<FileMetadata> SOURCE_COUNT_ORDER =
             Comparator.comparingInt(FileMetadata::sourceCount).reversed();
     private final FileTable table = new FileTable();
-    /** Guards {@link #table} and the postings of {@link #invertedIndex}. */
-    private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
+    /**
+     * Guards {@link #table} and the postings of {@link #invertedIndex}. A StampedLock rather than a
+     * ReentrantReadWriteLock: the latter records each reader in a per-thread counter, allocated once the lock is
+     * taken, so that an OutOfMemoryError there leaves a read lock nobody releases; the next writer then waits for
+     * ever, and every reader behind it. Not reentrant: no method takes it while holding it.
+     */
+    private final StampedLock lock = new StampedLock();
+    /** Files of {@link #table}, written under the write lock: read without the lock (admin, metrics, full index). */
+    private volatile int indexedFiles;
     private final ConcurrentSkipListMap<String, Postings> invertedIndex = new ConcurrentSkipListMap<>();
     /** Words of {@link #invertedIndex}, searched by substring. */
     private final WordDictionary dictionary = new WordDictionary();
@@ -114,12 +121,12 @@ public class FileIndex {
                     log.warn("Deleted {} child abuse file(s) from the database", rejected.size());
                 }
                 // The arrays grew by half at a time while loading: their free slots go
-                lock.writeLock().lock();
+                long stamp = lock.writeLock();
                 try {
                     invertedIndex.values().forEach(Postings::trim);
                     table.trim();
                 } finally {
-                    lock.writeLock().unlock();
+                    lock.unlockWrite(stamp);
                 }
             } catch (Exception e) {
                 // If DB fails during load, we continue with empty memory index
@@ -262,7 +269,7 @@ public class FileIndex {
         boolean sourceCountChanged = false;
         FileMetadata replaced = null;
         FileMetadata stored;
-        lock.writeLock().lock();
+        long stamp = lock.writeLock();
         try {
             int id = table.find(incoming.hash());
             FileMetadata existing = id < 0 ? null : table.view(id);
@@ -285,6 +292,7 @@ public class FileIndex {
                 stored = selected;
                 if (existing == null) {
                     id = table.add(stored);
+                    indexedFiles = table.count();
                 } else {
                     table.set(id, stored);
                 }
@@ -305,7 +313,7 @@ public class FileIndex {
                 }
             }
         } finally {
-            lock.writeLock().unlock();
+            lock.unlockWrite(stamp);
         }
         if (isNew) {
             if (isNewHash) {
@@ -340,7 +348,7 @@ public class FileIndex {
      */
     public void removeSource(ClientState client) {
         String key = sourceKey(client);
-        lock.readLock().lock();
+        long stamp = lock.readLock();
         try {
             for (String hash : client.publishedHashes()) {
                 int id = table.find(hash);
@@ -350,7 +358,7 @@ public class FileIndex {
                 }
             }
         } finally {
-            lock.readLock().unlock();
+            lock.unlockRead(stamp);
         }
         client.publishedHashes().clear();
     }
@@ -363,15 +371,16 @@ public class FileIndex {
      */
     public boolean removeFile(String hash) {
         String hashToDelete;
-        lock.writeLock().lock();
+        long stamp = lock.writeLock();
         try {
             int id = table.find(hash);
             if (id < 0) return false;
             hashToDelete = table.hash(id);
             unindexTokens(id, table.name(id));
             table.remove(id);
+            indexedFiles = table.count();
         } finally {
-            lock.writeLock().unlock();
+            lock.unlockWrite(stamp);
         }
         searchCache.clear();
         if (db != null) {
@@ -390,7 +399,7 @@ public class FileIndex {
         String wanted = name == null ? "" : name.strip().toLowerCase(Locale.ROOT);
         if (wanted.isEmpty()) return 0;
         List<String> hashes = new ArrayList<>();
-        lock.readLock().lock();
+        long stamp = lock.readLock();
         try {
             table.forEach(id -> {
                 String indexed = table.name(id);
@@ -399,7 +408,7 @@ public class FileIndex {
                 }
             });
         } finally {
-            lock.readLock().unlock();
+            lock.unlockRead(stamp);
         }
         int removed = 0;
         for (String hash : hashes) {
@@ -506,12 +515,13 @@ public class FileIndex {
 
     private void indexInMemory(FileMetadata meta) {
         FileMetadata indexed = meta.indexed();
-        lock.writeLock().lock();
+        long stamp = lock.writeLock();
         try {
             if (table.find(indexed.hash()) >= 0) return; // the same hash in another case
             indexTokens(table.add(indexed), indexed.name());
+            indexedFiles = table.count();
         } finally {
-            lock.writeLock().unlock();
+            lock.unlockWrite(stamp);
         }
     }
 
@@ -539,14 +549,14 @@ public class FileIndex {
      */
     public List<ClientState> getSources(String hash, ClientState requester, int limit) {
         List<ClientState> all;
-        lock.readLock().lock();
+        long stamp = lock.readLock();
         try {
             int id = table.find(hash);
             ConcurrentHashMap<String, ClientState> sources = id < 0 ? null : table.sources(id);
             if (sources == null || sources.isEmpty()) return Collections.emptyList();
             all = new ArrayList<>(sources.values());
         } finally {
-            lock.readLock().unlock();
+            lock.unlockRead(stamp);
         }
         if (all.isEmpty()) return Collections.emptyList();
         if (all.size() <= limit && requester == null) {
@@ -594,7 +604,7 @@ public class FileIndex {
         }
         if (limit <= 0) return List.of();
         List<FileMetadata> results = new ArrayList<>();
-        lock.readLock().lock();
+        long stamp = lock.readLock();
         try {
             List<Postings> postings = candidates(query);
             if (postings == null) {
@@ -617,7 +627,7 @@ public class FileIndex {
                 }
             }
         } finally {
-            lock.readLock().unlock();
+            lock.unlockRead(stamp);
         }
         // A file indexed before the keywords were reloaded may match them now: the senders of the results check
         // every file once more (SearchHandler, Server's UDP global search)
@@ -696,13 +706,13 @@ public class FileIndex {
         }
         if (query == null || query.trim().isEmpty()) {
             List<FileMetadata> all = new ArrayList<>();
-            lock.readLock().lock();
+            long stamp = lock.readLock();
             try {
                 table.forEach(id -> {
                     if (all.size() < limit) all.add(table.view(id));
                 });
             } finally {
-                lock.readLock().unlock();
+                lock.unlockRead(stamp);
             }
             return all;
         }
@@ -717,7 +727,7 @@ public class FileIndex {
         }
 
         List<FileMetadata> res = new ArrayList<>();
-        lock.readLock().lock();
+        long stamp = lock.readLock();
         try {
             BitSet candidates = null;
             for (String t : Keywords.split(queryLower)) {
@@ -744,7 +754,7 @@ public class FileIndex {
                 res.add(table.view(id));
             }
         } finally {
-            lock.readLock().unlock();
+            lock.unlockRead(stamp);
         }
 
         // Cache the result
@@ -766,7 +776,7 @@ public class FileIndex {
         if (limit <= 0) return List.of();
         record Counted(String word, int files) {}
         PriorityQueue<Counted> top = new PriorityQueue<>(Comparator.comparingInt(Counted::files));
-        lock.readLock().lock();
+        long stamp = lock.readLock();
         try {
             for (Map.Entry<String, Postings> entry : invertedIndex.entrySet()) {
                 String word = entry.getKey();
@@ -780,7 +790,7 @@ public class FileIndex {
                 }
             }
         } finally {
-            lock.readLock().unlock();
+            lock.unlockRead(stamp);
         }
         return top.stream()
                 .filter(c -> !abuseFilter.matches(c.word()))
@@ -796,11 +806,11 @@ public class FileIndex {
 
     /** True if a file with this hash is indexed (case ignored for hexadecimal hashes). */
     public boolean contains(String hash) {
-        lock.readLock().lock();
+        long stamp = lock.readLock();
         try {
             return table.find(hash) >= 0;
         } finally {
-            lock.readLock().unlock();
+            lock.unlockRead(stamp);
         }
     }
 
@@ -810,12 +820,12 @@ public class FileIndex {
      * @return The file count.
      */
     public int fileCount() {
-        lock.readLock().lock();
-        try {
-            return table.count();
-        } finally {
-            lock.readLock().unlock();
-        }
+        return indexedFiles;
+    }
+
+    /** The index lock, for the tests. */
+    StampedLock indexLock() {
+        return lock;
     }
 
     /** Number of new files (a hash not indexed before) inserted since server start, for one ingestion channel. */
