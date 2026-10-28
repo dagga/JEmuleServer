@@ -120,6 +120,43 @@ class IPFilterTest {
     }
 
     @Test
+    void theHostingProvidersDoNotBlockTheServers(@TempDir Path tempDir) throws IOException {
+        Path filterFile = tempDir.resolve("ipfilter.dat");
+        Files.write(filterFile, List.of(
+                "054.031.000.000 - 054.039.255.255 , 000 , Detected kad activity on Merck and Co | Amazon | Cloud | hosting",
+                "001.000.000.000 - 001.000.003.255 , 000 , cloudflare:AS13335",
+                "005.000.000.000 - 005.000.000.255 , 000 , fake emule servers | hosting",
+                "006.000.000.000 - 006.000.000.255 , 000 , Detected AP2P on Feral Hosting",
+                "007.000.000.000 - 007.000.000.255 , 000 , SMSHoax FakeAV Fraud Trojan"));
+        for (boolean cached : new boolean[]{false, true}) {
+            IPFilter filter = new IPFilter();
+            filter.loadFromFile(filterFile.toString()); // the second time from the binary cache
+            assertEquals(cached, Files.exists(tempDir.resolve("ipfilter.dat.bin")) && cached);
+            assertTrue(filter.isBlocked("54.37.74.32"), "a client or a Kad source stays blocked");
+            assertFalse(filter.isServerBlocked(InetAddress.getByName("54.37.74.32")), "a server at Amazon is not");
+            assertFalse(filter.isServerBlocked(InetAddress.getByName("1.0.1.1")));
+            assertTrue(filter.isServerBlocked(InetAddress.getByName("5.0.0.1")), "fake servers at a hosting provider");
+            assertTrue(filter.isServerBlocked(InetAddress.getByName("6.0.0.1")), "anti-P2P at a hosting provider");
+            assertTrue(filter.isServerBlocked(InetAddress.getByName("7.0.0.1")), "not a hosting provider");
+        }
+    }
+
+    @Test
+    void anUpdateRecomputesTheRangesOfTheServers(@TempDir Path tempDir) throws IOException {
+        Path filterFile = tempDir.resolve("ipfilter.dat");
+        List<String> lines = new java.util.ArrayList<>();
+        for (int i = 0; i < 40; i += 2) lines.add(String.format("010.000.%03d.000 - 010.000.%03d.255 , 000 , Spam", i, i));
+        Files.write(filterFile, lines);
+        IPFilter filter = new IPFilter();
+        filter.loadFromFile(filterFile.toString());
+        lines.add("054.031.000.000 - 054.039.255.255 , 000 , Amazon | Cloud | hosting");
+        assertTrue(filter.applyUpdate(filterFile, lines, "test"));
+        assertTrue(filter.isBlocked("54.37.74.32"));
+        assertFalse(filter.isServerBlocked(InetAddress.getByName("54.37.74.32")));
+        assertTrue(filter.isServerBlocked(InetAddress.getByName("10.0.6.1")));
+    }
+
+    @Test
     void binaryCacheIsCreatedAndUsed(@TempDir Path tempDir) throws IOException {
         Path filterFile = tempDir.resolve("ipfilter.dat");
         Path binFile = tempDir.resolve("ipfilter.dat.bin");

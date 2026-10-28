@@ -44,20 +44,47 @@ import java.util.List;
  * Like eMule, a range blocks only if its access level is below {@link #FILTER_LEVEL}: ranges of level 100 or more
  * (often 127 or 255) are explicitly allowed. A line without level blocks. Overlapping and adjacent ranges are merged,
  * so that the lookup finds an address whatever the order and the nesting of the ranges in the file.
+ * <p>
+ * The eD2K servers are checked apart ({@link #isServerBlocked}), without the ranges of the hosting providers: lists made
+ * for eMule clients block whole providers ("hosting", "Cloud", "cloudflare:AS..."), where nearly every eD2K server
+ * runs. A range whose description also names a hostile activity (anti-P2P, phishing, fraud, fake servers...) still
+ * blocks the servers.
  */
 public class IPFilter {
     private static final Logger log = LoggerFactory.getLogger(IPFilter.class);
     private static final double MAX_UPDATE_DIFFERENCE = 0.10;
     private static final int BINARY_MAGIC = 0x4A454631; // 'JEF1'
-    private static final int BINARY_VERSION = 1;
+    private static final int BINARY_VERSION = 2;
+    /** A description naming a hosting provider. */
+    private static final java.util.regex.Pattern HOSTING =
+            java.util.regex.Pattern.compile("hosting|cloud", java.util.regex.Pattern.CASE_INSENSITIVE);
+    /** A description naming a hostile activity: the range blocks the servers of a hosting provider too. */
+    private static final java.util.regex.Pattern HOSTILE = java.util.regex.Pattern.compile(
+            "p2p|phish|fraud|trojan|fake|spam|ddos|malware|spy|hoax|virus|botnet|scam",
+            java.util.regex.Pattern.CASE_INSENSITIVE);
 
     /** eMule's default IP filter level: ranges of a lower level are blocked. */
     public static final int FILTER_LEVEL = 100;
 
     private record IPRange(long start, long end) {}
 
+    /** The blocking ranges of a file, merged: all of them, and those that block the servers. */
+    private record Parsed(List<IPRange> all, List<IPRange> servers) {}
+
     /** Disjoint blocked ranges sorted by start. Replaced as a whole, so that lookups never see a partial list. */
     private volatile List<IPRange> blockedRanges = List.of();
+    /** {@link #blockedRanges} without the hosting providers, for the eD2K servers. */
+    private volatile List<IPRange> serverRanges = List.of();
+
+    /** Whether a range description names a hosting provider without any hostile activity. */
+    static boolean hostingProvider(CharSequence description) {
+        return HOSTING.matcher(description).find() && !HOSTILE.matcher(description).find();
+    }
+
+    /** Whether the range of a line blocks the servers: not a hosting provider's. */
+    private static boolean blocksServers(CharSequence line, int secondComma, int len) {
+        return secondComma == -1 || !hostingProvider(line.subSequence(secondComma + 1, len));
+    }
 
     /**
      * Loads blocked IP ranges from an ipfilter.dat file.
@@ -74,14 +101,17 @@ public class IPFilter {
         }
 
         Path binPath = getBinaryCachePath(filePath);
-        List<IPRange> cached = readBinaryCache(binPath, datPath);
+        Parsed cached = readBinaryCache(binPath, datPath);
         if (cached != null) {
-            blockedRanges = cached;
-            log.info("Loaded {} blocking IP filter ranges from binary cache {}", cached.size(), binPath);
+            blockedRanges = cached.all();
+            serverRanges = cached.servers();
+            log.info("Loaded {} blocking IP filter ranges from binary cache {} ({} for the servers)", cached.all().size(),
+                    binPath, cached.servers().size());
             return;
         }
 
         List<IPRange> ranges = new ArrayList<>();
+        List<IPRange> forServers = new ArrayList<>();
         int allowed = 0;
         // ISO-8859-1 never fails on the descriptions, whatever their encoding; only the ASCII part is parsed
         try (BufferedReader br = Files.newBufferedReader(datPath, StandardCharsets.ISO_8859_1)) {
@@ -132,16 +162,20 @@ public class IPFilter {
                 }
 
                 ranges.add(new IPRange(start, end));
+                if (blocksServers(line, secondComma, len)) forServers.add(new IPRange(start, end));
             }
         } catch (IOException e) {
             log.error("Could not read IP filter file {}: {}", filePath, e.getMessage());
             return;
         }
 
-        blockedRanges = merge(ranges);
-        log.info("Loaded {} blocking IP filter ranges from {} ({} after merging overlaps, {} allowed ranges ignored)",
-                ranges.size(), filePath, blockedRanges.size(), allowed);
-        writeBinaryCache(binPath, datPath, blockedRanges);
+        Parsed parsed = new Parsed(merge(ranges), merge(forServers));
+        blockedRanges = parsed.all();
+        serverRanges = parsed.servers();
+        log.info("Loaded {} blocking IP filter ranges from {} ({} after merging overlaps, {} allowed ranges ignored, "
+                + "{} hosting provider ranges not applied to the servers)", ranges.size(), filePath,
+                blockedRanges.size(), allowed, ranges.size() - forServers.size());
+        writeBinaryCache(binPath, datPath, parsed);
     }
 
     private static Path getBinaryCachePath(String filePath) {
@@ -152,7 +186,7 @@ public class IPFilter {
         return Path.of(filePath.toString() + ".bin");
     }
 
-    private static List<IPRange> readBinaryCache(Path binPath, Path datPath) {
+    private static Parsed readBinaryCache(Path binPath, Path datPath) {
         if (!Files.exists(binPath) || !Files.exists(datPath)) return null;
         try {
             long datLastModified = Files.getLastModifiedTime(datPath).toMillis();
@@ -167,15 +201,9 @@ public class IPFilter {
                 if (cachedDatModified != datLastModified || cachedDatSize != datSize) {
                     return null;
                 }
-                int count = dis.readInt();
-                if (count < 0 || count > 10_000_000) return null;
-                List<IPRange> ranges = new ArrayList<>(count);
-                for (int i = 0; i < count; i++) {
-                    long start = dis.readLong();
-                    long end = dis.readLong();
-                    ranges.add(new IPRange(start, end));
-                }
-                return List.copyOf(ranges);
+                List<IPRange> all = readRanges(dis);
+                List<IPRange> servers = all == null ? null : readRanges(dis);
+                return servers == null ? null : new Parsed(all, servers);
             }
         } catch (Exception e) {
             log.warn("Failed to read binary IP filter cache {}: {}", binPath, e.getMessage());
@@ -183,8 +211,20 @@ public class IPFilter {
         }
     }
 
-    private static void writeBinaryCache(Path binPath, Path datPath, List<IPRange> ranges) {
-        if (ranges == null || !Files.exists(datPath)) return;
+    private static List<IPRange> readRanges(DataInputStream dis) throws IOException {
+        int count = dis.readInt();
+        if (count < 0 || count > 10_000_000) return null;
+        List<IPRange> ranges = new ArrayList<>(count);
+        for (int i = 0; i < count; i++) {
+            long start = dis.readLong();
+            long end = dis.readLong();
+            ranges.add(new IPRange(start, end));
+        }
+        return List.copyOf(ranges);
+    }
+
+    private static void writeBinaryCache(Path binPath, Path datPath, Parsed parsed) {
+        if (parsed == null || !Files.exists(datPath)) return;
         try {
             long datLastModified = Files.getLastModifiedTime(datPath).toMillis();
             long datSize = Files.size(datPath);
@@ -197,10 +237,12 @@ public class IPFilter {
                     dos.writeInt(BINARY_VERSION);
                     dos.writeLong(datLastModified);
                     dos.writeLong(datSize);
-                    dos.writeInt(ranges.size());
-                    for (IPRange r : ranges) {
-                        dos.writeLong(r.start());
-                        dos.writeLong(r.end());
+                    for (List<IPRange> ranges : List.of(parsed.all(), parsed.servers())) {
+                        dos.writeInt(ranges.size());
+                        for (IPRange r : ranges) {
+                            dos.writeLong(r.start());
+                            dos.writeLong(r.end());
+                        }
                     }
                     dos.flush();
                 }
@@ -249,7 +291,8 @@ public class IPFilter {
     }
 
     synchronized boolean applyUpdate(Path destination, List<String> lines, String source) throws IOException {
-        List<IPRange> updated = parse(lines);
+        Parsed parsed = parse(lines);
+        List<IPRange> updated = parsed.all();
         if (updated.isEmpty()) {
             throw new IllegalArgumentException("Downloaded filter contains no blocking ranges");
         }
@@ -267,7 +310,7 @@ public class IPFilter {
         if (changed == 0 && Files.exists(destination)) {
             // Same ranges: keep the file and only record the check, which postpones the next download
             Files.setLastModifiedTime(destination, FileTime.fromMillis(System.currentTimeMillis()));
-            writeBinaryCache(getBinaryCachePath(destination), destination, previous);
+            writeBinaryCache(getBinaryCachePath(destination), destination, new Parsed(previous, serverRanges));
             log.info("IP filter from {} is unchanged: {} blocking ranges", source, previous.size());
             return true;
         }
@@ -288,7 +331,8 @@ public class IPFilter {
             Files.deleteIfExists(temporary);
         }
         blockedRanges = updated;
-        writeBinaryCache(getBinaryCachePath(destination), destination, updated);
+        serverRanges = parsed.servers();
+        writeBinaryCache(getBinaryCachePath(destination), destination, parsed);
         log.info("Applied IP filter update from {}: {} blocking ranges ({}% difference)",
                 source, blockedRanges.size(), percent(difference));
         return true;
@@ -338,8 +382,9 @@ public class IPFilter {
         }
     }
 
-    private static List<IPRange> parse(List<String> lines) {
+    private static Parsed parse(List<String> lines) {
         List<IPRange> ranges = new ArrayList<>(lines.size());
+        List<IPRange> forServers = new ArrayList<>(lines.size());
         for (String input : lines) {
             int len = input.length();
             int startIdx = 0;
@@ -383,8 +428,9 @@ public class IPFilter {
             }
 
             ranges.add(new IPRange(start, end));
+            if (blocksServers(input, secondComma, len)) forServers.add(new IPRange(start, end));
         }
-        return merge(ranges);
+        return new Parsed(merge(ranges), merge(forServers));
     }
 
     /**
@@ -405,7 +451,17 @@ public class IPFilter {
      * @return True if blocked, false otherwise.
      */
     public boolean isBlocked(String ip) {
-        List<IPRange> ranges = blockedRanges;
+        return blocked(blockedRanges, ip);
+    }
+
+    /**
+     * Checks if an eD2K server is blocked: as {@link #isBlocked}, without the ranges of the hosting providers.
+     */
+    public boolean isServerBlocked(java.net.InetAddress address) {
+        return address != null && blocked(serverRanges, address.getHostAddress());
+    }
+
+    private static boolean blocked(List<IPRange> ranges, String ip) {
         if (ranges.isEmpty()) return false;
 
         long ipLong = ipToLong(ip);
@@ -475,6 +531,7 @@ public class IPFilter {
     /** Removes every blocked range, disabling the filter until the next load. */
     public void clear() {
         blockedRanges = List.of();
+        serverRanges = List.of();
     }
 
     /**
