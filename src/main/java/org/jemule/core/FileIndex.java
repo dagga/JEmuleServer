@@ -239,6 +239,13 @@ public class FileIndex implements AutoCloseable {
                 opened = new ByteBuffersDirectory();
                 reopen = false;
                 opening = new IndexWriter(opened, writerConfig(false));
+            } catch (IOException | IllegalArgumentException e) {
+                // An index this version cannot read (written by another version with another codec, or damaged): it
+                // is rebuilt from the database anyway, its files go first
+                log.warn("The file index at {} cannot be read ({}): rebuilt from the database", path, e.toString());
+                for (String file : opened.listAll()) opened.deleteFile(file);
+                reopen = false;
+                opening = new IndexWriter(opened, writerConfig(false));
             }
             // Committed without token: until a clean close records one, the next start rebuilds the index. On a
             // rebuild, the files of the index of the last run go now, before the new one takes their room on the disk
