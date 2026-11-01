@@ -386,30 +386,67 @@ at a hosting provider. The servers listed in `serverPeers` are never blocked.
 ## Child Abuse Filter
 
 The server refuses files whose name advertises child sexual abuse material, and announces it in its name
-(`JEmuleServer vX (no pedo)`). A file is rejected if its name contains a term specific to such content, or a term
-designating a minor (or an age up to 18, such as `6yo` or `9 ans`) together with a sexual term. A rejected file:
+(`JEmuleServer vX (no pedo)`). It never sees the contents of a file, only the names peers give it, so the filter works
+on names and search terms. Unlike `fakeFileDetectionEnabled`, it cannot be disabled.
 
-- is never indexed, and the publishing client is warned that some of its files were refused;
-- is never sent to a client, whatever brought it: the local search skips it (even indexed before the keywords were
-  reloaded) and every batch of search results is checked once more before it leaves;
-- is refused again each time it comes back, from a client, Kad or another server (1.2.23 and before also banned its
-  hash; 1.2.24 bans file names only, see [Banned file names](#banned-file-names));
-- is deleted from the database at startup if an older version had stored it.
+### Matching rule
 
-A search whose terms match the filter (client search, or UDP global search from another server's client) gets no
-result and is sent neither to Kad nor to the other eD2K servers; the Overview counts these searches. The names of the
-files the filter rejects are recorded in `banned_names` (see [Banned file names](#banned-file-names)), never sent to a
-client.
+A file name, or the terms of a search, is put in lower case and every run of characters other than letters, digits and
+`@` becomes one space. It matches when it contains:
 
-Unlike `fakeFileDetectionEnabled`, this filter cannot be disabled. The keywords are read from
-[`child-abuse-keywords.properties`](src/main/resources/child-abuse-keywords.properties), embedded in the jar; the
-file documents its syntax. To use your own list, copy it and set its path in `server.properties`:
+- a **banned** term: a word, series, studio or site marker specific to such content (`pthc*`, `*kidporn*`...);
+- or a **minor** term, or an age up to `maxMinorAge` (18 in the embedded list) written as an age (`6yo`, `12 y.o.`,
+  `9 ans`, `10 jahre`), **together with** a **sexual** term.
+
+Terms match whole words; `*` stands for any letters or digits.
+
+### Where it applies
+
+Every channel that brings files goes through the filter before indexing, and nothing that matches reaches a client:
+
+- **clients** (`OP_OFFERFILES`): the file is not indexed, and the client gets one server message per offer saying how
+  many of its files were refused;
+- **Kad** search results (including the background pages of a Kad keyword search) and **other eD2K servers**: search
+  results, [index updates](#index-update-from-ed2k-index-peers) and the [relay server](#relay-server)'s results are
+  dropped before indexing and before any client sees them;
+- **answers to clients**: the local search skips a matching file (even one indexed before the keywords changed), and
+  every batch of results, TCP or UDP, whatever brought its files, is checked once more before it leaves.
+
+A matching **search** (a client's `OP_SEARCHREQUEST`, or a UDP global search from another server's client) gets no
+result and is sent neither to Kad nor to the other eD2K servers, nor to the relay server. The words the server offers
+to its index peers (client search keywords and the most frequent words of the index) never include a matching term.
+
+A rejected file is refused again each time it comes back, under the same name or another matching one. Up to 1.2.23
+the filter also banned its hash; since 1.2.24 nothing in the server bans a hash, as a hash can be poisoned with a
+matching name (see [Banned file names](#banned-file-names)).
+
+### Database and index
+
+The database stays clean: a start that rebuilds the [file index](#memory-sizing) deletes from the database the files
+matching the current keywords. The index is rebuilt whenever the keywords changed since the last clean stop (the
+index records a fingerprint of the keyword lists), after a crash, or when the index directory was deleted.
+
+### Records and statistics
+
+The name of every rejected file is recorded once in `banned_names`, normalized, with the reason `Child abuse material`
+and the date it was first seen. These names stay in the database (the filter rejects them anyway) and are never sent to
+a client. The **Blocks** view of the web panel lists the latest ones and exports all the banned names as
+`banned-names.txt`. The **Overview** counts the rejected files and the refused searches.
+
+### Keywords
+
+The keywords are read from [`child-abuse-keywords.properties`](src/main/resources/child-abuse-keywords.properties),
+embedded in the jar; the file documents its syntax. To use your own list, copy it and set its path in
+`server.properties`:
 
 ```properties
 childAbuseKeywordsPath=/etc/jemuleserver/child-abuse-keywords.properties
 ```
 
-Your file replaces the embedded list. If it cannot be read, the server logs an error and uses the embedded list.
+Your file replaces the embedded list. If it cannot be read, the server logs an error and uses the embedded list: the
+filter is never left empty by a configuration error. The keywords are reloaded without a restart by `filters reload`,
+by the **Filters** view of the web panel, or when `childAbuseKeywordsPath` is changed in the settings. Files already
+indexed are not checked again at a reload, but they are never sent to a client, and the next start deletes them.
 
 ## Banned file names
 
