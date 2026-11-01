@@ -2,7 +2,6 @@ package org.jemule.network;
 
 import org.jemule.protocol.Tag;
 import org.jemule.security.IPFilter;
-import org.jemule.security.ServerObfuscation;
 import org.jemule.security.UdpObfuscation;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -52,9 +51,9 @@ class ServerGossipTest {
         byte[] statReq = ByteBuffer.allocate(6).order(ByteOrder.LITTLE_ENDIAN)
                 .put((byte) 0xE3).put((byte) 0x96).putInt(12345).array();
         try (DatagramSocket socket = new DatagramSocket()) {
-            assertTrue(gossip.handle(socket, InetAddress.getByName("192.0.2.10"), 5004, statReq, false,
+            assertTrue(gossip.handle(socket, InetAddress.getByName("192.0.2.10"), 5004, statReq, null,
                     InetAddress.getByName("127.0.0.1"), 4661, System.currentTimeMillis()), "its datagrams are heard");
-            assertFalse(gossip.handle(socket, InetAddress.getByName("192.0.2.11"), 4665, statReq, false,
+            assertFalse(gossip.handle(socket, InetAddress.getByName("192.0.2.11"), 4665, statReq, null,
                     InetAddress.getByName("127.0.0.1"), 4661, System.currentTimeMillis()),
                     "another server of the range stays blocked");
         }
@@ -103,7 +102,7 @@ class ServerGossipTest {
                 .put((byte) 0xE3).put((byte) 0x96).putInt(12345).array();
 
         try (DatagramSocket socket = new DatagramSocket()) {
-            assertFalse(gossip.handle(socket, blockedIp, 4665, statReq, false,
+            assertFalse(gossip.handle(socket, blockedIp, 4665, statReq, null,
                     InetAddress.getByName("127.0.0.1"), 4661, System.currentTimeMillis()));
         }
 
@@ -256,7 +255,7 @@ class ServerGossipTest {
     }
 
     @Test
-    void verifiesPeerThenExchangesAnObfuscatedServerList() throws Exception {
+    void verifiesPeerThenRegistersAndExchangesTheServerList() throws Exception {
         try (DatagramSocket local = bindServerUdpSocket(); DatagramSocket peer = bindServerUdpSocket()) {
             local.setSoTimeout(2000);
             peer.setSoTimeout(2000);
@@ -278,7 +277,7 @@ class ServerGossipTest {
             DatagramPacket statusResponse = receive(local);
             assertTrue(gossip.handle(local, loopback, peer.getLocalPort(),
                     java.util.Arrays.copyOf(statusResponse.getData(), statusResponse.getLength()),
-                    false, loopback, localTcpPort, System.currentTimeMillis()));
+                    null, loopback, localTcpPort, System.currentTimeMillis()));
 
             DatagramPacket descriptionRequest = receive(peer);
             assertEquals((byte) 0xA2, descriptionRequest.getData()[1]);
@@ -289,13 +288,14 @@ class ServerGossipTest {
             DatagramPacket descriptionResponse = receive(local);
             assertTrue(gossip.handle(local, loopback, peer.getLocalPort(),
                     java.util.Arrays.copyOf(descriptionResponse.getData(), descriptionResponse.getLength()),
-                    false, loopback, localTcpPort, System.currentTimeMillis()));
+                    null, loopback, localTcpPort, System.currentTimeMillis()));
 
+            // Registration in clear to the main port, as Lugdunum and ed2k-rust send it: <ip><tcp port><challenge>
             DatagramPacket encryptedListRequest = receive(peer);
-            byte[] decodedListRequest = ServerObfuscation.decode(
-                    java.util.Arrays.copyOf(encryptedListRequest.getData(), encryptedListRequest.getLength()),
-                    UdpObfuscation.serverKeyFor(loopback));
-            assertNotNull(decodedListRequest, "server-list request should use the peer's advertised UDP key");
+            byte[] decodedListRequest = java.util.Arrays.copyOf(encryptedListRequest.getData(),
+                    encryptedListRequest.getLength());
+            assertEquals(12, decodedListRequest.length);
+            assertEquals((byte) 0xE3, decodedListRequest[0]);
             assertEquals((byte) 0xA0, decodedListRequest[1]);
             assertArrayEquals(loopback.getAddress(),
                     java.util.Arrays.copyOfRange(decodedListRequest, 2, 6));
@@ -311,7 +311,7 @@ class ServerGossipTest {
             DatagramPacket listResponse = receive(local);
             byte[] responseBytes = java.util.Arrays.copyOf(listResponse.getData(), listResponse.getLength());
             assertTrue(gossip.handle(local, loopback, peer.getLocalPort(), responseBytes,
-                    false, loopback, localTcpPort, System.currentTimeMillis()));
+                    null, loopback, localTcpPort, System.currentTimeMillis()));
 
             InetAddress discoveredAddress = InetAddress.getByName("192.0.2.77");
             assertEquals("Verified server", gossip.verifiedPeers().iterator().next().name());
@@ -350,12 +350,12 @@ class ServerGossipTest {
             DatagramPacket statusRequest = receive(peer);
             int statusChallenge = ByteBuffer.wrap(statusRequest.getData(), 2, 4).order(ByteOrder.LITTLE_ENDIAN).getInt();
             assertTrue(gossip.handle(local, loopback, peer.getLocalPort(),
-                    statusPacket(statusChallenge, 100, 200, 1000, 500, 0), false, loopback, localTcpPort, now));
+                    statusPacket(statusChallenge, 100, 200, 1000, 500, 0), null, loopback, localTcpPort, now));
             DatagramPacket descriptionRequest = receive(peer);
             int descriptionChallenge = ByteBuffer.wrap(descriptionRequest.getData(), 2, 4)
                     .order(ByteOrder.LITTLE_ENDIAN).getInt();
             assertTrue(gossip.handle(local, loopback, peer.getLocalPort(),
-                    descriptionPacket(descriptionChallenge, "Quiet server", "No list"), false, loopback, localTcpPort, now));
+                    descriptionPacket(descriptionChallenge, "Quiet server", "No list"), null, loopback, localTcpPort, now));
             assertEquals((byte) 0xA0, receive(peer).getData()[1], "server list requested");
 
             // The server list request times out, as with most real servers
@@ -386,15 +386,15 @@ class ServerGossipTest {
             int newChallenge = ByteBuffer.wrap(receive(peer).getData(), 2, 4).order(ByteOrder.LITTLE_ENDIAN).getInt();
 
             assertTrue(gossip.handle(local, loopback, peer.getLocalPort(),
-                    statusPacket(oldChallenge, 100, 200, 1000, 500, 0), false, loopback, localTcpPort, now + 61_001));
+                    statusPacket(oldChallenge, 100, 200, 1000, 500, 0), null, loopback, localTcpPort, now + 61_001));
             assertEquals("probing", gossip.serverViews().get(0).state(), "the late answer is ignored");
 
             assertTrue(gossip.handle(local, loopback, peer.getLocalPort(),
-                    statusPacket(newChallenge, 100, 200, 1000, 500, 0), false, loopback, localTcpPort, now + 61_002));
+                    statusPacket(newChallenge, 100, 200, 1000, 500, 0), null, loopback, localTcpPort, now + 61_002));
             int descriptionChallenge = ByteBuffer.wrap(receive(peer).getData(), 2, 4)
                     .order(ByteOrder.LITTLE_ENDIAN).getInt();
             assertTrue(gossip.handle(local, loopback, peer.getLocalPort(),
-                    descriptionPacket(descriptionChallenge, "Busy server", "Late"), false, loopback, localTcpPort,
+                    descriptionPacket(descriptionChallenge, "Busy server", "Late"), null, loopback, localTcpPort,
                     now + 61_003));
             assertEquals("verified", gossip.serverViews().get(0).state());
         }
@@ -413,7 +413,7 @@ class ServerGossipTest {
             int challenge = ByteBuffer.wrap(receive(peer).getData(), 2, 4).order(ByteOrder.LITTLE_ENDIAN).getInt();
             // More users than its maximum: an implausible status
             assertTrue(gossip.handle(local, loopback, peer.getLocalPort(),
-                    statusPacket(challenge, 5000, 200, 1000, 500, 0), false, loopback, localTcpPort, now));
+                    statusPacket(challenge, 5000, 200, 1000, 500, 0), null, loopback, localTcpPort, now));
             assertEquals("rejected", gossip.serverViews().get(0).state());
 
             gossip.poll(local, now + ServerGossip.REJECT_RETRY_MILLIS - 1);
@@ -466,7 +466,7 @@ class ServerGossipTest {
             DatagramPacket statusResponse = receive(local);
             assertTrue(gossip.handle(local, loopback, peer.getLocalPort(),
                     java.util.Arrays.copyOf(statusResponse.getData(), statusResponse.getLength()),
-                    false, loopback, localTcpPort, System.currentTimeMillis()));
+                    null, loopback, localTcpPort, System.currentTimeMillis()));
 
             DatagramPacket descriptionRequest = receive(peer);
             int descriptionChallenge = ByteBuffer.wrap(descriptionRequest.getData(), 2, 4)
@@ -476,10 +476,208 @@ class ServerGossipTest {
             DatagramPacket descriptionResponse = receive(local);
             assertTrue(gossip.handle(local, loopback, peer.getLocalPort(),
                     java.util.Arrays.copyOf(descriptionResponse.getData(), descriptionResponse.getLength()),
-                    false, loopback, localTcpPort, System.currentTimeMillis()));
+                    null, loopback, localTcpPort, System.currentTimeMillis()));
 
             assertTrue(gossip.verifiedPeers().isEmpty());
             assertTrue(gossip.candidateEndpoints().isEmpty());
+        }
+    }
+
+    @Test
+    void registersWithALugdunumServerThroughTheObfuscatedHandshake() throws Exception {
+        InetAddress loopback = InetAddress.getByName("127.0.0.1");
+        try (ServerPorts local = ServerPorts.bind(); ServerPorts peer = ServerPorts.bind()) {
+            int localKeyForPeer = 0x1F2E3D4C;
+            int peerKey = 0x0BADCAFE;
+            ServerGossip gossip = new ServerGossip("127.0.0.1:" + peer.tcpPort);
+            gossip.useSockets(() -> local.main, () -> local.obfuscated,
+                    (challenge, to) -> statusPacket(challenge, 7, 8, 1000, 500, localKeyForPeer));
+            long now = System.currentTimeMillis();
+
+            verify(gossip, local, peer, peerKey, now);
+            byte[] registration = data(receive(peer.main));
+            assertEquals(12, registration.length, "plain registration to TCP+4");
+            assertEquals((byte) 0xA0, registration[1]);
+
+            // The server probed this one: its challenge is echoed once its key is known
+            gossip.statusRequested(loopback, peer.main.getLocalPort(), 0x55AA1234);
+
+            // Crypt ping from this server's TCP+14 to the server's TCP+12
+            DatagramPacket ping = receive(peer.cryptPing);
+            assertEquals(local.obfuscated.getLocalPort(), ping.getPort(), "sent from TCP+14");
+            assertTrue(ping.getLength() >= 4 && ping.getLength() <= 18);
+            int randomPart = ByteBuffer.wrap(ping.getData(), 0, 4).order(ByteOrder.LITTLE_ENDIAN).getInt();
+
+            // Lugdunum answers with its status, obfuscated with the random part, giving its key
+            byte[] pingAnswer = org.jemule.security.ServerObfuscation.encode(
+                    statusPacket(randomPart, 100, 200, 1000, 500, peerKey), randomPart,
+                    org.jemule.security.ServerObfuscation.ANSWER);
+            ServerGossip.Decoded decodedAnswer = gossip.decodeObfuscated(loopback, pingAnswer, 0);
+            assertNotNull(decodedAnswer);
+            assertTrue(gossip.handle(local.obfuscated, loopback, peer.cryptPing.getLocalPort(),
+                    decodedAnswer.packet(), decodedAnswer.answerObfuscator(), loopback, local.tcpPort, now));
+
+            // From the same socket, to the server's TCP+14, obfuscated with its key
+            byte[] obfuscatedRegistration = receiveObfuscated(peer.obfuscated, local.obfuscated, peerKey);
+            assertEquals(12, obfuscatedRegistration.length);
+            assertEquals((byte) 0xA0, obfuscatedRegistration[1]);
+            assertArrayEquals(loopback.getAddress(), java.util.Arrays.copyOfRange(obfuscatedRegistration, 2, 6));
+            assertEquals(local.tcpPort, Short.toUnsignedInt(ByteBuffer.wrap(obfuscatedRegistration, 6, 2)
+                    .order(ByteOrder.LITTLE_ENDIAN).getShort()));
+            byte[] listRequest = receiveObfuscated(peer.obfuscated, local.obfuscated, peerKey);
+            assertArrayEquals(new byte[]{(byte) 0xE3, (byte) 0xA4}, listRequest);
+            byte[] echoedStatus = receiveObfuscated(peer.obfuscated, local.obfuscated, peerKey);
+            assertEquals((byte) 0x97, echoedStatus[1]);
+            assertEquals(0x55AA1234, ByteBuffer.wrap(echoedStatus, 2, 4).order(ByteOrder.LITTLE_ENDIAN).getInt());
+
+            // Its server list comes back obfuscated with the random part
+            byte[] list = ByteBuffer.allocate(3 + 6).order(ByteOrder.LITTLE_ENDIAN)
+                    .put((byte) 0xE3).put((byte) 0xA1).put((byte) 1)
+                    .put(new byte[]{(byte) 192, 0, 2, 78}).putShort((short) 4661).array();
+            ServerGossip.Decoded decodedList = gossip.decodeObfuscated(loopback,
+                    org.jemule.security.ServerObfuscation.encode(list, randomPart,
+                            org.jemule.security.ServerObfuscation.ANSWER), 0);
+            assertNotNull(decodedList);
+            assertTrue(gossip.handle(local.obfuscated, loopback, peer.obfuscated.getLocalPort(),
+                    decodedList.packet(), decodedList.answerObfuscator(), loopback, local.tcpPort, now));
+            assertTrue(gossip.candidateEndpoints().stream().anyMatch(endpoint ->
+                    endpoint.address().getHostAddress().equals("192.0.2.78") && endpoint.tcpPort() == 4661));
+
+            // A later probe of the server is answered obfuscated to its TCP+14 as well
+            gossip.statusRequested(loopback, peer.main.getLocalPort(), 0x55AA4321);
+            byte[] laterStatus = receiveObfuscated(peer.obfuscated, local.obfuscated, peerKey);
+            assertEquals(0x55AA4321, ByteBuffer.wrap(laterStatus, 2, 4).order(ByteOrder.LITTLE_ENDIAN).getInt());
+        }
+    }
+
+    @Test
+    void acceptsTheTwelveByteRegistrationOfLugdunumAndEd2kRust() throws Exception {
+        try (DatagramSocket local = bindServerUdpSocket(); DatagramSocket peer = bindServerUdpSocket()) {
+            peer.setSoTimeout(2000);
+            InetAddress loopback = InetAddress.getByName("127.0.0.1");
+            int peerTcpPort = peer.getLocalPort() - 4;
+            ServerGossip gossip = new ServerGossip("");
+            byte[] registration = ByteBuffer.allocate(12).order(ByteOrder.LITTLE_ENDIAN)
+                    .put((byte) 0xE3).put((byte) 0xA0).put(loopback.getAddress()).putShort((short) peerTcpPort)
+                    .putInt(0x01020304).array();
+
+            assertTrue(gossip.handle(local, loopback, peer.getLocalPort(), registration, null, loopback,
+                    local.getLocalPort() - 4, System.currentTimeMillis()));
+            assertEquals(List.of(new ServerGossip.Endpoint(loopback, peerTcpPort)),
+                    List.copyOf(gossip.candidateEndpoints()));
+            DatagramPacket probe = receive(peer);
+            assertEquals((byte) 0x96, probe.getData()[1], "the registrant is probed, and listed once verified");
+            assertEquals("probing", gossip.serverViews().get(0).state());
+
+            // Plain, it must come from the main port of the server it announces
+            ServerGossip other = new ServerGossip("");
+            assertTrue(other.handle(local, loopback, peer.getLocalPort() + 1, registration, null, loopback,
+                    local.getLocalPort() - 4, System.currentTimeMillis()));
+            assertTrue(other.candidateEndpoints().isEmpty());
+        }
+    }
+
+    @Test
+    void answersTheObfuscatedListRequestOfAServerWithTheRandomPartOfItsCryptPing() throws Exception {
+        InetAddress loopback = InetAddress.getByName("127.0.0.1");
+        try (ServerPorts local = ServerPorts.bind(); ServerPorts peer = ServerPorts.bind()) {
+            ServerGossip gossip = new ServerGossip("127.0.0.1:" + peer.tcpPort);
+            long now = System.currentTimeMillis();
+            verify(gossip, local, peer, 0, now);
+            receive(peer.main); // registration
+
+            // Lugdunum pings this server's TCP+12 from its TCP+14, then sends its list request from there
+            int randomPart = 0x11223344;
+            gossip.cryptPingReceived(loopback, peer.obfuscated.getLocalPort(), randomPart, now);
+            byte[] request = ByteBuffer.allocate(12).order(ByteOrder.LITTLE_ENDIAN)
+                    .put((byte) 0xE3).put((byte) 0xA0).put(loopback.getAddress()).putShort((short) peer.tcpPort)
+                    .putInt(7).array();
+            assertTrue(gossip.handle(local.obfuscated, loopback, peer.obfuscated.getLocalPort(), request,
+                    answer -> { throw new AssertionError("answered with the random part"); },
+                    InetAddress.getByName("203.0.113.5"), local.tcpPort, now));
+
+            DatagramPacket answer = receive(peer.obfuscated);
+            byte[] list = org.jemule.security.ServerObfuscation.decode(data(answer), randomPart,
+                    org.jemule.security.ServerObfuscation.ANSWER);
+            assertNotNull(list);
+            assertEquals((byte) 0xA1, list[1]);
+            assertEquals(1, list[2], "this server");
+            assertArrayEquals(InetAddress.getByName("203.0.113.5").getAddress(), java.util.Arrays.copyOfRange(list, 3, 7));
+        }
+    }
+
+    /** Verifies {@code peer} (status then description), as the server gossip of {@code local} does. */
+    private static void verify(ServerGossip gossip, ServerPorts local, ServerPorts peer, int peerKey, long now)
+            throws Exception {
+        InetAddress loopback = InetAddress.getByName("127.0.0.1");
+        gossip.poll(local.main, now);
+        int statusChallenge = ByteBuffer.wrap(receive(peer.main).getData(), 2, 4)
+                .order(ByteOrder.LITTLE_ENDIAN).getInt();
+        assertTrue(gossip.handle(local.main, loopback, peer.main.getLocalPort(),
+                statusPacket(statusChallenge, 100, 200, 1000, 500, peerKey), null, loopback, local.tcpPort, now));
+        int descriptionChallenge = ByteBuffer.wrap(receive(peer.main).getData(), 2, 4)
+                .order(ByteOrder.LITTLE_ENDIAN).getInt();
+        assertTrue(gossip.handle(local.main, loopback, peer.main.getLocalPort(),
+                descriptionPacket(descriptionChallenge, "Lugdunum", "eserver 17.15"), null, loopback,
+                local.tcpPort, now));
+        assertEquals("verified", gossip.serverViews().stream()
+                .filter(view -> view.endpoint().tcpPort() == peer.tcpPort).findFirst().orElseThrow().state());
+    }
+
+    private static byte[] receiveObfuscated(DatagramSocket socket, DatagramSocket expectedSender, int key)
+            throws Exception {
+        DatagramPacket packet = receive(socket);
+        assertEquals(expectedSender.getLocalPort(), packet.getPort());
+        byte[] plain = org.jemule.security.ServerObfuscation.decode(data(packet), key,
+                org.jemule.security.ServerObfuscation.REQUEST);
+        assertNotNull(plain, "obfuscated as a request with the server's key");
+        return plain;
+    }
+
+    private static byte[] data(DatagramPacket packet) {
+        return java.util.Arrays.copyOf(packet.getData(), packet.getLength());
+    }
+
+    /** The UDP sockets of a server on TCP port {@code tcpPort}: TCP+4, TCP+12 and TCP+14. */
+    private static final class ServerPorts implements AutoCloseable {
+        final int tcpPort;
+        final DatagramSocket main;
+        final DatagramSocket cryptPing;
+        final DatagramSocket obfuscated;
+
+        private ServerPorts(int tcpPort, DatagramSocket main, DatagramSocket cryptPing, DatagramSocket obfuscated) {
+            this.tcpPort = tcpPort;
+            this.main = main;
+            this.cryptPing = cryptPing;
+            this.obfuscated = obfuscated;
+        }
+
+        static ServerPorts bind() throws Exception {
+            InetAddress loopback = InetAddress.getByName("127.0.0.1");
+            java.util.Random random = new java.util.Random();
+            for (int attempt = 0; attempt < 50; attempt++) {
+                int tcpPort = 20_000 + random.nextInt(40_000);
+                DatagramSocket main = null;
+                DatagramSocket cryptPing = null;
+                try {
+                    main = new DatagramSocket(new InetSocketAddress(loopback, tcpPort + 4));
+                    cryptPing = new DatagramSocket(new InetSocketAddress(loopback, tcpPort + 12));
+                    DatagramSocket obfuscated = new DatagramSocket(new InetSocketAddress(loopback, tcpPort + 14));
+                    for (DatagramSocket socket : List.of(main, cryptPing, obfuscated)) socket.setSoTimeout(2000);
+                    return new ServerPorts(tcpPort, main, cryptPing, obfuscated);
+                } catch (java.net.SocketException e) {
+                    if (main != null) main.close();
+                    if (cryptPing != null) cryptPing.close();
+                }
+            }
+            throw new IllegalStateException("Could not bind the UDP ports of a server");
+        }
+
+        @Override
+        public void close() {
+            main.close();
+            cryptPing.close();
+            obfuscated.close();
         }
     }
 

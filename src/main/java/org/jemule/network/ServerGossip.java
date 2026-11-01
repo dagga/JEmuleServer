@@ -8,6 +8,7 @@ import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.Inet4Address;
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.net.UnknownHostException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -20,9 +21,19 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BiFunction;
+import java.util.function.Supplier;
+import java.util.function.UnaryOperator;
 
 /**
  * Verified eD2K UDP server peers and their server-list gossip transactions.
+ * <p>
+ * A server is verified with OP_GLOBSERVSTATREQ and OP_SERVER_DESC_REQ on its TCP+4, then this server registers with
+ * it as Lugdunum and ed2k-rust do: a plain OP_SERVER_LIST_REQ {@code <ip 4><tcp port 2><challenge 4>} to its TCP+4
+ * and, when the server advertised a UDP key, the obfuscated handshake Lugdunum requires before listing a server
+ * (from this server's TCP+14 socket, a crypt ping to its TCP+12, whose answer gives its key, then OP_SERVER_LIST_REQ
+ * and OP_SERVER_LIST_REQ2 obfuscated with that key to its TCP+14). Lugdunum takes obfuscated server traffic only on
+ * TCP+14, and only from the source port of the crypt ping, which it keys on that ip:port.
  */
 final class ServerGossip {
     private static final int PROTOCOL = Packet.PROTOCOL_ED2K & 0xFF;
@@ -43,6 +54,8 @@ final class ServerGossip {
     private static final int MIN_STATUS_LENGTH = 2 + 4 * 4;
     /** High word of the status challenge which makes servers answer with the extended fields (eMule's). */
     private static final int EXTENDED_STATUS_CHALLENGE = 0x55AA0000;
+    /** Crypt pings received from servers are kept this long, to answer their obfuscated server-list requests. */
+    private static final long RECEIVED_PING_TTL_MILLIS = 10 * 60_000L;
 
     record Endpoint(InetAddress address, int tcpPort) {
         Endpoint {
@@ -53,6 +66,11 @@ final class ServerGossip {
 
         int udpPort() {
             return tcpPort + 4;
+        }
+
+        /** Whether the server's crypt-ping (TCP+12) and obfuscated (TCP+14) UDP ports exist. */
+        boolean hasObfuscatedPorts() {
+            return tcpPort <= 0xFFFF - 14;
         }
     }
 
@@ -87,6 +105,21 @@ final class ServerGossip {
                   long lowIdUsers) {
     }
 
+    /**
+     * Obfuscated handshake with one server: the crypt ping carrying {@code randomPart}, then, once the server
+     * answered it ({@code answered}), its UDP key for this server's address.
+     */
+    private record ObfuscatedSession(int randomPart, int peerKey, boolean answered, boolean listReceived) {
+    }
+
+    /** A crypt ping a server sent to this server's TCP+12. */
+    private record ReceivedPing(int randomPart, long receivedAtMillis) {
+    }
+
+    /** An obfuscated datagram of a server in an obfuscated handshake, and how to obfuscate the answer to it. */
+    record Decoded(byte[] packet, UnaryOperator<byte[]> answerObfuscator) {
+    }
+
     private final IPFilter ipFilter;
     /** Addresses of the configured servers (serverPeers), which the IP filter never blocks. */
     private final java.util.Set<InetAddress> trusted;
@@ -101,8 +134,17 @@ final class ServerGossip {
     private final Map<Endpoint, ServerSource> sources = new ConcurrentHashMap<>();
     private final Map<Endpoint, ServerStatus> serverStatuses = new ConcurrentHashMap<>();
     private final Map<Endpoint, Long> probeSentAt = new ConcurrentHashMap<>();
+    private final Map<Endpoint, ObfuscatedSession> obfuscatedSessions = new ConcurrentHashMap<>();
+    /** Last extended status challenge each server sent, echoed in the obfuscated status sent to its TCP+14. */
+    private final Map<Endpoint, Integer> statusChallenges = new ConcurrentHashMap<>();
+    /** Crypt pings received from the servers' sockets: their obfuscated requests are answered with that key. */
+    private final Map<InetSocketAddress, ReceivedPing> receivedPings = new ConcurrentHashMap<>();
     private final AtomicInteger candidateCursor = new AtomicInteger();
     private volatile long lastProbeAtMillis;
+    private volatile Supplier<DatagramSocket> mainSocket = () -> null;
+    private volatile Supplier<DatagramSocket> obfuscatedSocket = () -> null;
+    /** OP_GLOBSERVSTATRES of this server for a challenge and the address it is sent to. */
+    private volatile BiFunction<Integer, InetAddress, byte[]> statusBuilder;
 
     ServerGossip(String configuredPeers) {
         this(configuredPeers, new IPFilter());
@@ -121,6 +163,18 @@ final class ServerGossip {
             configured.add(endpoint.address());
         });
         trusted = java.util.Set.copyOf(configured);
+    }
+
+    /**
+     * The sockets the gossip sends from: the main server socket (TCP+4) and the obfuscated one (TCP+14), and this
+     * server's status, sent obfuscated to the servers in an obfuscated handshake. Without them, the packets are sent
+     * from the socket they answer and no obfuscated handshake is made.
+     */
+    void useSockets(Supplier<DatagramSocket> main, Supplier<DatagramSocket> obfuscated,
+                    BiFunction<Integer, InetAddress, byte[]> status) {
+        mainSocket = main != null ? main : () -> null;
+        obfuscatedSocket = obfuscated != null ? obfuscated : () -> null;
+        statusBuilder = status;
     }
 
     /**
@@ -233,6 +287,9 @@ final class ServerGossip {
             candidates.keySet().removeIf(endpoint -> blocked(endpoint.address()));
             verified.keySet().removeIf(endpoint -> blocked(endpoint.address()));
         }
+        obfuscatedSessions.keySet().removeIf(endpoint -> !isKnown(endpoint));
+        statusChallenges.keySet().removeIf(endpoint -> !isKnown(endpoint));
+        receivedPings.values().removeIf(ping -> now - ping.receivedAtMillis() > RECEIVED_PING_TTL_MILLIS);
         if (now - lastProbeAtMillis < PROBE_INTERVAL_MILLIS) return;
         lastProbeAtMillis = now;
         List<Endpoint> endpoints = new ArrayList<>(candidates.keySet());
@@ -242,11 +299,84 @@ final class ServerGossip {
         for (int offset = 0; offset < attempts; offset++) {
             Endpoint endpoint = endpoints.get((first + offset) % endpoints.size());
             if (pending.containsKey(endpoint)) continue;
-            int challenge = nextStatusChallenge();
-            pending.put(endpoint, new Pending(Stage.STATUS, challenge, now));
-            probeSentAt.put(endpoint, now);
-            send(socket, endpoint, frame(OP_GLOBSERVSTATREQ, intPayload(challenge)));
+            probe(socket, endpoint, now);
         }
+    }
+
+    private void probe(DatagramSocket socket, Endpoint endpoint, long now) {
+        int challenge = nextStatusChallenge();
+        pending.put(endpoint, new Pending(Stage.STATUS, challenge, now));
+        probeSentAt.put(endpoint, now);
+        send(socket, endpoint, frame(OP_GLOBSERVSTATREQ, intPayload(challenge)));
+    }
+
+    private boolean isKnown(Endpoint endpoint) {
+        return candidates.containsKey(endpoint) || verified.containsKey(endpoint);
+    }
+
+    private boolean isKnownAddress(InetAddress address) {
+        if (trusted.contains(address)) return true;
+        for (Endpoint endpoint : candidates.keySet()) {
+            if (endpoint.address().equals(address)) return true;
+        }
+        return isServer(address);
+    }
+
+    /**
+     * A crypt ping received on this server's TCP+12. A server's (Lugdunum's) is followed by obfuscated requests from
+     * the same socket, which are answered with its random part.
+     */
+    void cryptPingReceived(InetAddress source, int sourcePort, int randomPart, long now) {
+        if (source == null || blocked(source) || !isKnownAddress(source)) return;
+        if (receivedPings.size() >= MAX_PEERS) {
+            receivedPings.values().removeIf(ping -> now - ping.receivedAtMillis() > RECEIVED_PING_TTL_MILLIS);
+            if (receivedPings.size() >= MAX_PEERS) return;
+        }
+        receivedPings.put(new InetSocketAddress(source, sourcePort), new ReceivedPing(randomPart, now));
+    }
+
+    /**
+     * An OP_GLOBSERVSTATREQ this server answered. When a server sends it with the extended challenge, Lugdunum only
+     * takes this server's UDP key from an obfuscated answer echoing that challenge: it is sent obfuscated to the
+     * server's TCP+14 once its key is known, now or at the end of the obfuscated handshake.
+     */
+    synchronized void statusRequested(InetAddress source, int sourcePort, int challenge) {
+        if ((challenge & 0xFFFF0000) != EXTENDED_STATUS_CHALLENGE || source == null || blocked(source)) return;
+        Endpoint endpoint = endpointForSource(source, sourcePort);
+        if (endpoint == null || !isKnown(endpoint)) return;
+        statusChallenges.put(endpoint, challenge);
+        ObfuscatedSession session = obfuscatedSessions.get(endpoint);
+        if (session != null && session.peerKey() != 0) sendObfuscatedStatus(endpoint, session.peerKey(), challenge);
+    }
+
+    /**
+     * Decodes an obfuscated datagram of a server in an obfuscated handshake with this server: the answer to the crypt
+     * ping is obfuscated with its random part, and the other datagrams with that random part, the server's key or
+     * {@code localKey}, this server's key for the address.
+     *
+     * @return {@code null} when no handshake with a server at that address decodes it
+     */
+    Decoded decodeObfuscated(InetAddress source, byte[] datagram, int localKey) {
+        if (source == null || datagram == null) return null;
+        for (Map.Entry<Endpoint, ObfuscatedSession> entry : obfuscatedSessions.entrySet()) {
+            if (!entry.getKey().address().equals(source)) continue;
+            ObfuscatedSession session = entry.getValue();
+            Decoded decoded = decode(datagram, session.randomPart(), ServerObfuscation.ANSWER);
+            if (decoded == null && session.peerKey() != 0) {
+                decoded = decode(datagram, session.peerKey(), ServerObfuscation.ANSWER);
+            }
+            if (decoded == null) decoded = decode(datagram, session.randomPart(), ServerObfuscation.REQUEST);
+            if (decoded == null && localKey != 0) decoded = decode(datagram, localKey, ServerObfuscation.ANSWER);
+            if (decoded != null) return decoded;
+        }
+        return null;
+    }
+
+    private static Decoded decode(byte[] datagram, int key, byte direction) {
+        byte[] plain = ServerObfuscation.decode(datagram, key, direction);
+        if (plain == null || (plain[0] & 0xFF) != PROTOCOL) return null;
+        byte answer = ServerObfuscation.reverse(direction);
+        return new Decoded(plain, message -> ServerObfuscation.encode(message, key, answer));
     }
 
     int addClientReportedServerList(byte[] data) {
@@ -294,8 +424,12 @@ final class ServerGossip {
         return result.array();
     }
 
-    synchronized boolean handle(DatagramSocket socket, InetAddress source, int sourcePort, byte[] packet, boolean wasObfuscated,
-                   InetAddress publicIp, int localTcpPort, long now) {
+    /**
+     * @param answerObfuscator obfuscates the answers to a packet which arrived obfuscated, {@code null} for a plain one
+     */
+    synchronized boolean handle(DatagramSocket socket, InetAddress source, int sourcePort, byte[] packet,
+                                UnaryOperator<byte[]> answerObfuscator, InetAddress publicIp, int localTcpPort,
+                                long now) {
         if (blocked(source)) return false;
         if (packet.length < 2 || (packet[0] & 0xFF) != PROTOCOL) return false;
         int opcode = packet[1] & 0xFF;
@@ -307,18 +441,33 @@ final class ServerGossip {
             return true;
         }
         if (opcode == OP_SERVER_LIST_REQ) {
-            if (packet.length != 8) return true;
-            Endpoint announced = readAnnouncedEndpoint(packet, source, sourcePort);
-            addCandidate(announced);
-            if (endpoint != null && verified.containsKey(endpoint)) {
-                sendList(socket, endpoint, verified.values(), publicIp, localTcpPort, wasObfuscated);
+            // <ip 4><tcp port 2>, followed by a challenge (Lugdunum, ed2k-rust) or more
+            if (packet.length < 8) return true;
+            Endpoint announced = readAnnouncedEndpoint(packet, source, sourcePort, answerObfuscator != null);
+            Endpoint requester = announced != null ? announced : endpoint;
+            if (announced != null) {
+                addCandidate(announced);
+                if (candidates.containsKey(announced) && !verified.containsKey(announced)
+                        && !pending.containsKey(announced)
+                        && now - probeSentAt.getOrDefault(announced, 0L) >= PROBE_INTERVAL_MILLIS) {
+                    probe(main(socket), announced, now); // listed once verified
+                }
+            }
+            if (requester != null && verified.containsKey(requester)) {
+                sendList(socket, source, sourcePort, requester, verified.values(), publicIp, localTcpPort,
+                        answerObfuscator);
             }
             return true;
         }
         if (opcode == OP_SERVER_LIST_REQ2) {
             if (packet.length == 2) {
-                sendList(socket, endpoint, verified.values(), publicIp, localTcpPort, wasObfuscated);
+                Endpoint requester = answerObfuscator != null ? sessionEndpoint(source) : null;
+                sendList(socket, source, sourcePort, requester != null ? requester : endpoint, verified.values(),
+                        publicIp, localTcpPort, answerObfuscator);
             }
+            return true;
+        }
+        if (answerObfuscator != null && handleObfuscatedAnswer(source, opcode, packet, publicIp, localTcpPort)) {
             return true;
         }
         if (endpoint == null) return false;
@@ -359,9 +508,10 @@ final class ServerGossip {
             pending.remove(endpoint);
             int challenge = nextChallenge();
             pending.put(endpoint, new Pending(Stage.LIST, challenge, now));
-            byte[] announcement = announce(localPublicIp(publicIp, source), localTcpPort);
-            byte[] request = frame(OP_SERVER_LIST_REQ, announcement);
-            send(socket, endpoint, remoteKey == 0 ? request : ServerObfuscation.encode(request, remoteKey));
+            // Registration, in clear to the main port; then the obfuscated one, which Lugdunum requires
+            send(main(socket), endpoint, frame(OP_SERVER_LIST_REQ,
+                    registration(localPublicIp(publicIp, source), localTcpPort)));
+            if (remoteKey != 0) startObfuscatedHandshake(endpoint);
             return true;
         }
         if (opcode == OP_SERVER_LIST_RES && transaction.stage() == Stage.LIST) {
@@ -386,8 +536,98 @@ final class ServerGossip {
         return status == null ? 0 : status.udpKey();
     }
 
+    /** Crypt ping from this server's obfuscated socket to the server's TCP+12. */
+    private void startObfuscatedHandshake(Endpoint endpoint) {
+        DatagramSocket socket = obfuscatedSocket.get();
+        if (socket == null || !endpoint.hasObfuscatedPorts()) return;
+        int randomPart = ServerObfuscation.cryptPingRandomPart();
+        ObfuscatedSession previous = obfuscatedSessions.get(endpoint);
+        // The key of the previous handshake stays usable until the server answers this one
+        obfuscatedSessions.put(endpoint, new ObfuscatedSession(randomPart,
+                previous == null ? 0 : previous.peerKey(), false, false));
+        send(socket, endpoint.address(), endpoint.tcpPort() + 12, ServerObfuscation.cryptPing(randomPart));
+    }
+
+    /**
+     * The obfuscated packets of a server in an obfuscated handshake: the answer to the crypt ping, which gives the
+     * server's key and is followed by the obfuscated registration and server-list request, then the server list.
+     */
+    private boolean handleObfuscatedAnswer(InetAddress source, int opcode, byte[] packet, InetAddress publicIp,
+                                           int localTcpPort) {
+        if (opcode == OP_GLOBSERVSTATRES) {
+            for (Map.Entry<Endpoint, ObfuscatedSession> entry : obfuscatedSessions.entrySet()) {
+                Endpoint endpoint = entry.getKey();
+                ObfuscatedSession session = entry.getValue();
+                if (!endpoint.address().equals(source) || session.answered()
+                        || !hasChallenge(packet, session.randomPart())) continue;
+                Status status = validateStatus(packet, session.randomPart());
+                if (status == null || status.udpKey() == 0) {
+                    obfuscatedSessions.remove(endpoint);
+                    return true;
+                }
+                obfuscatedSessions.put(endpoint, new ObfuscatedSession(session.randomPart(), status.udpKey(),
+                        true, false));
+                DatagramSocket socket = obfuscatedSocket.get();
+                if (socket == null) return true;
+                byte[] registration = frame(OP_SERVER_LIST_REQ,
+                        registration(localPublicIp(publicIp, source), localTcpPort));
+                sendObfuscated(socket, endpoint, registration, status.udpKey());
+                sendObfuscated(socket, endpoint, frame(OP_SERVER_LIST_REQ2, new byte[0]), status.udpKey());
+                Integer challenge = statusChallenges.get(endpoint);
+                if (challenge != null) sendObfuscatedStatus(endpoint, status.udpKey(), challenge);
+                return true;
+            }
+            return false;
+        }
+        if (opcode == OP_SERVER_LIST_RES) {
+            Endpoint endpoint = sessionEndpoint(source);
+            if (endpoint == null) return false;
+            ObfuscatedSession session = obfuscatedSessions.get(endpoint);
+            if (session == null || !session.answered() || session.listReceived()) return false;
+            List<Endpoint> discovered = decodeServerList(packet);
+            if (discovered == null) return true;
+            for (Endpoint discoveredEndpoint : discovered) {
+                if (!discoveredEndpoint.equals(endpoint) && candidates.size() < MAX_PEERS) {
+                    addCandidate(discoveredEndpoint, ServerSource.GOSSIP);
+                }
+            }
+            obfuscatedSessions.put(endpoint, new ObfuscatedSession(session.randomPart(), session.peerKey(),
+                    true, true));
+            return true;
+        }
+        return false;
+    }
+
+    /** The server at {@code source} in an obfuscated handshake which the server answered. */
+    private Endpoint sessionEndpoint(InetAddress source) {
+        for (Map.Entry<Endpoint, ObfuscatedSession> entry : obfuscatedSessions.entrySet()) {
+            if (entry.getKey().address().equals(source) && entry.getValue().answered()) return entry.getKey();
+        }
+        return null;
+    }
+
+    private void sendObfuscatedStatus(Endpoint endpoint, int peerKey, int challenge) {
+        BiFunction<Integer, InetAddress, byte[]> builder = statusBuilder;
+        DatagramSocket socket = obfuscatedSocket.get();
+        if (builder == null || socket == null || !endpoint.hasObfuscatedPorts()) return;
+        sendObfuscated(socket, endpoint, builder.apply(challenge, endpoint.address()), peerKey);
+    }
+
+    /** To the server's TCP+14, obfuscated with its key as a request. */
+    private void sendObfuscated(DatagramSocket socket, Endpoint endpoint, byte[] message, int peerKey) {
+        send(socket, endpoint.address(), endpoint.tcpPort() + 14,
+                ServerObfuscation.encode(message, peerKey, ServerObfuscation.REQUEST));
+    }
+
+    private DatagramSocket main(DatagramSocket fallback) {
+        DatagramSocket socket = mainSocket.get();
+        return socket != null ? socket : fallback;
+    }
+
     private void reject(Endpoint endpoint, String reason, long now) {
         pending.remove(endpoint);
+        obfuscatedSessions.remove(endpoint);
+        statusChallenges.remove(endpoint);
         verified.remove(endpoint);
         serverStatuses.remove(endpoint);
         probeSentAt.remove(endpoint);
@@ -398,10 +638,17 @@ final class ServerGossip {
                 "Rejected server peer {0}:{1}: {2}", endpoint.address().getHostAddress(), endpoint.tcpPort(), reason);
     }
 
-    private void sendList(DatagramSocket socket, Endpoint endpoint, Collection<VerifiedPeer> peers,
-                          InetAddress publicIp, int localTcpPort, boolean obfuscated) {
+    /**
+     * OP_SERVER_LIST_RES to the socket the request came from, obfuscated as the request was: with the random part of
+     * the crypt ping that socket sent (Lugdunum's), otherwise with {@code answerObfuscator}.
+     *
+     * @param endpoint the requesting server, left out of the list
+     */
+    private void sendList(DatagramSocket socket, InetAddress to, int toPort, Endpoint endpoint,
+                          Collection<VerifiedPeer> peers, InetAddress publicIp, int localTcpPort,
+                          UnaryOperator<byte[]> answerObfuscator) {
         if (endpoint == null) return;
-        if (blocked(endpoint.address())) return;
+        if (blocked(endpoint.address()) || blocked(to)) return;
         List<Endpoint> entries = new ArrayList<>();
         if (publicIp instanceof Inet4Address && !publicIp.isAnyLocalAddress() && !publicIp.isLoopbackAddress()
                 && !blocked(publicIp)) {
@@ -420,11 +667,13 @@ final class ServerGossip {
             response.put(entry.address().getAddress()).putShort((short) entry.tcpPort());
         }
         byte[] data = response.array();
-        VerifiedPeer peer = verified.get(endpoint);
-        if (obfuscated && peer != null && peer.udpKey() != 0) {
-            data = ServerObfuscation.encode(data, peer.udpKey());
+        if (answerObfuscator != null) {
+            ReceivedPing ping = receivedPings.get(new InetSocketAddress(to, toPort));
+            data = ping != null
+                    ? ServerObfuscation.encode(data, ping.randomPart(), ServerObfuscation.ANSWER)
+                    : answerObfuscator.apply(data);
         }
-        send(socket, endpoint, data);
+        send(socket, to, toPort, data);
     }
 
     /** True when the answer starts with {@code challenge}, the one of the request in progress. */
@@ -547,10 +796,15 @@ final class ServerGossip {
         return endpoints.keySet();
     }
 
-    private Endpoint readAnnouncedEndpoint(byte[] packet, InetAddress source, int sourcePort) {
+    /**
+     * The server announced by an OP_SERVER_LIST_REQ: the sender's own address, from its main UDP port (TCP+4) when
+     * the request is plain. An obfuscated one comes from the socket of the server's crypt ping (TCP+14 for Lugdunum).
+     */
+    private Endpoint readAnnouncedEndpoint(byte[] packet, InetAddress source, int sourcePort, boolean obfuscated) {
         byte[] ip = {packet[2], packet[3], packet[4], packet[5]};
         int tcpPort = Short.toUnsignedInt(ByteBuffer.wrap(packet, 6, 2).order(ByteOrder.LITTLE_ENDIAN).getShort());
-        if (!java.util.Arrays.equals(ip, source.getAddress()) || sourcePort != tcpPort + 4 || tcpPort < 1 || tcpPort > 65531) {
+        if (!java.util.Arrays.equals(ip, source.getAddress()) || tcpPort < 1 || tcpPort > 65531
+                || (!obfuscated && sourcePort != tcpPort + 4)) {
             return null;
         }
         return new Endpoint(source, tcpPort);
@@ -566,9 +820,10 @@ final class ServerGossip {
         }
     }
 
-    private byte[] announce(InetAddress publicIp, int tcpPort) {
-        return ByteBuffer.allocate(6).order(ByteOrder.LITTLE_ENDIAN)
-                .put(publicIp.getAddress()).putShort((short) tcpPort).array();
+    /** OP_SERVER_LIST_REQ payload as Lugdunum sends it: {@code <ip 4><tcp port 2><challenge 4>}. */
+    private static byte[] registration(InetAddress publicIp, int tcpPort) {
+        return ByteBuffer.allocate(10).order(ByteOrder.LITTLE_ENDIAN)
+                .put(publicIp.getAddress()).putShort((short) tcpPort).putInt(nextChallenge()).array();
     }
 
     private static InetAddress localPublicIp(InetAddress configuredIp, InetAddress source) {
@@ -578,20 +833,18 @@ final class ServerGossip {
     }
 
     private void send(DatagramSocket socket, Endpoint endpoint, byte[] packet) {
+        send(socket, endpoint.address(), endpoint.udpPort(), packet);
+    }
+
+    private void send(DatagramSocket socket, InetAddress address, int port, byte[] packet) {
+        if (socket == null) return;
         try {
-            socket.send(new DatagramPacket(packet, packet.length, endpoint.address(), endpoint.udpPort()));
+            socket.send(new DatagramPacket(packet, packet.length, address, port));
         } catch (java.io.IOException e) {
             System.getLogger(ServerGossip.class.getName()).log(System.Logger.Level.DEBUG,
                     "Could not send server gossip packet to {0}:{1}: {2}",
-                    endpoint.address().getHostAddress(), endpoint.udpPort(), e.getMessage());
+                    address.getHostAddress(), port, e.getMessage());
         }
-
-    }
-
-    int keyFor(InetAddress address, int sourcePort) {
-        Endpoint endpoint = endpointForSource(address, sourcePort);
-        VerifiedPeer peer = endpoint == null ? null : verified.get(endpoint);
-        return peer == null ? 0 : peer.udpKey();
     }
 
     private synchronized boolean addCandidate(Endpoint endpoint) {
