@@ -262,6 +262,8 @@ public class Server {
         this.ipFilter = new IPFilter();
         this.ipFilterUpdater = createIpFilterUpdater(config.ipFilterPath());
         this.serverGossip = new ServerGossip(config.serverPeers(), this.ipFilter);
+        this.serverGossip.useSockets(() -> boundUdpSockets.get(config.port() + 4),
+                () -> boundUdpSockets.get(config.port() + 14), this::buildGlobServStatRes);
         this.fakeFileDetector = new FakeFileDetector();
         this.fakeFileDetector.setEnabled(config.fakeFileDetectionEnabled());
         // TCP and UDP access of the clients; admin, searches, ingestion and maintenance have their own threads
@@ -974,11 +976,13 @@ public class Server {
     }
 
     private void startUdpResponder() {
-        // Bind UDP responder on both the configured TCP port and the common UDP offset (port+4)
+        // UDP on the TCP port, port + 4 (eMule's), port + 12 (crypt pings and obfuscated UDP) and port + 14 (the
+        // obfuscated server-to-server port of Lugdunum, which sends its obfuscated gossip there)
         java.util.Set<Integer> ports = new java.util.LinkedHashSet<>();
         ports.add(config.port());
         if (config.port() <= 0xFFFF - 4) ports.add(config.port() + 4);
         if (config.port() <= 0xFFFF - 12) ports.add(config.port() + 12);
+        if (config.port() <= 0xFFFF - 14) ports.add(config.port() + 14);
 
         // Server gossip polling is a regular operation: maintenance tier, through the port + 4 socket
         maintenance.scheduleWithFixedDelay(() -> {
@@ -1138,13 +1142,11 @@ public class Server {
     }
 
     /**
-     * Destination of the answers to one UDP request; answers are obfuscated when {@code key != 0}.
+     * Destination of the answers to one UDP request; answers are obfuscated by {@code obfuscator} when it is not
+     * {@code null}.
      */
-    private record UdpReply(java.net.DatagramSocket socket, InetAddress address, int port, int key,
-                            boolean serverObfuscated) {
-        private UdpReply(java.net.DatagramSocket socket, InetAddress address, int port, int key) {
-            this(socket, address, port, key, false);
-        }
+    private record UdpReply(java.net.DatagramSocket socket, InetAddress address, int port,
+                            java.util.function.UnaryOperator<byte[]> obfuscator) {
     }
 
     private void handleUdp(java.net.DatagramSocket ds, java.net.DatagramPacket p) throws IOException {
@@ -1154,35 +1156,35 @@ public class Server {
             log.debug("UDP recv {} bytes from {}:{} - {}", recv.length, p.getAddress(), p.getPort(), hex(recv, recv.length));
         }
 
-        int replyKey = 0;
-        boolean serverObfuscated = false;
+        java.util.function.UnaryOperator<byte[]> obfuscator = null;
         if (recv[0] != Packet.PROTOCOL_ED2K) {
-            // Obfuscated packet (CEncryptedDatagramSocket::EncryptSendServer), keyed with this client's server key
+            // Obfuscated packet (CEncryptedDatagramSocket::EncryptSendServer), keyed with this client's server key;
+            // other servers send theirs the same way
             int serverKey = org.jemule.security.UdpObfuscation.serverKeyFor(p.getAddress());
             byte[] plain = org.jemule.security.UdpObfuscation.decryptFromClient(recv, serverKey);
+            ServerGossip.Decoded fromServer;
             if (plain != null && plain.length >= 2 && plain[0] == Packet.PROTOCOL_ED2K) {
                 recv = plain;
-                replyKey = serverKey;
+                obfuscator = answer -> org.jemule.security.UdpObfuscation.encryptForClient(answer, serverKey);
+            } else if ((fromServer = serverGossip.decodeObfuscated(p.getAddress(), recv, serverKey)) != null) {
+                // A server answering the obfuscated handshake of the server gossip
+                recv = fromServer.packet();
+                obfuscator = fromServer.answerObfuscator();
+            } else if (recv.length >= 4 && recv.length < 4 + 16 && ds.getLocalPort() == config.port() + 12) {
+                // "Crypt ping" (CServerList::ServerStats): raw <challenge 4><random 0-15> sent to port+12;
+                // the OP_GLOBSERVSTATRES answer is obfuscated with the challenge as base key.
+                int challenge = ByteBuffer.wrap(recv, 0, 4).order(ByteOrder.LITTLE_ENDIAN).getInt();
+                serverGossip.cryptPingReceived(p.getAddress(), p.getPort(), challenge, System.currentTimeMillis());
+                UdpReply reply = new UdpReply(ds, p.getAddress(), p.getPort(),
+                        answer -> org.jemule.security.UdpObfuscation.encryptForClient(answer, challenge));
+                sendUdp(reply, buildGlobServStatRes(challenge, p.getAddress()), "STAT (crypt ping)");
+                return;
             } else {
-                byte[] serverPlain = org.jemule.security.ServerObfuscation.decode(
-                        recv, org.jemule.security.UdpObfuscation.serverKeyFor(p.getAddress()));
-                if (serverPlain != null && serverPlain.length >= 2 && serverPlain[0] == Packet.PROTOCOL_ED2K) {
-                    recv = serverPlain;
-                    serverObfuscated = true;
-                } else if (recv.length >= 4 && recv.length < 4 + 16 && ds.getLocalPort() == config.port() + 12) {
-                    // "Crypt ping" (CServerList::ServerStats): raw <challenge 4><random 0-15> sent to port+12;
-                    // the OP_GLOBSERVSTATRES answer is obfuscated with the challenge as base key.
-                    int challenge = ByteBuffer.wrap(recv, 0, 4).order(ByteOrder.LITTLE_ENDIAN).getInt();
-                    UdpReply reply = new UdpReply(ds, p.getAddress(), p.getPort(), challenge);
-                    sendUdp(reply, buildGlobServStatRes(challenge, p.getAddress()), "STAT (crypt ping)");
-                    return;
-                } else {
-                    log.debug("Dropping undecodable UDP packet ({} bytes) from {}", recv.length, p.getAddress());
-                    return;
-                }
+                log.debug("Dropping undecodable UDP packet ({} bytes) from {}", recv.length, p.getAddress());
+                return;
             }
         }
-        dispatchUdp(new UdpReply(ds, p.getAddress(), p.getPort(), replyKey, serverObfuscated), recv);
+        dispatchUdp(new UdpReply(ds, p.getAddress(), p.getPort(), obfuscator), recv);
     }
 
     private void dispatchUdp(UdpReply reply, byte[] recv) throws IOException {
@@ -1191,11 +1193,13 @@ public class Server {
             if (recv.length < 6) return;
             int challenge = ByteBuffer.wrap(recv, 2, 4).order(ByteOrder.LITTLE_ENDIAN).getInt();
             sendUdp(reply, buildGlobServStatRes(challenge, reply.address()), "STAT");
+            // A server's probe: also answered obfuscated to its TCP+14 once its key is known (Lugdunum)
+            serverGossip.statusRequested(reply.address(), reply.port(), challenge);
         } else if (opcode == (byte) 0xA2) { // OP_SERVER_DESC_REQ [<challenge 4>]
             int challenge = recv.length >= 6 ? ByteBuffer.wrap(recv, 2, 4).order(ByteOrder.LITTLE_ENDIAN).getInt() : 0;
             sendUdp(reply, buildServerDescPacket(challenge, reply.address()), "DESC");
         } else if (serverGossip.handle(reply.socket(), reply.address(), reply.port(), recv,
-                reply.serverObfuscated(), publicIp, config.port(), System.currentTimeMillis())) {
+                reply.obfuscator(), publicIp, config.port(), System.currentTimeMillis())) {
             return;
         } else if (serverSearchBridge.handle(reply.address(), reply.port(), recv)) {
             return;
@@ -1364,16 +1368,10 @@ public class Server {
     private static final int MAX_UDP_PAYLOAD = 1300;
 
     private void sendUdp(UdpReply reply, byte[] plain, String what) throws IOException {
-        byte[] out;
-        if (reply.serverObfuscated()) {
-            int peerKey = serverGossip.keyFor(reply.address(), reply.port());
-            out = peerKey != 0 ? org.jemule.security.ServerObfuscation.encode(plain, peerKey) : plain;
-        } else {
-            out = reply.key() != 0 ? org.jemule.security.UdpObfuscation.encryptForClient(plain, reply.key()) : plain;
-        }
+        byte[] out = reply.obfuscator() != null ? reply.obfuscator().apply(plain) : plain;
         if (log.isDebugEnabled()) {
             log.debug("UDP send ({}{}) {} bytes to {}:{} - {}", what,
-                    reply.key() != 0 || reply.serverObfuscated() ? ", obfuscated" : "",
+                    reply.obfuscator() != null ? ", obfuscated" : "",
                     out.length, reply.address(), reply.port(), hex(plain, plain.length));
         }
         reply.socket().send(new java.net.DatagramPacket(out, out.length, reply.address(), reply.port()));

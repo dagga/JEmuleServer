@@ -642,8 +642,8 @@ Available commands:
 ## Firewall Configuration (Fedora)
 
 To allow clients to connect to your server, you must ensure your firewall is running and open the ports: **TCP 4661**
-and **UDP 4661, 4665, 4672 and 4673** (with the default port 4661: UDP on port + 4, Kademlia on port + 11,
-obfuscated UDP on port + 12). On Fedora, use the following commands:
+and **UDP 4661, 4665, 4672, 4673 and 4675** (with the default port 4661: UDP on port + 4, Kademlia on port + 11,
+obfuscated UDP on port + 12, obfuscated server-to-server UDP on port + 14, where Lugdunum servers send theirs). On Fedora, use the following commands:
 
 ### 1. Start and enable firewalld
 ```bash
@@ -658,6 +658,7 @@ sudo firewall-cmd --add-port=4661/udp --permanent
 sudo firewall-cmd --add-port=4665/udp --permanent
 sudo firewall-cmd --add-port=4672/udp --permanent
 sudo firewall-cmd --add-port=4673/udp --permanent
+sudo firewall-cmd --add-port=4675/udp --permanent
 sudo firewall-cmd --reload
 ```
 

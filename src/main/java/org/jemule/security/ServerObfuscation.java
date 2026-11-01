@@ -26,9 +26,16 @@ import java.security.SecureRandom;
 import java.util.Arrays;
 
 /**
- * RC4 framing used by Lugdunum-compatible server-to-server UDP gossip.
+ * RC4 framing of obfuscated server-to-server UDP, as Lugdunum sends it: eMule's client-server UDP obfuscation
+ * (CEncryptedDatagramSocket), whose RC4 key is {@code MD5(<key 4><direction 1><salt 2>)}. The direction byte is
+ * {@link #REQUEST} for a datagram sent to a server's obfuscated port (TCP+14, as an eMule client does) and
+ * {@link #ANSWER} for the answer (as a server answers a client, and for the answer to a crypt ping on TCP+12).
  */
 public final class ServerObfuscation {
+    /** MAGICVALUE_UDP_CLIENTSERVER: a request sent to a server. */
+    public static final byte REQUEST = (byte) 0x6B;
+    /** MAGICVALUE_UDP_SERVERCLIENT: the answer of a server. */
+    public static final byte ANSWER = (byte) 0xA5;
     private static final int MAGIC = 0x13EF24D5;
     private static final int MAX_PADDING = 12;
     private static final int ZERO_KEY_FALLBACK = 0x5D78B234;
@@ -52,15 +59,21 @@ public final class ServerObfuscation {
         return key == 0 ? ZERO_KEY_FALLBACK : key;
     }
 
+    /** The direction byte of the answer to a datagram obfuscated with {@code direction}. */
+    public static byte reverse(byte direction) {
+        return direction == REQUEST ? ANSWER : REQUEST;
+    }
+
     /**
-     * Encodes an ED2K UDP message for a peer using the key that peer advertised for our address.
+     * Encodes an ED2K UDP message with {@code key}: the key the receiving server advertised for our address (a
+     * request), or the key of the request being answered.
      */
-    public static byte[] encode(byte[] message, int peerServerKey) {
+    public static byte[] encode(byte[] message, int key, byte direction) {
         if (message == null || message.length < 2) {
             throw new IllegalArgumentException("Server gossip message must contain a protocol and opcode");
         }
-        if (peerServerKey == 0) {
-            throw new IllegalArgumentException("Peer server key must be non-zero");
+        if (key == 0) {
+            throw new IllegalArgumentException("Server key must be non-zero");
         }
 
         byte[] salt = new byte[2];
@@ -74,14 +87,10 @@ public final class ServerObfuscation {
                 .put(message)
                 .array();
 
-        cipher(peerServerKey, salt).crypt(plain);
+        cipher(key, direction, salt).crypt(plain);
 
-        byte marker;
-        do {
-            marker = (byte) RANDOM.nextInt(256);
-        } while (marker == (byte) 0xE3 || marker == (byte) 0xD4 || marker == (byte) 0xC5);
         byte[] packet = new byte[3 + plain.length];
-        packet[0] = marker;
+        packet[0] = marker();
         packet[1] = salt[0];
         packet[2] = salt[1];
         System.arraycopy(plain, 0, packet, 3, plain.length);
@@ -89,17 +98,16 @@ public final class ServerObfuscation {
     }
 
     /**
-     * Decodes a server gossip datagram. Returns {@code null} when the framing or key is invalid.
+     * Decodes a server datagram. Returns {@code null} when the framing, key or direction is not the one used.
      */
-    public static byte[] decode(byte[] packet, int localServerKeyForSender) {
-        if (packet == null || packet.length < 10 || localServerKeyForSender == 0
-                || packet[0] == (byte) 0xE3 || packet[0] == (byte) 0xD4 || packet[0] == (byte) 0xC5) {
+    public static byte[] decode(byte[] packet, int key, byte direction) {
+        if (packet == null || packet.length < 10 || key == 0 || isPlainMarker(packet[0])) {
             return null;
         }
 
         byte[] salt = {packet[1], packet[2]};
         byte[] plain = Arrays.copyOfRange(packet, 3, packet.length);
-        cipher(localServerKeyForSender, salt).crypt(plain);
+        cipher(key, direction, salt).crypt(plain);
 
         ByteBuffer frame = ByteBuffer.wrap(plain).order(ByteOrder.LITTLE_ENDIAN);
         if (frame.getInt() != MAGIC) return null;
@@ -109,10 +117,44 @@ public final class ServerObfuscation {
         return Arrays.copyOfRange(plain, messageStart, plain.length);
     }
 
-    private static Obfuscation.RC4 cipher(int serverKey, byte[] salt) {
+    /**
+     * A crypt ping (CServerList::ServerStats, and Lugdunum's ping to a server's TCP+12): {@code <random part 4>}
+     * followed by up to 14 random bytes, sent in clear. The answer is obfuscated with the random part.
+     *
+     * @param randomPart non-zero, its low byte not a plain-packet marker
+     */
+    public static byte[] cryptPing(int randomPart) {
+        byte[] ping = new byte[4 + RANDOM.nextInt(15)];
+        RANDOM.nextBytes(ping);
+        ByteBuffer.wrap(ping).order(ByteOrder.LITTLE_ENDIAN).putInt(randomPart);
+        return ping;
+    }
+
+    /** A random part for {@link #cryptPing}: non-zero, and not read as a plain packet. */
+    public static int cryptPingRandomPart() {
+        int randomPart;
+        do {
+            randomPart = RANDOM.nextInt();
+        } while (randomPart == 0 || isPlainMarker((byte) randomPart));
+        return randomPart;
+    }
+
+    private static byte marker() {
+        byte marker;
+        do {
+            marker = (byte) RANDOM.nextInt(256);
+        } while (isPlainMarker(marker));
+        return marker;
+    }
+
+    private static boolean isPlainMarker(byte value) {
+        return value == (byte) 0xE3 || value == (byte) 0xD4 || value == (byte) 0xC5;
+    }
+
+    private static Obfuscation.RC4 cipher(int key, byte direction, byte[] salt) {
         byte[] input = ByteBuffer.allocate(7).order(ByteOrder.LITTLE_ENDIAN)
-                .putInt(serverKey)
-                .put((byte) 0)
+                .putInt(key)
+                .put(direction)
                 .put(salt)
                 .array();
         return new Obfuscation.RC4(Obfuscation.md5(input));
