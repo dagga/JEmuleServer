@@ -54,7 +54,7 @@ class MySqlDatabaseTest {
         Assumptions.assumeTrue(URL != null && !URL.isBlank(), "no MySQL server given (-Pmysql.url)");
         try (Connection c = DriverManager.getConnection(URL, USER, PASSWORD); Statement stmt = c.createStatement()) {
             for (String table : List.of("file_tags", "file_sources", "files", "file_tags_v4", "files_v4", "file_tags_v3",
-                    "files_v3", "stats", "metrics_history", "banned_names")) {
+                    "files_v3", "stats", "metrics_history", "banned_names", "banned_servers", "name_cleaning_rules")) {
                 stmt.execute("DROP TABLE IF EXISTS " + table);
             }
         }
@@ -132,6 +132,35 @@ class MySqlDatabaseTest {
     }
 
     @Test
+    void nameCleaningRulesAndRenamesUseBothBackendsAlike() throws Exception {
+        try (DatabaseManager db = open()) {
+            NameCleaner cleaner = NameCleaner.load(db);
+            assertEquals(List.of(NameCleaner.DEFAULT_RULE), cleaner.rules().stream().map(NameCleaner.Rule::text).toList());
+            cleaner.add("100%_off");
+            db.saveFiles(List.of(file(1, "[kad eMule-Qt.org] Song.mp3", 3), file(2, "plain.mp3", 0),
+                    file(3, "Deal 100%_OFF.zip", 0), file(4, "Deal 100x off.zip", 0)));
+
+            DatabaseManager.NameWindow first = db.filesNamedLike(List.of("emule-qt.org", "100%_off"), "", 2);
+            assertEquals(2, first.scanned());
+            assertEquals(hash(2), first.last());
+            assertEquals(List.of(hash(1)), first.matches().stream().map(DatabaseManager.NamedFile::hash).toList());
+            DatabaseManager.NameWindow second = db.filesNamedLike(List.of("emule-qt.org", "100%_off"), first.last(), 2);
+            assertEquals(List.of(hash(3)), second.matches().stream().map(DatabaseManager.NamedFile::hash).toList(),
+                    "the wildcards of a rule are matched as they are");
+            assertNull(db.filesNamedLike(List.of("emule-qt.org"), second.last(), 2).last());
+
+            assertTrue(db.renameFiles(Map.of(hash(1), "Song.mp3")));
+        }
+        try (DatabaseManager db = open()) {
+            assertEquals(2, NameCleaner.load(db).rules().size(), "the default rule is not written again");
+            FileMetadata renamed = byHash(db.loadFiles()).get(hash(1));
+            assertEquals("Song.mp3", renamed.name());
+            assertEquals(3, renamed.sourceCount());
+            assertEquals(List.of("xvid", 3601), values(renamed));
+        }
+    }
+
+    @Test
     void theLoadReadsPageAfterPage() throws Exception {
         int total = DatabaseManager.LOAD_PAGE_FILES * 2 + 3;
         try (DatabaseManager db = open()) {
@@ -189,6 +218,25 @@ class MySqlDatabaseTest {
     }
 
     @Test
+    void bannedServers() throws Exception {
+        try (DatabaseManager db = open()) {
+            db.addBannedServer("192.0.2.10", "fake", new java.sql.Timestamp(1_000_123));
+            db.addBannedServer("198.51.100.20", null, new java.sql.Timestamp(2_000_456));
+            db.addBannedServer("192.0.2.10", "again", new java.sql.Timestamp(3_000_789));
+        }
+        try (DatabaseManager db = open()) {
+            List<DatabaseManager.BannedServer> servers = db.loadBannedServers();
+            assertEquals(List.of("192.0.2.10", "198.51.100.20"), servers.stream().map(DatabaseManager.BannedServer::ip)
+                    .toList(), "the most recent first");
+            assertEquals("again", servers.getFirst().reason());
+            assertEquals(3_000_789, servers.getFirst().bannedAt().getTime(), "to the millisecond");
+            assertNull(servers.get(1).reason());
+            db.removeBannedServer("192.0.2.10");
+            assertEquals(1, db.loadBannedServers().size());
+        }
+    }
+
+    @Test
     void aLostConnectionIsReopened() throws Exception {
         try (DatabaseManager db = open()) {
             db.setStat("before", 1);
@@ -217,6 +265,7 @@ class MySqlDatabaseTest {
             h2.saveFiles(batch);
             h2.addBannedName("some fake.avi", "fake");
             h2.addBannedNameIfAbsent("y".repeat(900), "child abuse");
+            h2.addBannedServer("203.0.113.30", "fake", new java.sql.Timestamp(5_000_000));
             h2.setStat("kad_node_id_high", 1234);
             h2.setStat("kad_node_id_low", -5678);
             h2.saveMetricsSample(10_000, files, 3, 0);
@@ -237,6 +286,8 @@ class MySqlDatabaseTest {
             assertEquals(4_321 % 4, sample.sourceCount());
             assertEquals(List.of("xvid", 3600 + 4_321), values(sample));
             assertEquals(List.of("some fake.avi"), db.bannedNamesAfter(null, 10), "a name too long for MySQL is left out");
+            assertEquals(List.of(new DatabaseManager.BannedServer("203.0.113.30", "fake", new java.sql.Timestamp(5_000_000))),
+                    db.loadBannedServers());
             assertEquals(1234, db.getStat("kad_node_id_high", 0), "the Kad node keeps its ID");
             assertEquals(-5678, db.getStat("kad_node_id_low", 0));
             assertEquals(1, db.loadMetricsSamples(0).size());

@@ -134,7 +134,9 @@ class KadSearchBridgeTest {
             AtomicReference<KadPacket.SearchKeyReq> received = new AtomicReference<>();
             CountDownLatch latch = new CountDownLatch(1);
             peerUdp.registerListener(KadOpCode.SEARCH_KEY_REQ, (packet, addr, port) -> {
-                received.set(KadPacket.parseSearchKeyReq(packet.data()));
+                KadPacket.SearchKeyReq req = KadPacket.parseSearchKeyReq(packet.data());
+                if (!req.keywordHash().equals(KadId.fromKeyword("reloaded"))) return; // the other word's search
+                received.set(req);
                 latch.countDown();
             });
 
@@ -887,6 +889,95 @@ class KadSearchBridgeTest {
                     "SEARCH_KEY_REQ must be sent to the node discovered during the lookup");
             assertEquals(List.of(file.hash()), results.stream().map(FileMetadata::hash).toList());
             assertNotNull(table.get(closeContact.id()), "discovered contacts must be added to the routing table");
+        }
+    }
+
+    // ===============================================================
+    // Result cache (remoteSearchCacheMinutes)
+    // ===============================================================
+
+    /** A peer answering every keyword search with one file whose name holds the keyword, counting the requests. */
+    private static java.util.concurrent.atomic.AtomicInteger answerKeywordSearches(KadUdpService peerUdp, String keyword,
+                                                                                  String fileHash) {
+        java.util.concurrent.atomic.AtomicInteger requests = new java.util.concurrent.atomic.AtomicInteger();
+        KadId keywordHash = KadId.fromKeyword(keyword);
+        peerUdp.registerListener(KadOpCode.SEARCH_KEY_REQ, (packet, addr, port) -> {
+            KadPacket.SearchKeyReq req = KadPacket.parseSearchKeyReq(packet.data());
+            if (req == null || !req.keywordHash().equals(keywordHash)) return;
+            requests.incrementAndGet();
+            FileMetadata meta = new FileMetadata(fileHash, keyword + " reloaded.avi", 700_000_000L, "Video",
+                    List.of(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, 5)));
+            try {
+                peerUdp.send(KadPacket.createSearchRes(keywordHash, List.of(meta)), addr, port);
+            } catch (Exception e) {
+                fail(e);
+            }
+        });
+        return requests;
+    }
+
+    @Test
+    void theSameSearchWithinTheCacheTimeIsAnsweredWithoutKadAndWithoutIngestion() throws Exception {
+        KadRoutingTable table = new KadRoutingTable(KadId.random());
+        try (KadUdpService serverUdp = new KadUdpService(0);
+             KadUdpService peerUdp = new KadUdpService(0);
+             KadSearchBridge bridge = new KadSearchBridge(table, serverUdp, 3, 1000)) {
+            serverUdp.start();
+            peerUdp.start();
+            bridge.start();
+            table.addOrUpdate(new KadContact(table.generateRandomIdForBucket(1), InetAddress.getLoopbackAddress(), peerUdp.getPort()));
+            String hash = "aabbccddeeff00112233445566778899";
+            var requests = answerKeywordSearches(peerUdp, "matrix", hash);
+
+            List<FileMetadata> first = bridge.forkSearch("matrix").get(5, TimeUnit.SECONDS);
+            assertEquals(List.of(hash), first.stream().map(FileMetadata::hash).toList());
+            int sent = requests.get();
+            long ingested = bridge.getFilesIngested();
+            long forked = bridge.getSearchesForked();
+
+            // Same search, other case: answered at once from the cache
+            CompletableFuture<List<FileMetadata>> again = bridge.forkSearch(
+                    new SearchQuery.TermQuery("MATRIX", SearchQuery.ID_FILENAME));
+            assertTrue(again.isDone());
+            assertEquals(first, again.get());
+            assertEquals(sent, requests.get(), "not sent on Kad again");
+            assertEquals(ingested, bridge.getFilesIngested(), "not ingested again");
+            assertEquals(forked, bridge.getSearchesForked());
+            assertEquals(1, bridge.getResultCache().hits());
+            assertEquals(1, bridge.getResultCache().misses());
+
+            // Cache disabled (remoteSearchCacheMinutes=0): played on Kad again
+            bridge.setResultCacheTtl(() -> 0L);
+            assertEquals(List.of(hash), bridge.forkSearch("matrix").get(5, TimeUnit.SECONDS).stream()
+                    .map(FileMetadata::hash).toList());
+            assertTrue(requests.get() > sent, "sent on Kad again");
+            assertEquals(0, bridge.getResultCache().size());
+        }
+    }
+
+    @Test
+    void theSameSearchStillRunningIsJoinedInsteadOfStartedAgain() throws Exception {
+        KadRoutingTable table = new KadRoutingTable(KadId.random());
+        try (KadUdpService serverUdp = new KadUdpService(0);
+             KadUdpService peerUdp = new KadUdpService(0);
+             KadSearchBridge bridge = new KadSearchBridge(table, serverUdp, 3, 1000)) {
+            serverUdp.start();
+            peerUdp.start();
+            bridge.start();
+            table.addOrUpdate(new KadContact(table.generateRandomIdForBucket(1), InetAddress.getLoopbackAddress(), peerUdp.getPort()));
+            String hash = "aabbccddeeff00112233445566778899";
+            var requests = answerKeywordSearches(peerUdp, "matrix", hash);
+
+            CompletableFuture<List<FileMetadata>> first = bridge.forkSearch("matrix");
+            CompletableFuture<List<FileMetadata>> second = bridge.forkSearch("matrix");
+            assertFalse(second.isDone(), "waits for the running search");
+
+            assertEquals(first.get(5, TimeUnit.SECONDS), second.get(5, TimeUnit.SECONDS));
+            assertEquals(List.of(hash), second.get().stream().map(FileMetadata::hash).toList());
+            assertEquals(1, bridge.getSearchesForked(), "one Kad search");
+            assertEquals(1, requests.get());
+            assertEquals(1, bridge.getResultCache().joins());
+            assertEquals(1, bridge.getResultCache().misses());
         }
     }
 }

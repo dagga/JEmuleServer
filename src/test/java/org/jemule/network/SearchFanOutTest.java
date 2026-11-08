@@ -142,6 +142,30 @@ class SearchFanOutTest {
     }
 
     @Test
+    void theClientsGetTheNamesCleanedWhateverTheChannel() throws Exception {
+        index.setNameCleaner(new org.jemule.core.NameCleaner("emule-qt.org"));
+        String fromRelay = "44444444444444444444444444444444";
+        ServerRelay relay = mock(ServerRelay.class);
+        when(relay.forkSearch(any(byte[].class), eq(ServerRelay.MAX_PAGES))).thenReturn(CompletableFuture.completedFuture(
+                List.of(FileMetadata.withoutSources(fromRelay, "[web emule-qt.org] ubuntu relay.iso", 400, "Iso",
+                        List.of()))));
+        when(kad.forkSearch(any(SearchQuery.class))).thenReturn(CompletableFuture.completedFuture(
+                List.of(FileMetadata.withoutSources(FROM_KAD, "[kad emule-qt.org] ubuntu kad.iso", 200, "Iso",
+                        List.of()))));
+        when(servers.forkSearch(any(SearchQuery.class), any(byte[].class))).thenReturn(CompletableFuture.completedFuture(
+                List.of(FileMetadata.withoutSources(FROM_SERVERS, "ubuntu servers [torrent eMule-Qt.org].iso", 300,
+                        "Iso", List.of()))));
+        FakeContext ctx = client();
+        ctx.setServerRelay(relay);
+
+        SearchAnswer answer = search(ctx, new SearchTree().keyword("ubuntu").toBytes());
+
+        assertEquals(List.of("ubuntu relay.iso", "ubuntu kad.iso", "ubuntu servers.iso"), answer.results().stream()
+                .map(r -> (String) r.tag(org.jemule.protocol.Tag.NAME_FILENAME)).toList(),
+                "the relay, Kad and server results, none of them ingested here");
+    }
+
+    @Test
     void inRelayModeTheLocalIndexAnswersWhenTheRelayServerCannot() throws Exception {
         index.addFile(new FileMetadata(LOCAL, "ubuntu local.iso", 100, "Iso"));
         ServerRelay relay = mock(ServerRelay.class);

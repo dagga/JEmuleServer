@@ -149,6 +149,12 @@ public record FileMetadata(
         return count;
     }
 
+    /** This file under another name, with the same tags and sources ({@link NameCleaner}). */
+    public FileMetadata withName(String newName) {
+        return java.util.Objects.equals(newName, name) ? this
+                : new FileMetadata(hash, newName, size, type, tags, sources);
+    }
+
     /** Returns metadata with the known total source count updated, preserving active client sources. */
     public FileMetadata withSourceCount(int count) {
         if (count < 0) throw new IllegalArgumentException("Source count cannot be negative");

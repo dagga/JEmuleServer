@@ -61,6 +61,32 @@ public class AdminInterfaceTest {
     }
 
     @Test
+    void serversBanUnbanAndBansCommands() {
+        org.jemule.security.ServerBans bans = new org.jemule.security.ServerBans();
+        org.mockito.Mockito.when(server.getServerBans()).thenReturn(bans);
+        org.mockito.Mockito.when(server.banServer(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+                .thenAnswer(call -> bans.ban(call.getArgument(0), call.getArgument(1), 0));
+        org.mockito.Mockito.when(server.unbanServer(org.mockito.ArgumentMatchers.any()))
+                .thenAnswer(call -> bans.unban(call.getArgument(0)));
+
+        admin.handleCommand("servers ban 192.0.2.10 fake files here");
+        verify(server).banServer(org.jemule.security.ServerBans.parse("192.0.2.10"), "fake files here");
+        assertTrue(outContent.toString().contains("Server 192.0.2.10 banned (all ports)."), outContent.toString());
+
+        admin.handleCommand("servers bans");
+        assertTrue(outContent.toString().contains("192.0.2.10") && outContent.toString().contains("(fake files here)"),
+                outContent.toString());
+
+        admin.handleCommand("servers ban example.org");
+        assertTrue(outContent.toString().contains("Usage: servers ban <IPv4 address> [reason]"), outContent.toString());
+
+        admin.handleCommand("servers unban 192.0.2.10");
+        assertTrue(outContent.toString().contains("Server 192.0.2.10 no longer banned."), outContent.toString());
+        admin.handleCommand("servers unban 192.0.2.10");
+        assertTrue(outContent.toString().contains("Server 192.0.2.10 was not banned."), outContent.toString());
+    }
+
+    @Test
     void testBanWithoutName() {
         admin.handleCommand("ban   ");
         verifyNoInteractions(fakeFileDetector, fileIndex);

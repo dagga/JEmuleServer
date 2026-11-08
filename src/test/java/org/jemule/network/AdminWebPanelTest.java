@@ -12,6 +12,7 @@ import org.jemule.kad.KadNode;
 import org.jemule.kad.KadRoutingTable;
 import org.jemule.security.FakeFileDetector;
 import org.jemule.security.IPFilter;
+import org.jemule.security.ServerBans;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetAddress;
@@ -282,6 +283,85 @@ class AdminWebPanelTest {
         }
     }
 
+    /** A form POST of {@code origin} (null: no Origin header). */
+    private static HttpResponse<String> post(AdminWebPanel panel, String path, String form, String origin)
+            throws Exception {
+        HttpRequest.Builder request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + panel.port() + path))
+                .header("Content-Type", "application/x-www-form-urlencoded")
+                .POST(HttpRequest.BodyPublishers.ofString(form));
+        if (origin != null) request.header("Origin", origin);
+        return HttpClient.newHttpClient().send(request.build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    private static HttpResponse<String> get(AdminWebPanel panel, String path) throws Exception {
+        return HttpClient.newHttpClient().send(HttpRequest.newBuilder(
+                URI.create("http://127.0.0.1:" + panel.port() + path)).GET().build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    @Test
+    void sameOriginCanBanListAndUnbanAServer() throws Exception {
+        Server server = mock(Server.class);
+        ServerBans bans = new ServerBans();
+        when(server.getServerBans()).thenReturn(bans);
+        when(server.banServer(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+                .thenAnswer(call -> bans.ban(call.getArgument(0), call.getArgument(1), 1_700_000_000_123L));
+        when(server.unbanServer(org.mockito.ArgumentMatchers.any()))
+                .thenAnswer(call -> bans.unban(call.getArgument(0)));
+        ServerGossip.ServerView view = new ServerGossip.ServerView("Listed", "verified",
+                ServerGossip.ServerSource.GOSSIP, new ServerGossip.Endpoint(InetAddress.getByName("198.51.100.9"), 4661),
+                null, null, null, null, null, null, false, null, null, null, 0);
+        when(server.getServerViews()).thenReturn(List.of(view));
+
+        try (AdminWebPanel panel = new AdminWebPanel(server)) {
+            panel.start(0);
+            String origin = "http://127.0.0.1:" + panel.port();
+            assertEquals("[]", get(panel, "/api/servers/bans").body());
+
+            HttpResponse<String> banned = post(panel, "/api/servers/ban", "ip=+192.0.2.10&reason=fake+files", origin);
+            assertEquals(200, banned.statusCode(), banned.body());
+            assertEquals("{\"banned\":\"192.0.2.10\"}", banned.body());
+            verify(server).banServer(ServerBans.parse("192.0.2.10"), "fake files");
+
+            HttpResponse<String> list = get(panel, "/api/servers/bans");
+            assertEquals(200, list.statusCode());
+            assertEquals("[{\"ip\":\"192.0.2.10\",\"reason\":\"fake files\",\"bannedAt\":1700000000123}]",
+                    list.body());
+            assertTrue(get(panel, "/api/servers").body().contains("\"banned\":false"), "the field of each server");
+
+            HttpResponse<String> unbanned = post(panel, "/api/servers/unban", "ip=192.0.2.10", origin);
+            assertEquals(200, unbanned.statusCode());
+            assertEquals("{\"unbanned\":\"192.0.2.10\",\"wasBanned\":true}", unbanned.body());
+            assertTrue(post(panel, "/api/servers/unban", "ip=192.0.2.10", origin).body()
+                    .contains("\"wasBanned\":false"));
+            assertEquals("[]", get(panel, "/api/servers/bans").body());
+        }
+    }
+
+    @Test
+    void aServerBanNeedsAnIpv4AddressAShortReasonAndTheSameOrigin() throws Exception {
+        Server server = mock(Server.class);
+        when(server.getServerBans()).thenReturn(new ServerBans());
+
+        try (AdminWebPanel panel = new AdminWebPanel(server)) {
+            panel.start(0);
+            String origin = "http://127.0.0.1:" + panel.port();
+            for (String form : List.of("", "ip=", "ip=example.org", "ip=192.0.2.300", "ip=192.0.2.1:4661", "ip=::1")) {
+                HttpResponse<String> response = post(panel, "/api/servers/ban", form, origin);
+                assertEquals(400, response.statusCode(), form);
+                assertTrue(response.body().contains("\"error\""), response.body());
+                assertEquals(400, post(panel, "/api/servers/unban", form, origin).statusCode(), form);
+            }
+            assertEquals(400, post(panel, "/api/servers/ban", "ip=192.0.2.1&reason=" + "x".repeat(241), origin)
+                    .statusCode());
+            assertEquals(403, post(panel, "/api/servers/ban", "ip=192.0.2.1", null).statusCode(), "no Origin");
+            assertEquals(403, post(panel, "/api/servers/ban", "ip=192.0.2.1", "https://attacker.example")
+                    .statusCode());
+            assertEquals(403, post(panel, "/api/servers/unban", "ip=192.0.2.1", null).statusCode());
+            verify(server, never()).banServer(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+            verify(server, never()).unbanServer(org.mockito.ArgumentMatchers.any());
+        }
+    }
+
     @Test
     void sameOriginCanUnbanAName() throws Exception {
         Server server = mock(Server.class);
@@ -364,6 +444,78 @@ class AdminWebPanelTest {
             assertEquals("admin ban.avi", lines[0]);
             assertEquals("name 11999.avi", lines[12_000]);
         }
+    }
+
+    @Test
+    void theNameCleaningApiListsAddsAndRemovesRulesAndRunsTheJob(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir)
+            throws Exception {
+        Server server = mock(Server.class);
+        try (org.jemule.core.DatabaseManager db = new org.jemule.core.DatabaseManager(dir.resolve("db").toString());
+             FileIndex index = new FileIndex(db);
+             AdminWebPanel panel = new AdminWebPanel(server)) {
+            db.saveFiles(List.of(new FileMetadata("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "Song [kad emule-qt.org].mp3", 1,
+                    "Audio")));
+            org.jemule.core.NameCleaner cleaner = org.jemule.core.NameCleaner.load(db);
+            index.setNameCleaner(cleaner);
+            org.jemule.core.NameCleaningJob job = new org.jemule.core.NameCleaningJob(db, index, cleaner);
+            when(server.getNameCleaner()).thenReturn(cleaner);
+            when(server.getNameCleaningJob()).thenReturn(job);
+            index.addFile(new FileMetadata("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "[web emule-qt.org] Clip.avi", 1, "Video"));
+            panel.start(0);
+            String base = "http://127.0.0.1:" + panel.port();
+
+            HttpResponse<String> listed = HttpClient.newHttpClient().send(HttpRequest.newBuilder(
+                    URI.create(base + "/api/namecleaning")).GET().build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, listed.statusCode());
+            assertTrue(listed.body().matches("\\{\"rules\":\\[\\{\"text\":\"emule-qt\\.org\",\"addedAt\":\\d+}],"
+                    + "\"cleanedAtIngestion\":1,\"job\":\\{\"state\":\"idle\",\"scanned\":0,\"renamed\":0,"
+                    + "\"startedAt\":0,\"finishedAt\":0,\"lastError\":\"\"}}"), listed.body());
+
+            HttpResponse<String> added = post(panel, "/api/namecleaning", "action=add&text=+%5BSome+Tag%5D+");
+            assertEquals(200, added.statusCode());
+            assertTrue(added.body().contains("{\"text\":\"[some tag]\",\"addedAt\":"), added.body());
+            assertTrue(added.body().contains("\"job\":{\"state\":\"idle\""), added.body());
+            assertEquals(List.of("emule-qt.org", "[some tag]"),
+                    db.loadNameCleaningRules().stream().map(r -> r.text()).toList(), "saved");
+
+            HttpResponse<String> removed = post(panel, "/api/namecleaning", "action=remove&text=%5Bsome+tag%5D");
+            assertEquals(200, removed.statusCode());
+            assertFalse(removed.body().contains("[some tag]"), removed.body());
+            assertEquals(1, db.loadNameCleaningRules().size());
+
+            assertEquals(400, post(panel, "/api/namecleaning", "action=add&text=+++").statusCode());
+            assertEquals(400, post(panel, "/api/namecleaning", "action=add&text=" + "x".repeat(121)).statusCode());
+            assertEquals(200, post(panel, "/api/namecleaning", "action=add&text=" + "x".repeat(120)).statusCode());
+            assertEquals(400, post(panel, "/api/namecleaning", "action=rename&text=abc").statusCode());
+            assertEquals(400, post(panel, "/api/namecleaning/apply", "action=pause").statusCode());
+
+            HttpResponse<String> started = post(panel, "/api/namecleaning/apply", "action=start");
+            assertEquals(200, started.statusCode());
+            assertTrue(started.body().startsWith("{\"state\":\""), started.body());
+            for (int i = 0; i < 300 && job.status().state() == org.jemule.core.NameCleaningJob.State.RUNNING; i++) {
+                Thread.sleep(20);
+            }
+            HttpResponse<String> stopped = post(panel, "/api/namecleaning/apply", "action=stop");
+            assertTrue(stopped.body().matches("\\{\"state\":\"done\",\"scanned\":2,\"renamed\":1,"
+                    + "\"startedAt\":\\d+,\"finishedAt\":\\d+,\"lastError\":\"\"}"), stopped.body());
+            assertEquals(List.of("Clip.avi", "Song.mp3"),
+                    db.loadFiles().stream().map(FileMetadata::name).sorted().toList());
+
+            HttpRequest crossOrigin = HttpRequest.newBuilder(URI.create(base + "/api/namecleaning/apply"))
+                    .header("Origin", "http://evil.example")
+                    .header("Content-Type", "application/x-www-form-urlencoded")
+                    .POST(HttpRequest.BodyPublishers.ofString("action=start")).build();
+            assertEquals(403, HttpClient.newHttpClient().send(crossOrigin, HttpResponse.BodyHandlers.ofString())
+                    .statusCode());
+        }
+    }
+
+    private static HttpResponse<String> post(AdminWebPanel panel, String path, String body) throws Exception {
+        return HttpClient.newHttpClient().send(HttpRequest.newBuilder(
+                        URI.create("http://127.0.0.1:" + panel.port() + path))
+                .header("Origin", "http://127.0.0.1:" + panel.port())
+                .header("Content-Type", "application/x-www-form-urlencoded")
+                .POST(HttpRequest.BodyPublishers.ofString(body)).build(), HttpResponse.BodyHandlers.ofString());
     }
 
     @Test
@@ -471,5 +623,116 @@ class AdminWebPanelTest {
         } finally {
             released.countDown();
         }
+    }
+
+    @Test
+    void theRootServesTheExportedPanelWithItsSecurityHeaders() throws Exception {
+        Server server = mock(Server.class);
+        try (AdminWebPanel panel = new AdminWebPanel(server)) {
+            panel.start(0);
+            HttpClient client = HttpClient.newHttpClient();
+            String base = "http://127.0.0.1:" + panel.port();
+            HttpResponse<String> page = client.send(HttpRequest.newBuilder(URI.create(base + "/")).GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, page.statusCode());
+            assertTrue(page.headers().firstValue("Content-Type").orElse("").startsWith("text/html"));
+            assertEquals("no-store", page.headers().firstValue("Cache-Control").orElse(""));
+            assertEquals("DENY", page.headers().firstValue("X-Frame-Options").orElse(""));
+            assertEquals("nosniff", page.headers().firstValue("X-Content-Type-Options").orElse(""));
+            String policy = page.headers().firstValue("Content-Security-Policy").orElse("");
+            assertTrue(policy.contains("frame-ancestors 'none'"), policy);
+            assertFalse(policy.matches(".*script-src[^;]*'unsafe-inline'.*"), "inline scripts by hash only: " + policy);
+            assertEquals(AdminWebPanel.pageSecurityPolicy(page.body()), policy);
+            assertTrue(page.body().contains("<title>JEmuleServer admin</title>"), page.body());
+
+            // Every script and stylesheet of the page is served from the root, with a long cache
+            java.util.regex.Matcher assets = java.util.regex.Pattern.compile("(?:src|href)=\"(/_next/static/[^\"]+)\"")
+                    .matcher(page.body());
+            int count = 0;
+            while (assets.find()) {
+                HttpResponse<String> asset = client.send(HttpRequest.newBuilder(URI.create(base + assets.group(1))).GET().build(),
+                        HttpResponse.BodyHandlers.ofString());
+                assertEquals(200, asset.statusCode(), assets.group(1));
+                assertTrue(asset.headers().firstValue("Cache-Control").orElse("").contains("immutable"), assets.group(1));
+                String type = asset.headers().firstValue("Content-Type").orElse("");
+                assertTrue(type.startsWith(assets.group(1).endsWith(".css") ? "text/css" : "text/javascript"), assets.group(1) + ": " + type);
+                count++;
+            }
+            assertTrue(count > 0, "no asset in the page");
+        }
+    }
+
+    @Test
+    void viewsAreDirectoriesOfTheExportAndUnknownPathsGetThe404Page() throws Exception {
+        Server server = mock(Server.class);
+        try (AdminWebPanel panel = new AdminWebPanel(server)) {
+            panel.start(0);
+            HttpClient client = HttpClient.newHttpClient();
+            String base = "http://127.0.0.1:" + panel.port();
+            HttpResponse<String> view = client.send(HttpRequest.newBuilder(URI.create(base + "/clients/")).GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, view.statusCode());
+            assertTrue(view.headers().firstValue("Content-Type").orElse("").startsWith("text/html"));
+
+            HttpResponse<String> head = client.send(HttpRequest.newBuilder(URI.create(base + "/clients/"))
+                    .method("HEAD", HttpRequest.BodyPublishers.noBody()).build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, head.statusCode());
+            assertEquals("", head.body());
+
+            HttpResponse<String> noSlash =client.send(HttpRequest.newBuilder(URI.create(base + "/settings")).GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(308, noSlash.statusCode());
+            assertEquals("/settings/", noSlash.headers().firstValue("Location").orElse(""));
+
+            HttpResponse<String> payload = client.send(HttpRequest.newBuilder(URI.create(base + "/clients/index.txt")).GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, payload.statusCode());
+            assertTrue(payload.headers().firstValue("Content-Type").orElse("").startsWith("text/plain"));
+
+            HttpResponse<String> unknown = client.send(HttpRequest.newBuilder(URI.create(base + "/no-such-view/")).GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(404, unknown.statusCode());
+            assertTrue(unknown.headers().firstValue("Content-Type").orElse("").startsWith("text/html"));
+            assertTrue(unknown.body().contains("Page not found"), unknown.body());
+
+            HttpResponse<String> missingFile = client.send(HttpRequest.newBuilder(URI.create(base + "/_next/static/missing.js")).GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(404, missingFile.statusCode());
+
+            // The API keeps its JSON answers
+            HttpResponse<String> api = client.send(HttpRequest.newBuilder(URI.create(base + "/api/missing")).GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(404, api.statusCode());
+            assertTrue(api.body().contains("\"error\":\"Not found\""), api.body());
+            assertTrue(api.headers().firstValue("Content-Type").orElse("").startsWith("application/json"));
+
+            HttpResponse<String> post = client.send(HttpRequest.newBuilder(URI.create(base + "/"))
+                    .header("Origin", base).header("Content-Type", "application/x-www-form-urlencoded")
+                    .POST(HttpRequest.BodyPublishers.ofString("")).build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(404, post.statusCode(), "the panel's files are only read");
+        }
+    }
+
+    @Test
+    void thePanelFilesStayInsideTheExport() {
+        assertEquals("index.html", AdminWebPanel.uiResource("/"));
+        assertEquals("clients/index.html", AdminWebPanel.uiResource("/clients/"));
+        assertEquals("_next/static/chunks/a.js", AdminWebPanel.uiResource("/_next/static/chunks/a.js"));
+        assertEquals(null, AdminWebPanel.uiResource("/../server.properties"));
+        assertEquals(null, AdminWebPanel.uiResource("/clients/../../x.html"));
+        assertEquals(null, AdminWebPanel.uiResource("/a\\b.js"));
+        assertTrue(AdminWebPanel.contentType("x/y.woff2").equals("font/woff2"));
+        assertTrue(AdminWebPanel.contentType("icon.svg").equals("image/svg+xml"));
+    }
+
+    @Test
+    void inlineScriptsAreAllowedByTheirHash() throws Exception {
+        String script = "self.__next_f.push([1,\"x\"])";
+        String hash = java.util.Base64.getEncoder().encodeToString(java.security.MessageDigest.getInstance("SHA-256")
+                .digest(script.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        String policy = AdminWebPanel.pageSecurityPolicy("<html><script src=\"/_next/static/a.js\" async></script>"
+                + "<script>" + script + "</script></html>");
+        assertTrue(policy.contains("script-src 'self' 'sha256-" + hash + "';"), policy);
+        assertTrue(policy.contains("frame-ancestors 'none'"), policy);
     }
 }

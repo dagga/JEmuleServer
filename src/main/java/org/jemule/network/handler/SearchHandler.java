@@ -242,8 +242,10 @@ public class SearchHandler {
      */
     private void sendSearchResults(ClientContext context, List<FileMetadata> results, boolean moreAvailable, OutputStream out) throws IOException {
         // Last check before the client: whatever channel a file came from, a name matching the child abuse filter
-        // is never sent
-        results = results.stream().filter(m -> !context.getFileIndex().isChildAbuse(m.hash(), m.name())).toList();
+        // is never sent, and the others go with their name cleaned (Kad, server and relay results are not all
+        // ingested, and the files indexed before a cleaning rule keep their name until they are renamed)
+        results = results.stream().filter(m -> !context.getFileIndex().isChildAbuse(m.hash(), m.name()))
+                .map(context.getFileIndex()::cleanedForClient).toList();
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         // <count 4> is little-endian like every ed2k integer (CSearchList::ProcessSearchAnswer)
         baos.writeBytes(ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(results.size()).array());

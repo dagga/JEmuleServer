@@ -33,6 +33,8 @@ public enum ConfigParameter {
             "Maximum incoming packet size in bytes"),
     MAX_SEARCH_RESULTS("maxSearchResults", Type.INTEGER, Scope.HOT, 1, 100_000,
             "Maximum search results returned per request"),
+    REMOTE_SEARCH_CACHE_MINUTES("remoteSearchCacheMinutes", Type.INTEGER, Scope.HOT, 0, 1440,
+            "Minutes the results of a Kad or eD2K server search are reused for the same search (0 = disabled)"),
     FLOOD_MAX_REQUESTS_PER_SECOND("floodMaxRequestsPerSecond", Type.INTEGER, Scope.HOT, 1, 1_000_000,
             "Flood protection: requests per second allowed per IP"),
     MAX_USERS("maxUsers", Type.INTEGER, Scope.HOT, 1, 1_000_000_000, "Maximum concurrent users"),

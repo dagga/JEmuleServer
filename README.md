@@ -1,9 +1,9 @@
 # JEmuleServer
 
-JEmuleServer is an eMule server written in Java (version 1.5.4).
+JEmuleServer is an eMule server written in Java (version 1.6).
 
 Downloads (installers and JAR) are on the [releases page](https://github.com/dagga/JEmuleServer/releases); the changes
-of each version are described in `doc/release-notes-v<version>.md` (latest: [1.5.4](doc/release-notes-v1.5.4.md)).
+of each version are described in `doc/release-notes-v<version>.md` (latest: [1.6](doc/release-notes-v1.6.md)).
 
 ## Why this project?
 
@@ -27,7 +27,24 @@ Building requires a JDK 25 (Gradle toolchain; Gradle downloads it when the machi
 ./gradlew build
 ```
 
-The JAR file will be generated in `build/libs/JEmuleServer-1.5.4.jar`.
+The JAR file will be generated in `build/libs/JEmuleServer-1.6.jar`.
+
+The admin web panel is a [Next.js](https://nextjs.org/) app in `admin-ui/` (TypeScript, React), exported as static
+files and packaged in the JAR under `admin-ui/`. Node.js is not needed on the machine: the Gradle build downloads a
+pinned Node.js LTS and npm into `.gradle/` (plugin `com.github.node-gradle.node`), runs `npm ci` from the committed
+`package-lock.json`, then `next build` (task `buildAdminUi`, output `admin-ui/out`) before `processResources`. Both
+steps are skipped while `admin-ui/` is unchanged. The first build needs access to nodejs.org and the npm registry.
+
+To work on the panel, start a server, then the Next.js development server, which sends `/api/*` to that server
+(rewriting `Host` and `Origin` so that its checks accept the requests):
+
+```bash
+cd admin-ui
+npm ci
+JEMULE_ADMIN_URL=http://127.0.0.1:8080 npm run dev   # http://localhost:3000/
+```
+
+`npm run build` writes the static export to `admin-ui/out`; `npm run typecheck` checks the types.
 
 ## Installation from the release packages
 
@@ -70,7 +87,7 @@ Once the project is compiled, you can start the server with the following comman
 client thread blocked in a `synchronized` block holds its carrier thread, which on one CPU stalls every client):
 
 ```bash
-java -XX:MaxRAMPercentage=75 -XX:ThreadPriorityPolicy=1 --add-modules=jdk.httpserver -jar build/libs/JEmuleServer-1.5.4.jar [config_file] [port]
+java -XX:MaxRAMPercentage=75 -XX:ThreadPriorityPolicy=1 --add-modules=jdk.httpserver -jar build/libs/JEmuleServer-1.6.jar [config_file] [port]
 ```
 
 - `-XX:ThreadPriorityPolicy=1`: on Linux, the JVM ignores thread priorities without it. The server runs its threads
@@ -462,6 +479,69 @@ Up to 1.2.23 the server banned hashes (`banned_hashes`), nearly all written by t
 that table at its first start (database schema version 3): its hashes cannot be turned into names, the banned files
 having been deleted, and the child abuse filter rejects the same names each time they come back.
 
+## Banned eD2K servers
+
+The administrator can ban an eD2K server by its IPv4 address, all its ports. A banned server is dropped at once from
+the known and verified servers, then never probed, verified, listed (to the clients or to other servers), searched,
+asked for sources or used by the index update. Its UDP server traffic (status requests, global searches,
+registrations, server lists) is dropped silently, and its TCP sessions are refused like a client's: a server connects
+as a client for its relay and index update sessions, and its open sessions are closed by the ban. A configured
+`serverPeers` entry or the `relayServer` may be banned too: the ban wins, with a warning in the log, and relay mode is
+off while the relay server is banned. Lifting a ban lets the server be discovered and verified again (a configured
+peer at the next start); the relay server is used again at once.
+
+The bans are kept in the `banned_servers` table (`ip`, `reason`, `banned_at`) of H2 or MySQL, loaded at startup. The
+admin API:
+
+- `GET /api/servers/bans`: the banned servers, the most recent first, `[{"ip": "192.0.2.10", "reason": "...",
+  "bannedAt": <epoch milliseconds>}]`; `GET /api/servers` also gives a `banned` field for each known server.
+- `POST /api/servers/ban` (form-encoded `ip=<IPv4>&reason=<optional, up to 240 characters>`): `{"banned": "<ip>"}`,
+  400 when the address is not a dotted IPv4 address (host names are not resolved).
+- `POST /api/servers/unban` (form-encoded `ip=<IPv4>`): `{"unbanned": "<ip>", "wasBanned": true|false}`.
+
+Like the other POST requests of the panel, they need the panel's own `Origin` header. The CLI has `servers ban <ip>
+[reason]`, `servers unban <ip>` and `servers bans`.
+
+## File name cleaning
+
+Some clients and servers alter the names of the files they relay by adding a text, such as
+`[kad emule-qt.org] The Matrix Resurrections - Dual.avi`, `[torrent emule-qt.org] ...` or
+`Viktor Kane - Sin testigos [kad emule-qt.org].epub`. The server gives these files their original name back.
+
+A rule is a text, compared without case. Each group between brackets (`[...]`, `(...)` or `{...}`) holding it is
+removed with its brackets, and so is the text itself where it stands outside such a group. The spaces are then tidied
+up: a run of spaces becomes one, and the spaces, underscores and dashes left dangling at the start or the end of the
+name before its extension go (`[kad emule-qt.org] - Song.mp3` becomes `Song.mp3`; a dash stuck to a word, as in
+`-=Title=-`, stays). The extension is never changed. A name holding no rule is never touched, and a name that would be
+empty or invalid once cleaned (`[kad emule-qt.org].mp3`) keeps its original name.
+
+The rule `emule-qt.org` is written at the first start; once removed, it is not written again. The rules are kept in
+lower case in the `name_cleaning_rules` table (H2 and MySQL alike) and in memory.
+
+Where the rules apply:
+
+- **Ingestion**: `FileIndex.addFile` and `FileIndex.addFiles` are the single way in of every channel (client publishing,
+  OFFERFILES v1, Kad and server searches, index update, relay feed). They clean each file there, before it is indexed,
+  saved in the database or handed to the relay server in relay mode.
+- **Search results**: every result sent to a client (TCP `OP_SEARCHRESULT` and UDP `OP_GLOBSEARCHRES`) goes with its
+  name cleaned, including the Kad, server and relay results that are not ingested.
+- **Files already indexed**: an admin action renames them. The files table is read 20,000 files at a time in hash
+  order, the database selecting those whose name holds a rule (`LOWER(name) LIKE '%rule%'`); each one is renamed in the
+  Lucene index (its whole document rewritten, so that the searches find its new words; its hash, size, type, tags and
+  source count stay) and in the database, one transaction per window. It runs on a thread of the ingestion tier, one
+  run at a time, and stops by a flag between two windows (never by an interrupt, which would close the H2 file channel).
+
+The admin web panel API (admin IP filter, and a same-origin `Origin` header for POST, as for the other endpoints):
+
+| Request | Answer |
+|---------|--------|
+| `GET /api/namecleaning` | `{"rules":[{"text":"emule-qt.org","addedAt":<epoch ms>}],"cleanedAtIngestion":<files cleaned since the start>,"job":{...}}` |
+| `POST /api/namecleaning` with `action=add&text=<rule>` or `action=remove&text=<rule>` | the `GET` object; 400 for an empty rule or one longer than 120 characters |
+| `POST /api/namecleaning/apply` with `action=start` or `action=stop` | the job object |
+
+The job object is `{"state":"idle|running|done|stopped|failed","scanned":<files read>,"renamed":<files renamed>,
+"startedAt":<epoch ms>,"finishedAt":<epoch ms>,"lastError":""}`, 0 for a date not reached yet.
+
 ## HighID / LowID
 
 At login, the server connects back to the TCP port announced by the client and sends an `OP_HELLO`. The client gets
@@ -488,6 +568,12 @@ that brings this content to its clients without exposing them to illicit files:
   seconds (under the 3 requests a minute a node accepts), while its pages come back full, until the search has kept
   60,000 results from all its nodes (files with at least `kadMinSourcesForIngest` sources that pass the filters).
   These files only go to the index; the Searches view counts these background pages.
+- **Word searches for the index**: Kad indexes files by word, so the other words of a search, of at least 5
+  characters (5 at most, longest first, never the words of excluded terms nor a word the child abuse filter matches),
+  are then searched alone in their own keyword index, in the background. The client neither waits for them nor gets
+  their files: their clean files only go to the index, even those not matching the search. These searches wait in a
+  queue of 100 words (further words are dropped), 2 at a time and 20 a minute at most, and are counted in the admin
+  overview (`kadWordSearches`) and `kad stats`.
 - **Flood limits**: the server never sends a Kad node more requests than the node accepts per minute from one IP, so
   that the nodes neither drop its requests nor ban it.
 - **Filtering**: every file returned by Kad goes through the [child abuse filter](#child-abuse-filter), the banned
@@ -520,6 +606,16 @@ server that cannot reach Kad answers as fast as without it.
 Searches are also forked to the verified eD2K servers (UDP global search). A server answers it with its first 10 to
 30 matches only, and UDP has no "More" request: when a server returns a full answer, the search is repeated on it once
 per file type (at most 4 times per minute and per server), which returns about five times as many files.
+
+**Remote search cache.** A search already played on Kad or on the other eD2K servers within the last
+`remoteSearchCacheMinutes` (15 by default, applied without restart; 0 disables the cache) is not played again: the
+client gets the clean results found then at once, and they are not ingested again. The same search arriving while it
+is still running waits for it instead of starting another one. Searches are compared in a normalized form, so that
+two clients encoding the same search differently share the results: words in lower case and split as the index splits
+them (`Linux ISO` is the same as `iso` AND `linux`), the operands of AND and OR in any order. Each network keeps at most
+2,000 searches, 1,000 files per search and 30,000 files in all, the oldest forgotten first; an empty answer is not
+kept. The Overview's `searches` figures count the hits, misses (searches played) and joins (`kadCacheHits`,
+`serverCacheHits`...).
 
 ### Index update from eD2K index peers
 
@@ -632,7 +728,11 @@ on the relay server, the Overview shows the new files the relays brought.
 ## Administration Interface
 
 JEmuleServer includes a built-in web panel and a command-line interface (CLI). The web panel is enabled by default at
-`http://127.0.0.1:8080/` and is bound to loopback only.
+`http://127.0.0.1:8080/` and is bound to loopback only. It is a static app served from the JAR (no external resource:
+it works on a LAN without Internet access) that reads the JSON API of the same port (`/api/*`). It fits any screen
+from a phone to a wide monitor: the views are in a side bar (a bar of tabs on narrow screens), tables scroll inside
+their box with a fixed header, long names and hashes are cut with an ellipsis and shown in full on hover, and the
+columns can be sorted.
 
 It opens on an **Overview**: the number of indexed files with its change over 24 hours and 7 days, the index capacity
 against `maxFiles` and the heap guard, and tiles for the connected clients (with their LowID share), the heap, the verified eD2K servers,
@@ -648,7 +748,10 @@ follows the light or dark theme of the system.
 The other views show server status, searchable clients, verified named
 server peers, a monitoring view of every known eD2K server and its state, active filters, potential bot-name matches,
 the banned file names, an ingestion breakdown of new database files by channel, Kad and eD2K server search counters
-(queries sent and results returned), and runtime settings. The bot list is
+(queries sent and results returned), and runtime settings. On a server that has them, the Servers view also bans a
+server (with a reason) and lists the banned servers to unban them, and a **Name cleaning** view manages the texts
+removed from file names, with the files cleaned at ingestion and a job that applies the rules to the files already
+indexed (progress, stop); the Remote searches tile then also shows the cache hits of the Kad and server searches. The bot list is
 only a nickname heuristic; it does not verify or automatically block clients. From the panel you can disconnect a
 client, ban or unban a file name, export the banned names, reload the IP filter, and edit any `server.properties` parameter. Settings whose scope is
 `hot` (limits, timeouts, flood protection, fake-file detection) take effect immediately; `admin` settings rebuild the
@@ -656,6 +759,9 @@ admin interfaces; `restart` settings are written to the file and shown as pendin
 its current value. Saving updates the
 file in place (comments and key order are preserved) and **Reload from file** applies external edits without a restart.
 Nothing is applied when a value is invalid.
+
+The panel's pages carry a Content Security Policy that only allows the scripts of the panel (its inline scripts by
+their SHA-256 hash) and forbids framing; its changes are same-origin form posts whose `Origin` header the server checks.
 
 The web panel has no password: any local user who can reach loopback can administer the server. Do not expose it through
 a reverse proxy, tunnel, or port forward. Set `adminWebPort=0` in `server.properties` to disable it, or change the port
@@ -685,6 +791,8 @@ Available commands:
 - `peers`: Lists verified server peers and their names.
 - `servers`: Monitors every known eD2K server (configured, server.met, client-reported or gossip-discovered) with its
   state (candidate, probing, verified, rejected), source, reported users/files/limits, probe latency and missed probes.
+- `servers ban <ip> [reason]`, `servers unban <ip>`, `servers bans`: Bans an eD2K server (all its ports), lifts its
+  ban, lists the banned servers (see [Banned eD2K servers](#banned-ed2k-servers)).
 - `ingestion`: Shows the number and share of new database files by ingestion channel (client push, Kad search,
   eD2K server search) since the server started.
 - `searches`: Shows, for Kad and eD2K servers, the search queries forked, requests sent, results returned, files

@@ -86,13 +86,15 @@ final class H2ToMySqlImport {
             long stats = copyStats(h2);
             long samples = copyMetrics(h2);
             long names = copyBannedNames(h2);
+            long servers = copyBannedServers(h2);
             long[] files = copyFiles(h2, state == IN_PROGRESS);
             setState(DONE);
             logger.info("H2 database imported into MySQL in {} s: {} files, {} tags, {} source counts, {} banned names, "
-                            + "{} metrics samples, {} statistics. {} is no longer used: keep it as a backup or delete it",
+                            + "{} banned servers, {} metrics samples, {} statistics. {} is no longer used: keep it as a "
+                            + "backup or delete it",
                     (System.currentTimeMillis() - start) / 1000, String.format("%,d", files[0]),
                     String.format("%,d", files[1]), String.format("%,d", files[2]), String.format("%,d", names),
-                    String.format("%,d", samples), stats, h2File);
+                    servers, String.format("%,d", samples), stats, h2File);
         } catch (SQLException e) {
             logger.error("Import of the H2 database {} into MySQL failed (resumed at the next start): {}", h2File,
                     e.getMessage(), e);
@@ -168,6 +170,24 @@ final class H2ToMySqlImport {
         if (tooLong > 0) {
             logger.warn("H2 import: {} banned names longer than {} characters left out", tooLong,
                     sql.maxBannedNameLength());
+        }
+        return rows;
+    }
+
+    /** The servers banned by the administrator, with their reason and date. */
+    private long copyBannedServers(Connection h2) throws SQLException {
+        long rows = 0;
+        try (Statement select = h2.createStatement();
+             ResultSet rs = select.executeQuery("SELECT ip, reason, banned_at FROM banned_servers");
+             PreparedStatement merge = mysql.prepareStatement(sql.mergeBannedServer())) {
+            while (rs.next()) {
+                merge.setString(1, rs.getString(1));
+                merge.setString(2, rs.getString(2));
+                merge.setString(3, DatabaseManager.mySqlTimestamp(rs.getTimestamp(3)));
+                merge.addBatch();
+                rows++;
+            }
+            merge.executeBatch();
         }
         return rows;
     }

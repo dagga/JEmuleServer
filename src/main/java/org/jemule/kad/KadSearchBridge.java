@@ -23,6 +23,7 @@ import org.jemule.core.FileIndex;
 import org.jemule.core.FileSource;
 import org.jemule.core.IngestionExecutor;
 import org.jemule.core.RecentQueries;
+import org.jemule.core.RemoteSearchCache;
 import org.jemule.core.ServerThreads;
 import org.jemule.core.FileMetadata;
 import org.jemule.core.SearchQuery;
@@ -53,6 +54,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.LongSupplier;
 
 /**
  * Asynchronous search bridge that forks incoming ed2k search queries to the Kademlia DHT.
@@ -91,6 +93,16 @@ public class KadSearchBridge implements AutoCloseable {
     public static final long REPLAY_WINDOW_MS = 10 * 60_000L;
     /** Times an identical search is sent at most within {@link #REPLAY_WINDOW_MS}. */
     public static final int MAX_REPLAYS = 3;
+    /** Other words of one client search searched at most on Kad in the background, for the index. */
+    public static final int MAX_WORD_SEARCHES = 5;
+    /** Characters a word needs to be searched in the background (shorter words have too large an index). */
+    public static final int MIN_WORD_CHARS = 5;
+    /** Words waiting for their background search at most; the words of the next client searches are dropped. */
+    static final int MAX_QUEUED_WORD_SEARCHES = 100;
+    /** Background word searches running at the same time at most. */
+    static final int MAX_CONCURRENT_WORD_SEARCHES = 2;
+    /** Background word searches started per minute at most. */
+    static final int MAX_WORD_SEARCHES_PER_MINUTE = 20;
     private static final int MAX_RECENT_QUERIES = 5_000;
 
     private final KadRoutingTable routingTable;
@@ -112,6 +124,16 @@ public class KadSearchBridge implements AutoCloseable {
     private final List<IllicitFileListener> illicitListeners = new CopyOnWriteArrayList<>();
 
     private final AtomicLong searchesForked = new AtomicLong(0);
+    /** Background keyword searches started for the other words of the client searches. */
+    private final AtomicLong wordSearches = new AtomicLong(0);
+    /** Words of the client searches not searched because the background queue was full. */
+    private final AtomicLong wordSearchesDropped = new AtomicLong(0);
+    /** Words of the client searches waiting for their background search, in arrival order. */
+    private final java.util.concurrent.BlockingQueue<String> queuedWords =
+            new java.util.concurrent.LinkedBlockingQueue<>(MAX_QUEUED_WORD_SEARCHES);
+    private final AtomicInteger runningWordSearches = new AtomicInteger();
+    /** Start times of the background word searches of the last minute. */
+    private final java.util.ArrayDeque<Long> wordSearchStarts = new java.util.ArrayDeque<>();
     private final AtomicLong requestsSent = new AtomicLong(0);
     private final AtomicLong resultsReceived = new AtomicLong(0);
     private final AtomicLong illicitFilesBlocked = new AtomicLong(0);
@@ -131,6 +153,15 @@ public class KadSearchBridge implements AutoCloseable {
 
     private volatile boolean running = false;
     private volatile RecentQueries recentQueries = new RecentQueries(REPLAY_WINDOW_MS, MAX_REPLAYS, MAX_RECENT_QUERIES);
+    /** Time to live of the results of a search (remoteSearchCacheMinutes), read at every search. */
+    private volatile LongSupplier resultCacheTtlMs = () -> RemoteSearchCache.ttlMs(RemoteSearchCache.DEFAULT_MINUTES);
+    /** The same search played within the time to live gets the results found then, without a new Kad search. */
+    private final RemoteSearchCache resultCache = new RemoteSearchCache(() -> resultCacheTtlMs.getAsLong());
+    /**
+     * Words searched in the background, once per {@link #REPLAY_WINDOW_MS}: kept apart from the client searches,
+     * whose replays they must not use up.
+     */
+    private volatile RecentQueries recentWords = new RecentQueries(REPLAY_WINDOW_MS, 1, MAX_RECENT_QUERIES);
 
     @FunctionalInterface
     public interface IllicitFileListener {
@@ -165,6 +196,8 @@ public class KadSearchBridge implements AutoCloseable {
         /** Paging state of each queried contact. */
         private final Map<InetSocketAddress, NodePages> pages = new ConcurrentHashMap<>();
         private final CompletableFuture<List<FileMetadata>> future = new CompletableFuture<>();
+        /** Whether the nodes still full when the search ends are read on in the background. */
+        private volatile boolean followPages;
 
         public KadSearchSession(KadId targetId, String keyword) {
             this(targetId, keyword, null);
@@ -191,6 +224,14 @@ public class KadSearchBridge implements AutoCloseable {
 
         public byte[] searchTerms() {
             return searchTerms;
+        }
+
+        void followPages() {
+            followPages = true;
+        }
+
+        boolean followsPages() {
+            return followPages;
         }
 
         void addQueried(InetAddress address, int port) {
@@ -330,6 +371,13 @@ public class KadSearchBridge implements AutoCloseable {
                 log.debug("Kad background pages: {}", e.getMessage());
             }
         }, 5, 5, java.util.concurrent.TimeUnit.SECONDS);
+        pageTicker.scheduleWithFixedDelay(() -> {
+            try {
+                startQueuedWordSearches(System.currentTimeMillis());
+            } catch (RuntimeException e) {
+                log.debug("Kad background word searches: {}", e.getMessage());
+            }
+        }, 1, 1, java.util.concurrent.TimeUnit.SECONDS);
         log.info("KadSearchBridge started (alpha: {}, timeout: {}ms)", alphaNodes, searchTimeoutMs);
     }
 
@@ -337,16 +385,83 @@ public class KadSearchBridge implements AutoCloseable {
      * Forks a SearchQuery to the Kademlia DHT asynchronously. The longest word every result must contain selects
      * the keyword index, and the whole query is sent along (restrictive search), so that the index holders only
      * count matching entries in the 300 they return.
+     * <p>
+     * Kad indexes files by word: the other words of the query, of at least {@link #MIN_WORD_CHARS} characters
+     * ({@link #MAX_WORD_SEARCHES} at most, longest first), are queued to be searched alone later, in the background.
+     * Their files only go to the index when clean, even those not matching the query: the client never waits for
+     * them nor gets them. A query matching the child abuse filter is never sent, nor any word the filter matches.
      *
      * @param query The parsed SearchQuery.
      * @return A CompletableFuture providing discovered files, or completing with an empty list if not applicable.
      */
     public CompletableFuture<List<FileMetadata>> forkSearch(SearchQuery query) {
-        String keyword = query == null ? null : KadSearchTerms.keyword(query);
+        if (query == null || abuseFilter.matches(SearchQuery.terms(query))) {
+            return CompletableFuture.completedFuture(List.of());
+        }
+        // A search played within remoteSearchCacheMinutes is not played again: its clean results are returned, and
+        // not ingested again. The same search still running is joined. Its other words were queued when it was played
+        return resultCache.search(RemoteSearchCache.key(query), () -> playSearch(query));
+    }
+
+    /** Plays {@code query} on Kad, without the result cache, and queues its other words for the background. */
+    private CompletableFuture<List<FileMetadata>> playSearch(SearchQuery query) {
+        String keyword = KadSearchTerms.keyword(query);
         if (keyword == null) {
             return CompletableFuture.completedFuture(List.of());
         }
-        return forkSearch(keyword, KadSearchTerms.encode(query, keyword), query.toString());
+        CompletableFuture<List<FileMetadata>> search = abuseFilter.matches(keyword) ? null
+                : forkWordSearch(keyword, KadSearchTerms.encode(query, keyword), query.toString(), true,
+                        ServerThreads.Tier.SEARCH, recentQueries);
+        if (running) queueWordSearches(query, keyword);
+        if (search == null) {
+            return CompletableFuture.completedFuture(List.of());
+        }
+        searchesForked.incrementAndGet();
+        return search;
+    }
+
+    /** Queues the other words of a client search for their background search, dropping them when the queue is full. */
+    private void queueWordSearches(SearchQuery query, String searched) {
+        int words = 0;
+        for (String word : KadSearchTerms.keywords(query)) {
+            if (words == MAX_WORD_SEARCHES) break;
+            if (word.equals(searched) || word.codePointCount(0, word.length()) < MIN_WORD_CHARS
+                    || abuseFilter.matches(word)) {
+                continue;
+            }
+            words++;
+            if (!queuedWords.contains(word) && !queuedWords.offer(word)) wordSearchesDropped.incrementAndGet();
+        }
+    }
+
+    /**
+     * Starts the background searches of the queued words, within {@link #MAX_CONCURRENT_WORD_SEARCHES} at once and
+     * {@link #MAX_WORD_SEARCHES_PER_MINUTE} a minute, on the ingestion tier: they only feed the index.
+     */
+    void startQueuedWordSearches(long now) {
+        if (!running) return;
+        if (fileIndex != null && fileIndex.isFull()) {
+            queuedWords.clear(); // no room for their files
+            return;
+        }
+        synchronized (wordSearchStarts) {
+            while (!wordSearchStarts.isEmpty() && now - wordSearchStarts.peekFirst() >= 60_000) {
+                wordSearchStarts.pollFirst();
+            }
+            while (runningWordSearches.get() < MAX_CONCURRENT_WORD_SEARCHES
+                    && wordSearchStarts.size() < MAX_WORD_SEARCHES_PER_MINUTE) {
+                String word = queuedWords.poll();
+                if (word == null) return;
+                // A word already searched in the background within the replay window is not sent again
+                CompletableFuture<List<FileMetadata>> search = forkWordSearch(word, null, word, false,
+                        ServerThreads.Tier.INGESTION, recentWords);
+                if (search == null) continue;
+                wordSearchStarts.addLast(now);
+                wordSearches.incrementAndGet();
+                runningWordSearches.incrementAndGet();
+                search.whenComplete((files, error) -> runningWordSearches.decrementAndGet());
+            }
+        }
     }
 
     /**
@@ -359,9 +474,20 @@ public class KadSearchBridge implements AutoCloseable {
         return forkSearch(new SearchQuery.TermQuery(keyword, SearchQuery.ID_FILENAME));
     }
 
-    private CompletableFuture<List<FileMetadata>> forkSearch(String keyword, byte[] searchTerms, String description) {
+    /**
+     * Searches one keyword index, sharing the session of an identical search in progress.
+     *
+     * @param followPages whether the nodes still full at the end are read on in the background
+     * @param tier        the priority of the search's thread
+     * @param recent      the searches sent lately, which may keep this one from being sent again
+     * @return the files the index holders returned that passed the filters, or null when the search is not sent
+     *         (bridge stopped, or the same search sent too often lately)
+     */
+    private CompletableFuture<List<FileMetadata>> forkWordSearch(String keyword, byte[] searchTerms,
+                                                                 String description, boolean followPages,
+                                                                 ServerThreads.Tier tier, RecentQueries recent) {
         if (!running) {
-            return CompletableFuture.completedFuture(List.of());
+            return null;
         }
         KadId keywordHash = KadId.fromKeyword(keyword);
         SessionKey key = new SessionKey(keywordHash, searchTerms == null ? "" : HexFormat.of().formatHex(searchTerms));
@@ -370,11 +496,12 @@ public class KadSearchBridge implements AutoCloseable {
         // requests are sent, so that an immediate answer finds it.
         KadSearchSession created = new KadSearchSession(keywordHash, description, searchTerms);
         KadSearchSession existing = activeSessions.putIfAbsent(key, created);
-        if (existing == null && !recentQueries.tryStart(key.target().toHexString() + ':' + key.searchTerms())) {
+        if (existing == null && !recent.tryStart(key.target().toHexString() + ':' + key.searchTerms())) {
             activeSessions.remove(key, created);
-            return CompletableFuture.completedFuture(List.of());
+            return null;
         }
         KadSearchSession session = existing != null ? existing : created;
+        if (followPages) session.followPages();
         if (existing == null) {
             if (routingTable.findClosest(keywordHash, 1).isEmpty()) {
                 // Isolated DHT: no contact can be queried, the search is over at once
@@ -383,7 +510,7 @@ public class KadSearchBridge implements AutoCloseable {
             } else {
                 // Keyword searches must first walk the DHT towards the keyword hash: the nodes responsible for the
                 // keyword index are the K closest to it, which are almost never already in our routing table.
-                ServerThreads.start(ServerThreads.Tier.SEARCH, "KadSearch-" + keywordHash.toHexString(), () -> {
+                ServerThreads.start(tier, "KadSearch-" + keywordHash.toHexString(), () -> {
                     try {
                         // The lookup is part of the search timeout, which bounds how long the client waits
                         long deadline = System.currentTimeMillis() + searchTimeoutMs;
@@ -402,14 +529,15 @@ public class KadSearchBridge implements AutoCloseable {
                         long now = System.currentTimeMillis();
                         // The results the search kept: at least the sources required, and clean
                         int kept = created.getResults().size();
-                        created.capped().forEach((node, next) -> pageFollower.follow(created.targetId(),
-                                created.searchTerms(), node, next, kept, now));
+                        if (created.followsPages()) {
+                            created.capped().forEach((node, next) -> pageFollower.follow(created.targetId(),
+                                    created.searchTerms(), node, next, kept, now));
+                        }
                     }
                 });
             }
         }
 
-        searchesForked.incrementAndGet();
         return session.future();
     }
 
@@ -831,13 +959,39 @@ public class KadSearchBridge implements AutoCloseable {
         return recentQueries.skipped();
     }
 
+    /** Changes the time to live of the results of a search (0 or less: every search is played on Kad). */
+    public void setResultCacheTtl(LongSupplier ttlMs) {
+        this.resultCacheTtlMs = ttlMs == null ? () -> 0L : ttlMs;
+    }
+
+    /** The results of the searches played recently, with their hit, miss and join counters. */
+    public RemoteSearchCache getResultCache() {
+        return resultCache;
+    }
+
     /** Changes the time during which an identical search is sent at most {@link #MAX_REPLAYS} times (0: always sent). */
     public void setReplayWindowMs(long windowMs) {
         this.recentQueries = new RecentQueries(windowMs, MAX_REPLAYS, MAX_RECENT_QUERIES);
+        this.recentWords = new RecentQueries(windowMs, 1, MAX_RECENT_QUERIES);
     }
 
     public long getSearchesForked() {
         return searchesForked.get();
+    }
+
+    /** Background keyword searches started since the start for the other words of the client searches. */
+    public long getWordSearches() {
+        return wordSearches.get();
+    }
+
+    /** Words of the client searches not searched since the start because the background queue was full. */
+    public long getWordSearchesDropped() {
+        return wordSearchesDropped.get();
+    }
+
+    /** Words waiting for their background search. */
+    public int getQueuedWordSearches() {
+        return queuedWords.size();
     }
 
     public long getRequestsSent() {
@@ -912,8 +1066,10 @@ public class KadSearchBridge implements AutoCloseable {
         running = false;
         if (pageTicker != null) pageTicker.shutdownNow();
         pageFollower.clear();
+        queuedWords.clear();
         activeSessions.values().forEach(KadSearchSession::complete);
         activeSessions.clear();
+        resultCache.clear();
         pendingLookups.values().forEach(lookup -> lookup.done.complete(null));
         pendingLookups.clear();
         closestNodes.clear();
