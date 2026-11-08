@@ -194,28 +194,32 @@ final class AdminWebPanel implements AutoCloseable {
               notice.textContent='';
               meta.textContent='v'+o.version+' · up '+duration(o.uptimeSeconds)+' · updated '+clock(Date.now());
               const f=o.files,c=o.clients,m=o.memory,s=o.searches,v=o.offerFilesV1,k=o.kadSources||{},ss=o.serverSources||{},iu=o.serverIndexUpdate||{},r=o.relay||{},rf=o.relayFeed||{},rr=o.relayFeedReceived||{};
-              $('#heroFiles').innerHTML='<div class="label">Indexed files</div><div class="big">'+fmt(f.indexed)+'</div><div class="deltas">'+
-                delta(f.indexed,f.ago24h,'in 24 h')+delta(f.indexed,f.ago7d,'in 7 days')+'</div><div class="sub" style="margin-top:6px">'+fmt(f.newSinceStart)+' new files since the last start</div>';
+              $('#heroFiles').innerHTML='<div class="label">'+(f.relayMode?'Files of the relay server':'Indexed files')+'</div><div class="big">'+fmt(f.indexed)+'</div><div class="deltas">'+
+                delta(f.indexed,f.ago24h,'in 24 h')+delta(f.indexed,f.ago7d,'in 7 days')+'</div><div class="sub" style="margin-top:6px">'+
+                (f.relayMode?'the index of '+esc(r.server||'')+' answers the searches'+(f.relayIndexError?' · <b>its figures are not reachable: '+esc(f.relayIndexError)+'</b>':f.relayIndexAgeSeconds!=null?' · figures of '+(f.relayIndexAgeSeconds<60?f.relayIndexAgeSeconds+' s':duration(f.relayIndexAgeSeconds))+' ago':'')+' · local fallback index: '+fmt(f.local)+' files':fmt(f.newSinceStart)+' new files since the last start')+'</div>';
               // The index is full at maxFiles or when the live heap reaches the guard, whichever comes first
-              const fileFill=f.max?f.indexed/f.max:0,heapFill=m.guardMb?m.liveOldMb/m.guardMb:0,fill=Math.min(1,Math.max(fileFill,heapFill));
+              const fileFill=f.max?f.local/f.max:0,heapFill=m.guardMb?m.liveOldMb/m.guardMb:0,fill=Math.min(1,Math.max(fileFill,heapFill));
               const byHeap=heapFill>fileFill,pct=r=>(r*100).toFixed(1)+' %';
               $('#heroCapacity').innerHTML='<div class="label">Index capacity · limited by '+(byHeap?'the heap':'maxFiles')+'</div><div class="value">'+pct(fill)+'</div>'+meter(fill)+
                 state(m.heapFull||fileFill>=1?'critical':level(fill),m.heapFull?'Full: heap':fileFill>=1?'Full: maxFiles':fill>=.9?'Near the limit':fill>=.75?'Filling up':'Room to grow')+
                 '<div class="sub" style="margin-top:6px">maxFiles: '+fmt(f.indexed)+' of '+fmt(f.max)+' files ('+pct(fileFill)+')'+
                 (m.guardMb?' · heap guard: '+fmt(m.liveOldMb)+' of '+fmt(m.guardMb)+' MB of live heap ('+pct(heapFill)+')':'')+
                 ' · '+fmt(f.refusedFull||0)+' new files refused since the last start; known files still get sources</div>';
+              if(f.relayMode){const ago=rf.lastSentAt?Math.round((Date.now()-rf.lastSentAt)/1000):null,fill=Math.min(1,(rf.queued||0)/200000);
+                $('#heroCapacity').innerHTML='<div class="label">Files sent to the relay server</div><div class="value">'+fmt(rf.sent||0)+'</div>'+meter(fill)+
+                  (!rf.target?state('critical','No feed: relayFeedPort or relayToken missing'):rf.lastError?state('warning','Failing: '+esc(rf.lastError)):state(level(fill),ago==null?'Nothing sent yet':'Last batch '+(ago<60?ago+' s':duration(ago))+' ago'))+
+                  '<div class="sub" style="margin-top:6px">'+fmt(rf.queued||0)+' waiting of 200,000 at most · '+fmt(rf.batches||0)+' batches · '+fmt(rf.offered||0)+' files found, '+fmt(rf.alreadyQueued||0)+' already sent with as many sources · '+fmt(rf.dropped||0)+' lost while the relay server was away · '+fmt(rf.failures||0)+' failed posts</div>'}
               const heap=m.heapMaxMb?m.heapUsedMb/m.heapMaxMb:0,lowShare=c.connected?Math.round(c.lowId*100/c.connected):0;
               $('#kpis').innerHTML=
                 tile('Connected clients',fmt(c.connected),fmt(c.lowId)+' LowID ('+lowShare+' %) · max '+fmt(c.max))+
                 tile('Heap',fmt(m.heapUsedMb)+' MB','of '+fmt(m.heapMaxMb)+' MB, including uncollected garbage'+(m.systemLoad!=null?' · load '+m.systemLoad.toFixed(2):''),meter(heap))+
                 tile('Peer eD2K servers',fmt(o.servers.verified),'verified of '+fmt(o.servers.known)+' known')+
                 tile('Remote searches',fmt(s.kad+s.ed2kServers),'Kad '+fmt(s.kad)+' · eD2K servers '+fmt(s.ed2kServers)+' · UDP global received '+fmt(s.udpGlobal))+
-                tile('Files found by searches',fmt(s.filesIngested),'indexed since the last start')+
+                tile('Files found by searches',fmt(s.filesIngested),f.relayMode?'since the last start, sent to the relay server':'indexed since the last start')+
                 tile('Kad and server sources for clients',fmt(k.sourcesDelivered||0),'sent in '+fmt(k.answersSent||0)+' answers · '+fmt(k.searches||0)+' searches, '+fmt(k.cacheHits||0)+' from cache · '+fmt(ss.highIdSources||0)+' HighID sources from other servers · '+fmt(k.firewalledMatched||0)+' firewalled Kad sources reachable through this server · quota '+fmt(k.quota||0)+' of '+fmt(k.quotaMax||0)+' searches a minute ('+fmt(k.kadRefusals||0)+' Kad refusals)',k.enabled?state('good','Enabled'):'<div class="sub">Disabled (kadSourceSearchEnabled)</div>')+
                 tile('Index update from eD2K index peers',fmt(iu.newFiles||0),'new files since the last start · '+fmt(iu.searches||0)+' searches ('+fmt(iu.refinements||0)+' refinements, '+fmt(iu.fullPages||0)+' full pages) on '+fmt(iu.servers||0)+' peers · '+fmt(iu.accepted||0)+' of '+fmt(iu.results||0)+' results kept · '+fmt(iu.incidents||0)+' pauses after an incident',iu.enabled?state('good','Enabled'):'<div class="sub">Disabled (serverIndexUpdateEnabled)</div>')+
-                tile('Relay server',fmt(r.searches||0),'searches played on '+(r.server||'no relay server')+' · '+fmt(r.results||0)+' results in '+fmt(r.pages||0)+' pages · '+fmt(r.sourcesFound||0)+' HighID sources for '+fmt(r.sourceRequests||0)+' requests · '+fmt(r.announcedLogins||0)+' logins told of it · '+fmt(r.failures||0)+' failures',r.active?state('good','Relay mode: this index is only a fallback'):'<div class="sub">Not configured (relayServer)</div>')+
-                (r.active?tile('Files sent to the relay server',fmt(rf.sent||0),fmt(rf.queued||0)+' waiting · '+fmt(rf.batches||0)+' batches · '+fmt(rf.alreadyQueued||0)+' already sent · '+fmt(rf.dropped||0)+' lost while it was away · '+fmt(rf.failures||0)+' failures',rf.target?(rf.lastError?state('warning',esc(rf.lastError)):state('good','Posting to '+esc(rf.target))):state('critical','No feed: relayFeedPort or relayToken missing')):'')+
-                (rr.clients?tile('Files from relay servers',fmt(rr.files||0),fmt(rr.batches||0)+' batches from '+esc(rr.clients)+' · '+fmt(rr.rejected||0)+' rejected by the filters · '+fmt(rr.denied||0)+' refused posts · '+fmt(rr.busy||0)+' deferred (ingestion busy)'+(rr.lastFrom?' · last from '+esc(rr.lastFrom):'')):'')+
+                tile('Relay server',fmt(r.searches||0),'searches played on '+(r.server||'no relay server')+(r.announcedFiles!=null?' · '+fmt(r.announcedFiles)+' files announced to the clients':'')+' · '+fmt(r.results||0)+' results in '+fmt(r.pages||0)+' pages · '+fmt(r.sourcesFound||0)+' HighID sources for '+fmt(r.sourceRequests||0)+' requests · '+fmt(r.announcedLogins||0)+' logins told of it · '+fmt(r.failures||0)+' failures',r.active?state('good','Relay mode: this index is only a fallback'):'<div class="sub">Not configured (relayServer)</div>')+
+                (rr.clients?tile('Files from relay servers',fmt(rr.newFiles||0),'new files indexed since the last start · '+fmt(rr.files||0)+' received in '+fmt(rr.batches||0)+' batches from '+esc(rr.clients)+' · '+fmt(rr.rejected||0)+' rejected by the filters · '+fmt(rr.denied||0)+' refused posts · '+fmt(rr.busy||0)+' deferred (ingestion busy)'+(rr.lastFrom?' · last from '+esc(rr.lastFrom):'')):'')+
                 tile('OFFERFILES v1',fmt(v.newFiles),'new files from fast-publishing clients since the last start · '+fmt(v.newFilesLegacy)+' from legacy clients · '+fmt(v.sessionsAdvertised)+' of '+fmt(v.loginsAsked)+' asking logins answered',v.enabled?state('good','Enabled'):'<div class="sub">Disabled (offerFilesV1Enabled)</div>')+
                 tile('Banned names',compact(o.protection.bannedNames),fmt(o.protection.bannedNames)+' file names, from the administrator and the child abuse filter · '+fmt(o.protection.childAbuseRejected)+' files and '+fmt(o.protection.childAbuseQueries||0)+' searches refused by the child abuse filter since the last start · '+fmt(o.protection.ipFilterRanges)+' IP filter ranges')+
                 tile('Database'+(o.database.type?' ('+o.database.type+')':''),o.database.sizeMb==null?'–':fmt(o.database.sizeMb)+' MB',o.database.reopens?state('critical',(o.database.type==='MySQL'?'Reconnected ':'Reopened ')+o.database.reopens+' times after a fatal error'):state('good','No fatal error'))+
@@ -375,6 +379,10 @@ final class AdminWebPanel implements AutoCloseable {
             relayFiles(exchange, remoteAddress);
             return;
         }
+        if (exchange.getRequestURI().getPath().equals(RelayIndexView.PATH)) {
+            relayIndex(exchange, remoteAddress);
+            return;
+        }
         if (server.getAdminAccessFilter() != null && !server.getAdminAccessFilter().isAllowed(remoteAddress)) {
             sendError(exchange, 403, "Access denied by admin access filter");
             return;
@@ -460,6 +468,27 @@ final class AdminWebPanel implements AutoCloseable {
         }
     }
 
+    /** GET of this index's figures by a relay server (relay mode): see {@link RelayIndexView}. */
+    private void relayIndex(HttpExchange exchange, InetAddress remoteAddress) throws IOException {
+        RelayFeedReceiver receiver = server.getRelayFeedReceiver();
+        if (!exchange.getRequestMethod().equals("GET") || receiver == null
+                || !receiver.authorized(remoteAddress, exchange.getRequestHeaders().getFirst("Authorization"))) {
+            sendError(exchange, 403, "Not an allowed relay server");
+            return;
+        }
+        StringBuilder body = new StringBuilder();
+        body.append("files ").append(server.getFileIndex().fileCount()).append('\n');
+        if (server.getConfig() != null) body.append("max ").append(server.getConfig().maxFiles()).append('\n');
+        MetricsHistory history = server.getMetricsHistory();
+        if (history != null) {
+            long from = System.currentTimeMillis() - RelayIndexView.DAYS * 24 * 3_600_000L;
+            for (MetricsHistory.Sample sample : history.since(from)) {
+                body.append(sample.time()).append(' ').append(sample.files()).append('\n');
+            }
+        }
+        send(exchange, 200, "text/plain; charset=utf-8", body.toString());
+    }
+
     /** POST of a relay server's files (relay mode). */
     private void relayFiles(HttpExchange exchange, InetAddress remoteAddress) throws IOException {
         if (!exchange.getRequestMethod().equals("POST")) {
@@ -505,7 +534,12 @@ final class AdminWebPanel implements AutoCloseable {
         DatabaseManager database = server.getDatabaseManager();
 
         Map<String, Object> files = new java.util.LinkedHashMap<>();
-        files.put("indexed", index.fileCount());
+        ServerRelay relayMode = server.getServerRelay();
+        boolean relaying = relayMode != null && relayMode.active();
+        // Relay mode: the files the searches return are the relay server's; the local index is only a fallback
+        files.put("relayMode", relaying);
+        files.put("indexed", relaying ? server.announcedFileCount() : index.fileCount());
+        files.put("local", index.fileCount());
         files.put("max", config == null ? null : config.maxFiles());
         files.put("newSinceStart", index.totalNewFiles());
         files.put("refusedFull", index.refusedFullCount());
@@ -513,6 +547,19 @@ final class AdminWebPanel implements AutoCloseable {
         files.put("ago7d", filesAt(history, now - 7 * 24 * 3_600_000L));
         MetricsHistory.Sample oldest = history == null ? null : history.oldest();
         files.put("historySince", oldest == null ? null : oldest.time());
+        RelayIndexView.Snapshot relayIndex = relaying ? relayIndex() : null;
+        if (relayIndex != null) {
+            // The relay server's figures, never the fallback index's
+            files.put("max", relayIndex.max());
+            files.put("ago24h", relayIndex.filesAt(now - 24 * 3_600_000L));
+            files.put("ago7d", relayIndex.filesAt(now - 7 * 24 * 3_600_000L));
+            files.put("historySince", relayIndex.times().length == 0 ? null : relayIndex.times()[0]);
+            files.put("relayIndexAgeSeconds", (now - relayIndex.fetchedAt()) / 1000);
+        }
+        if (relaying) {
+            RelayIndexView view = server.getRelayIndexView();
+            files.put("relayIndexError", view == null ? "" : view.lastError());
+        }
 
         Map<String, Object> clients = new java.util.LinkedHashMap<>();
         clients.put("connected", server.getClientRegistry().size());
@@ -584,12 +631,24 @@ final class AdminWebPanel implements AutoCloseable {
         ServerIndexUpdater updater = server.getServerIndexUpdater();
         overview.put("serverIndexUpdate", updater == null ? Map.of() : updater.stats());
         ServerRelay relay = server.getServerRelay();
-        overview.put("relay", relay == null ? Map.of() : relay.stats());
+        Map<String, Object> relayStats = relay == null ? new java.util.LinkedHashMap<>()
+                : new java.util.LinkedHashMap<>(relay.stats());
+        if (relay != null && relay.active()) relayStats.put("announcedFiles", server.announcedFileCount());
+        overview.put("relay", relayStats);
         RelayFeed feed = server.getRelayFeed();
         overview.put("relayFeed", feed == null ? Map.of() : feed.stats());
         RelayFeedReceiver receiver = server.getRelayFeedReceiver();
-        overview.put("relayFeedReceived", receiver == null ? Map.of() : receiver.stats());
+        Map<String, Object> received = receiver == null ? new java.util.LinkedHashMap<>()
+                : new java.util.LinkedHashMap<>(receiver.stats());
+        received.put("newFiles", index.newFileCount(org.jemule.core.FileSource.RELAY_FEED));
+        overview.put("relayFeedReceived", received);
         return overview;
+    }
+
+    /** Relay mode: the relay server's index figures, null when not known. */
+    private RelayIndexView.Snapshot relayIndex() {
+        RelayIndexView view = server.getRelayIndexView();
+        return view == null ? null : view.snapshot();
     }
 
     private static Integer filesAt(MetricsHistory history, long time) {
@@ -601,10 +660,14 @@ final class AdminWebPanel implements AutoCloseable {
     private Map<String, Object> history(HttpExchange exchange) {
         int days = parseBounded(query(exchange.getRequestURI()).get("days"), 30, 1, 31);
         MetricsHistory history = server.getMetricsHistory();
+        ServerRelay relay = server.getServerRelay();
+        // Relay mode: the file curve is the relay server's index, the client curve this server's own clients
+        RelayIndexView.Snapshot relayIndex = relay != null && relay.active() ? relayIndex() : null;
         List<List<Long>> points = new ArrayList<>();
         if (history != null) {
             for (MetricsHistory.Sample sample : history.since(System.currentTimeMillis() - days * 24 * 3_600_000L)) {
-                points.add(List.of(sample.time(), (long) sample.files(), (long) sample.clients()));
+                Long files = relayIndex == null ? null : relayIndex.filesAt(sample.time());
+                points.add(List.of(sample.time(), files != null ? files : (long) sample.files(), (long) sample.clients()));
             }
         }
         Map<String, Object> result = new java.util.LinkedHashMap<>();
@@ -702,19 +765,21 @@ final class AdminWebPanel implements AutoCloseable {
 
     private List<Map<String, Object>> ingestion() {
         FileIndex index = server.getFileIndex();
-        Map<FileSource, Long> counts = index.newFileCounts();
-        long total = index.totalNewFiles();
+        // Relay mode: nothing is indexed here, the files of each channel go to the relay server
+        boolean relaying = index.relaying();
+        Map<FileSource, Long> counts = relaying ? index.relayedFileCounts() : index.newFileCounts();
+        long total = relaying ? counts.values().stream().mapToLong(Long::longValue).sum() : index.totalNewFiles();
         List<Map<String, Object>> rows = new ArrayList<>();
         for (Map.Entry<FileSource, Long> entry : counts.entrySet()) {
             Map<String, Object> row = new java.util.LinkedHashMap<>();
             row.put("source", entry.getKey().label());
-            row.put("newFiles", entry.getValue());
+            row.put(relaying ? "sentToRelay" : "newFiles", entry.getValue());
             row.put("percent", percent(entry.getValue(), total));
             rows.add(row);
         }
         Map<String, Object> totalRow = new java.util.LinkedHashMap<>();
         totalRow.put("source", "total");
-        totalRow.put("newFiles", total);
+        totalRow.put(relaying ? "sentToRelay" : "newFiles", total);
         totalRow.put("percent", total == 0 ? 0.0 : 100.0);
         rows.add(totalRow);
         return rows;

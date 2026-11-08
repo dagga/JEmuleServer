@@ -1,9 +1,9 @@
 # JEmuleServer
 
-JEmuleServer is an eMule server written in Java (version 1.5.1).
+JEmuleServer is an eMule server written in Java (version 1.5.2).
 
 Downloads (installers and JAR) are on the [releases page](https://github.com/dagga/JEmuleServer/releases); the changes
-of each version are described in `doc/release-notes-v<version>.md` (latest: [1.5.1](doc/release-notes-v1.5.1.md)).
+of each version are described in `doc/release-notes-v<version>.md` (latest: [1.5.2](doc/release-notes-v1.5.2.md)).
 
 ## Why this project?
 
@@ -27,7 +27,7 @@ Building requires a JDK 25 (Gradle toolchain; Gradle downloads it when the machi
 ./gradlew build
 ```
 
-The JAR file will be generated in `build/libs/JEmuleServer-1.5.1.jar`.
+The JAR file will be generated in `build/libs/JEmuleServer-1.5.2.jar`.
 
 ## Installation from the release packages
 
@@ -70,7 +70,7 @@ Once the project is compiled, you can start the server with the following comman
 client thread blocked in a `synchronized` block holds its carrier thread, which on one CPU stalls every client):
 
 ```bash
-java -XX:MaxRAMPercentage=75 -XX:ThreadPriorityPolicy=1 --add-modules=jdk.httpserver -jar build/libs/JEmuleServer-1.5.1.jar [config_file] [port]
+java -XX:MaxRAMPercentage=75 -XX:ThreadPriorityPolicy=1 --add-modules=jdk.httpserver -jar build/libs/JEmuleServer-1.5.2.jar [config_file] [port]
 ```
 
 - `-XX:ThreadPriorityPolicy=1`: on Linux, the JVM ignores thread priorities without it. The server runs its threads
@@ -612,6 +612,8 @@ With a relay server set:
   them like search results, after the child abuse filter and the fake file detector.
 - **The local index is only a fallback.** It is no longer written (nor `maxFiles` reached: the relay server decides)
   and only answers the searches while the relay server cannot. It keeps the online sources of this server's clients.
+- **The file count announced** to the clients (`OP_SERVERSTATUS`) and to the other servers (`OP_GLOBSERVSTATRES`)
+  is the relay server's, as its last status gave it: the index the searches use.
 - **The relay server is not searched as a peer** (UDP global searches, source searches, index update): it is asked
   over its TCP sessions already.
 - A relay server that cannot be reached, or warns, is left alone for 30 seconds: the local index answers meanwhile.
@@ -621,8 +623,11 @@ With a relay server set:
 `adminAllowedIps`. The posts travel in clear HTTP: open the admin port of the relay server to the relay's address only
 (for example `firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="<relay IP>" port
 port="8080" protocol="tcp" accept'`). `relayServer`, `relayFeedPort` and `relayClients` apply at once from the
-Settings view; `relayToken` is only read from `server.properties`. The Overview shows the relayed searches and
-sources, the files sent and waiting on the relay, and the files received on the relay server.
+Settings view; `relayToken` is only read from `server.properties`. The relay never shows its own fallback index: the
+relay server answers `/api/relay/index` (same `relayClients` and `relayToken`) with its file count, `maxFiles` and file
+history, read every 5 minutes. On the relay, the Overview, its changes and the file curve are the relay server's, the
+index capacity gives way to the files sent, waiting or lost, and the Ingestion view counts the files sent by channel;
+on the relay server, the Overview shows the new files the relays brought.
 
 ## Administration Interface
 

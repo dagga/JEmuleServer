@@ -265,6 +265,67 @@ class RelayFeedTest {
     }
 
     @Test
+    void inRelayModeTheClientsAreToldTheFilesOfTheRelayServer() {
+        assertEquals(7_457_511, Server.announcedFiles(3_430_000, 7_457_511L), "the index the searches use");
+        assertEquals(3_430_000, Server.announcedFiles(3_430_000, null), "relay server's status not known yet");
+        assertEquals(Integer.MAX_VALUE, Server.announcedFiles(1, 5_000_000_000L), "an ed2k count is 32 bits");
+    }
+
+    @Test
+    void theRelayShowsTheRelayServerHistoryNeverItsOwnIndex() throws Exception {
+        FileIndex index = new FileIndex(null);
+        index.addFile(file(hash(1), "concert live.avi", 8));
+        org.jemule.core.MetricsHistory history = new org.jemule.core.MetricsHistory(null);
+        long now = System.currentTimeMillis();
+        history.record(now - 2 * 86_400_000L, 7_000_000, 50);
+        history.record(now - 3_600_000L, 7_400_000, 60);
+        RelayFeedReceiver receiver = new RelayFeedReceiver(() -> new RelayFeedConfig(8080, TOKEN, "127.0.0.1"), index,
+                null, IngestionExecutor.direct());
+        Server server = mock(Server.class);
+        when(server.getRelayFeedReceiver()).thenReturn(receiver);
+        when(server.getFileIndex()).thenReturn(index);
+        when(server.getMetricsHistory()).thenReturn(history);
+        when(server.getConfig()).thenReturn(ServerConfig.DEFAULT);
+
+        try (AdminWebPanel panel = new AdminWebPanel(server)) {
+            panel.start(0);
+            RelayIndexView view = new RelayIndexView(
+                    () -> RelayFeed.uri("127.0.0.1:4661", panel.port(), TOKEN, RelayIndexView.PATH), () -> TOKEN);
+            view.refresh();
+            RelayIndexView.Snapshot snapshot = view.snapshot();
+            assertNotNull(snapshot, view.lastError());
+            assertEquals(1L, snapshot.files());
+            assertEquals((long) ServerConfig.DEFAULT.maxFiles(), snapshot.max());
+            assertNull(snapshot.filesAt(now - 3 * 86_400_000L), "before its history");
+            assertEquals(7_000_000L, snapshot.filesAt(now - 86_400_000L));
+            assertEquals(7_400_000L, snapshot.filesAt(now));
+
+            RelayIndexView stranger = new RelayIndexView(
+                    () -> RelayFeed.uri("127.0.0.1:4661", panel.port(), TOKEN + "x", RelayIndexView.PATH), () -> TOKEN + "x");
+            stranger.refresh();
+            assertNull(stranger.snapshot(), "a wrong token gets nothing");
+            assertEquals("HTTP 403", stranger.lastError());
+
+            view.refresh(); // kept when the relay server cannot answer
+            assertNotNull(view.snapshot());
+        }
+    }
+
+    @Test
+    void inRelayModeTheChannelsCountTheFilesSentToTheRelayServer() {
+        FileIndex index = new FileIndex(null);
+        Fake fake = new Fake();
+        try (RelayFeed feed = fake.feed(RelayFeed.CAPACITY)) {
+            index.setRelayFeed(feed);
+            index.addFiles(List.of(file(hash(1), "a.avi", 5), file(hash(2), "b.avi", 5)), FileSource.KAD_SEARCH);
+            index.addFile(file(hash(3), "c.avi", 5), FileSource.SERVER_SEARCH);
+        }
+        assertEquals(2L, index.relayedFileCounts().get(FileSource.KAD_SEARCH));
+        assertEquals(1L, index.relayedFileCounts().get(FileSource.SERVER_SEARCH));
+        assertEquals(0L, index.totalNewFiles(), "nothing indexed here");
+    }
+
+    @Test
     void theFingerprintIgnoresTheCase() {
         assertEquals(RelayFeed.fingerprint("abcdef0123456789abcdef0123456789"),
                 RelayFeed.fingerprint("ABCDEF0123456789ABCDEF0123456789"));

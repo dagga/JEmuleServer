@@ -279,7 +279,7 @@ public class LoginHandler {
         // Corrected: The client expects 2 integers in SERVER_STATUS: Users, Files
         ByteBuffer buf = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN);
         buf.putInt(context.getRegistry().size()); // Users
-        buf.putInt(context.getFileIndex().fileCount()); // Files
+        buf.putInt(context.announcedFileCount()); // Files: the relay server's index in relay mode
         new Packet(Packet.PROTOCOL_ED2K, OpCode.SERVER_STATUS.value, buf.array()).write(out, context.getState() != null && context.getState().isZlibSupported());
     }
 }
