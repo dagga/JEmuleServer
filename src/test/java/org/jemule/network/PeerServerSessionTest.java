@@ -54,7 +54,8 @@ class PeerServerSessionTest {
             ServerRelay relay = mock(ServerRelay.class);
             when(kad.forkSearch(any(SearchQuery.class))).thenReturn(CompletableFuture.completedFuture(List.of()));
             when(servers.forkSearch(any(), any())).thenReturn(CompletableFuture.completedFuture(List.of()));
-            when(relay.forkSearch(any(), anyInt())).thenReturn(CompletableFuture.completedFuture(List.of()));
+            // The relay server cannot answer: the client gets the local results too
+            when(relay.forkSearch(any(), anyInt())).thenReturn(CompletableFuture.completedFuture(null));
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             new SearchHandler().handleSearch(context(fromServer, index, kad, servers, relay),
                     new SearchTree().keyword("linux").toBytes(), out);

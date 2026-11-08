@@ -43,7 +43,6 @@ public class SearchHandler {
         }
         long searchGeneration = context.getState().beginPendingSearch();
 
-        List<FileMetadata> localResults;
         SearchQuery query;
         try {
             query = SearchQuery.parse(ByteBuffer.wrap(data));
@@ -54,28 +53,33 @@ public class SearchHandler {
                 sendSearchResults(context, List.of(), false, out);
                 return;
             }
-            localResults = context.getFileIndex().searchComplex(query, context.getConfig().maxSearchResults());
-            log.debug("Search {} -> {} local results", query, localResults.size());
         } catch (RuntimeException e) {
             // Never guess: an unparsable tree gets an empty answer, so that the client ends its search
             log.warn("Malformed search request ({} bytes): {}", data.length, HandlerUtils.sanitize(String.valueOf(e.getMessage())));
-            localResults = List.of();
             query = null;
         }
 
         // Another server's search (its relay or index update session) gets the local results only: that server
         // searches Kad and the other servers itself
         boolean fromServer = context.isFromServer();
-        // Index full: the search is played on the relay server, whose results come first; never one of the relay
-        // server's own searches (its index update logs in here as a client)
+        // Relay mode: the search is played on the relay server, whose index answers; the local one only when the
+        // relay server cannot. Never one of the relay server's own searches (its index update logs in here as a client)
         org.jemule.network.ServerRelay relay = context.getServerRelay();
         CompletableFuture<List<FileMetadata>> relayed = relay == null || query == null || fromServer
                 || relay.isRelayServer(context.getSocket().getInetAddress())
                 ? null : relay.forkSearch(data, org.jemule.network.ServerRelay.MAX_PAGES);
+        // Its keywords are not offered to the index update either: the two servers would send them back and forth.
+        // Started before waiting for the relay server: Kad and the other servers search meanwhile
+        CompletableFuture<List<FileMetadata>> remoteResults = fromServer ? null : startRemoteSearches(context, query, data);
         LinkedHashMap<String, FileMetadata> dedupMap = new LinkedHashMap<>();
+        boolean answeredByRelay = false;
         if (relayed != null) {
             try {
-                addResults(dedupMap, relayed.get(RELAY_WAIT_MS, TimeUnit.MILLISECONDS));
+                List<FileMetadata> found = relayed.get(RELAY_WAIT_MS, TimeUnit.MILLISECONDS);
+                if (found != null) {
+                    addResults(dedupMap, found);
+                    answeredByRelay = true;
+                }
                 relayed = null;
             } catch (TimeoutException e) {
                 log.debug("Relay server still searching {}: its results come with More", query);
@@ -84,17 +88,25 @@ public class SearchHandler {
                 relayed = null;
             }
         }
+        List<FileMetadata> localResults = List.of();
+        if (query != null && !answeredByRelay) {
+            try {
+                localResults = context.getFileIndex().searchComplex(query, context.getConfig().maxSearchResults());
+                log.debug("Search {} -> {} local results", query, localResults.size());
+            } catch (RuntimeException e) {
+                log.warn("Local search failed for {}: {}", query, HandlerUtils.sanitize(String.valueOf(e.getMessage())));
+            }
+        }
         for (FileMetadata f : localResults) {
             if (f != null && f.hash() != null) {
                 dedupMap.putIfAbsent(f.hash().toUpperCase(Locale.ROOT), f);
             }
         }
 
-        // Its keywords are not offered to the index update either: the two servers would send them back and forth
-        CompletableFuture<List<FileMetadata>> remoteResults = fromServer ? null : startRemoteSearches(context, query, data);
         if (relayed != null) {
-            remoteResults = remoteResults == null ? relayed : remoteResults.thenCombine(relayed.exceptionally(e -> List.of()),
-                    (remote, fromRelay) -> java.util.stream.Stream.concat(fromRelay.stream(), remote.stream()).toList());
+            CompletableFuture<List<FileMetadata>> fromRelay = relayed.handle((found, e) -> found == null ? List.of() : found);
+            remoteResults = remoteResults == null ? fromRelay : remoteResults.thenCombine(fromRelay,
+                    (remote, relayFiles) -> java.util.stream.Stream.concat(relayFiles.stream(), remote.stream()).toList());
         }
         boolean deferRemoteResults = false;
         if (remoteResults != null) {

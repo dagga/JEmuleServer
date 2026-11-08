@@ -118,7 +118,11 @@ public enum ConfigParameter {
     SERVER_INDEX_UPDATE_MIN_SOURCES("serverIndexUpdateMinSources", Type.INTEGER, Scope.HOT, 1, 1000,
             "Index update: sources a file needs to be indexed"),
     RELAY_SERVER("relayServer", Type.STRING, Scope.HOT, 0, 0,
-            "eD2K server (host:port) taking over once the index is full: searches played there, new logins sent there");
+            "Relay mode: eD2K server (host:port) whose index is used (searches and sources) and fed with the files found"),
+    RELAY_FEED_PORT("relayFeedPort", Type.INTEGER, Scope.HOT, 0, 65535,
+            "Relay mode: admin panel HTTP port of the relay server, receiving the files found (0 = no feed)"),
+    RELAY_CLIENTS("relayClients", Type.STRING, Scope.HOT, 0, 0,
+            "Relay servers (host names, IPs / CIDR blocks) allowed to feed this index through /api/relay/files (relayToken)");
 
     /** Value type of a parameter, with its parsing and formatting rules. */
     public enum Type {

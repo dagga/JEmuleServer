@@ -76,6 +76,8 @@ public class Server {
     /** Index update from the eD2K index peers (off unless serverIndexUpdateEnabled). */
     private final ServerIndexUpdater serverIndexUpdater;
     private final ServerRelay serverRelay;
+    private final RelayFeed relayFeed;
+    private final RelayFeedReceiver relayFeedReceiver;
     private final ClientRegistry registry = new ClientRegistry();
     private final java.util.Set<Socket> clientSockets = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private final FileIndex fileIndex;
@@ -311,16 +313,27 @@ public class Server {
         }
         this.globalSearchForwarder = new GlobalSearchForwarder(() -> kadSearchBridge, abuseFilter,
                 config.kad().enabled() && config.kad().forkSearchEnabled() && config.kad().forkGlobalSearches());
-        this.serverSourceSearcher = new ServerSourceSearcher(serverGossip::verifiedPeers,
+        // Relay mode: the relay server is asked over its TCP sessions, never also as a peer
+        this.serverSourceSearcher = new ServerSourceSearcher(this::peersButRelay,
                 () -> boundUdpSockets.get(config.port() + 4));
-        this.serverSearchBridge = new ServerSearchBridge(serverGossip::verifiedPeers,
+        this.serverSearchBridge = new ServerSearchBridge(this::peersButRelay,
                 () -> boundUdpSockets.get(config.port() + 4), fileIndex, fakeFileDetector);
         this.serverSearchBridge.setIngestionExecutor(ingestion);
-        this.serverIndexUpdater = new ServerIndexUpdater(serverGossip::verifiedPeers, fileIndex, fakeFileDetector,
+        this.serverIndexUpdater = new ServerIndexUpdater(this::peersButRelay, fileIndex, fakeFileDetector,
                 () -> this.config.serverIndexUpdate(), this::nearlyFull);
         this.serverIndexUpdater.setIngestionExecutor(ingestion);
-        // Once the index is full, the searches are played on the relay server and the new logins sent there
-        this.serverRelay = new ServerRelay(() -> this.config.relayServer(), fileIndex::isFull, fileIndex, fakeFileDetector);
+        // Relay mode: the searches and source requests are played on the relay server, and the files found sent there
+        this.serverRelay = new ServerRelay(() -> this.config.relayServer(), fileIndex, fakeFileDetector);
+        this.relayFeed = new RelayFeed(() -> serverRelay.endpoint() != null, this::relayFeedTarget,
+                () -> this.config.relayFeed().effectiveToken());
+        this.fileIndex.setRelayFeed(relayFeed);
+        // Receiving side: the files of the relay servers allowed by relayClients
+        this.relayFeedReceiver = new RelayFeedReceiver(() -> this.config.relayFeed(), fileIndex, fakeFileDetector, ingestion);
+        if (!config.relayServer().isBlank()) {
+            log.info("Relay mode: the index of {} is used and fed ({}); the local index is only a fallback",
+                    config.relayServer(), relayFeedTarget() == null
+                            ? "NO FEED: relayFeedPort or relayToken missing, the files found are lost" : relayFeedTarget());
+        }
         this.kadNode = config.kad().enabled()
                 ? new KadNode(config.kad(), config.port(), db, fileIndex, abuseFilter, fakeFileDetector,
                         kadNodesCachePath(config))
@@ -463,6 +476,36 @@ public class Server {
 
     public ServerRelay getServerRelay() {
         return serverRelay;
+    }
+
+    RelayFeed getRelayFeed() {
+        return relayFeed;
+    }
+
+    RelayFeedReceiver getRelayFeedReceiver() {
+        return relayFeedReceiver;
+    }
+
+    private volatile ServerConfig relayFeedTargetOf;
+    private volatile java.net.URI relayFeedTarget;
+
+    /** Where the relay mode posts the files found: null without a relay server, a feed port or a token. */
+    private java.net.URI relayFeedTarget() {
+        ServerConfig current = config;
+        if (current != relayFeedTargetOf) {
+            relayFeedTarget = RelayFeed.target(current.relayServer(), current.relayFeed().port(),
+                    current.relayFeed().effectiveToken());
+            relayFeedTargetOf = current;
+        }
+        return relayFeedTarget;
+    }
+
+    /** The verified peers, but the relay server in relay mode: that one is asked over its TCP sessions. */
+    private java.util.Collection<ServerGossip.VerifiedPeer> peersButRelay() {
+        java.util.Collection<ServerGossip.VerifiedPeer> peers = serverGossip.verifiedPeers();
+        ServerRelay relay = serverRelay;
+        if (relay == null || relay.endpoint() == null) return peers;
+        return peers.stream().filter(peer -> !relay.isRelayServer(peer.endpoint().address())).toList();
     }
 
     /**
@@ -871,6 +914,7 @@ public class Server {
      * @throws IOException If the server cannot bind to the configured port.
      */
     public void start() throws IOException {
+        relayFeed.start();
         if (ServerThreads.prioritiesApplied()) {
             boolean linuxUser = System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("linux")
                     && !"root".equals(System.getProperty("user.name"));
@@ -1306,7 +1350,6 @@ public class Server {
     private void handleGlobalSearch(UdpReply reply, byte opcode, byte[] recv) throws IOException {
         ByteBuffer buf = ByteBuffer.wrap(recv, 2, recv.length - 2).slice().order(ByteOrder.LITTLE_ENDIAN);
         boolean largeFiles = false;
-        List<FileMetadata> results;
         SearchQuery query;
         byte[] tree;
         try {
@@ -1325,31 +1368,34 @@ public class Server {
                 log.info("UDP global search from {} refused by the child abuse filter", reply.address().getHostAddress());
                 return;
             }
-            results = fileIndex.searchComplex(query, Math.min(config.maxSearchResults(), MAX_GLOBAL_SEARCH_RESULTS));
         } catch (RuntimeException e) {
             log.debug("Malformed UDP search request from {}: {}", reply.address(), e.getMessage());
             return;
         }
 
-        sendGlobalSearchResults(reply, results, largeFiles);
         // Sent by another server for one of its clients: that server searches Kad and the other servers itself
         boolean fromServer = isPeerServer(reply.address());
-        // Index full: also played on the relay server, unless the search comes from a server, and its other files follow
+        // Relay mode: answered by the relay server's index, unless the search comes from a server; by the local one
+        // only when the relay server cannot answer
         java.util.concurrent.CompletableFuture<List<FileMetadata>> relayed = fromServer
                 ? null : serverRelay.forkSearch(tree, 1);
-        if (relayed != null) {
-            java.util.Set<String> sent = new java.util.HashSet<>();
-            results.forEach(m -> sent.add(m.hash().toUpperCase(java.util.Locale.ROOT)));
+        int localResults;
+        if (relayed == null) {
+            List<FileMetadata> results = localGlobalSearch(query);
+            sendGlobalSearchResults(reply, results, largeFiles);
+            localResults = results.size();
+        } else {
+            localResults = -1;
+            SearchQuery activeQuery = query;
             boolean large = largeFiles;
-            relayed.thenAccept(found -> {
-                List<FileMetadata> extra = found.stream()
-                        .filter(m -> !sent.contains(m.hash().toUpperCase(java.util.Locale.ROOT)))
-                        .limit(Math.max(0, MAX_GLOBAL_SEARCH_RESULTS - sent.size()))
-                        .toList();
+            relayed.handle((found, error) -> found).thenAccept(found -> {
+                List<FileMetadata> answer = found != null
+                        ? found.stream().limit(MAX_GLOBAL_SEARCH_RESULTS).toList()
+                        : localGlobalSearch(activeQuery);
                 try {
-                    sendGlobalSearchResults(reply, extra, large);
+                    sendGlobalSearchResults(reply, answer, large);
                 } catch (IOException e) {
-                    log.debug("Could not send the relay server's results to {}: {}", reply.address(), e.getMessage());
+                    log.debug("Could not send the global search results to {}: {}", reply.address(), e.getMessage());
                 }
             });
         }
@@ -1357,9 +1403,20 @@ public class Server {
         // Only searched on Kad: forwarding it to other eD2K servers could make it loop between servers
         GlobalSearchForwarder.Outcome outcome = fromServer ? globalSearchForwarder.fromServer()
                 : globalSearchForwarder.forward(query, reply.address());
-        log.info("UDP global search from {}: {} ({} local results, Kad: {})", reply.address().getHostAddress(),
-                org.jemule.network.handler.HandlerUtils.sanitize(query.toString()), results.size(),
+        log.info("UDP global search from {}: {} ({}, Kad: {})", reply.address().getHostAddress(),
+                org.jemule.network.handler.HandlerUtils.sanitize(query.toString()),
+                localResults < 0 ? "played on the relay server" : localResults + " local results",
                 outcome.name().toLowerCase(java.util.Locale.ROOT).replace('_', ' '));
+    }
+
+    /** The local index's answer to a UDP global search; nothing when the search fails. */
+    private List<FileMetadata> localGlobalSearch(SearchQuery query) {
+        try {
+            return fileIndex.searchComplex(query, Math.min(config.maxSearchResults(), MAX_GLOBAL_SEARCH_RESULTS));
+        } catch (RuntimeException e) {
+            log.debug("UDP global search failed: {}", e.getMessage());
+            return List.of();
+        }
     }
 
     /**
@@ -1509,6 +1566,8 @@ public class Server {
         }
         // The files still waiting for ingestion are written before the database closes
         ingestion.close();
+        // In relay mode they went to the feed, which posts what it can before stopping
+        relayFeed.close();
         fileIndex.close();
         if (db != null) {
             try {

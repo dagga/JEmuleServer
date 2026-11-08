@@ -132,8 +132,8 @@ class IPFilterTest {
             IPFilter filter = new IPFilter();
             filter.loadFromFile(filterFile.toString()); // the second time from the binary cache
             assertEquals(cached, Files.exists(tempDir.resolve("ipfilter.dat.bin")) && cached);
-            assertTrue(filter.isBlocked("54.37.74.32"), "a client or a Kad source stays blocked");
-            assertFalse(filter.isServerBlocked(InetAddress.getByName("54.37.74.32")), "a server at Amazon is not");
+            assertTrue(filter.isBlocked("54.35.1.1"), "a client or a Kad source stays blocked");
+            assertFalse(filter.isServerBlocked(InetAddress.getByName("54.35.1.1")), "a server at Amazon is not");
             assertFalse(filter.isServerBlocked(InetAddress.getByName("1.0.1.1")));
             assertTrue(filter.isServerBlocked(InetAddress.getByName("5.0.0.1")), "fake servers at a hosting provider");
             assertTrue(filter.isServerBlocked(InetAddress.getByName("6.0.0.1")), "anti-P2P at a hosting provider");
@@ -151,8 +151,8 @@ class IPFilterTest {
         filter.loadFromFile(filterFile.toString());
         lines.add("054.031.000.000 - 054.039.255.255 , 000 , Amazon | Cloud | hosting");
         assertTrue(filter.applyUpdate(filterFile, lines, "test"));
-        assertTrue(filter.isBlocked("54.37.74.32"));
-        assertFalse(filter.isServerBlocked(InetAddress.getByName("54.37.74.32")));
+        assertTrue(filter.isBlocked("54.35.1.1"));
+        assertFalse(filter.isServerBlocked(InetAddress.getByName("54.35.1.1")));
         assertTrue(filter.isServerBlocked(InetAddress.getByName("10.0.6.1")));
     }
 

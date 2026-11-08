@@ -1,9 +1,9 @@
 # JEmuleServer
 
-JEmuleServer is an eMule server written in Java (version 1.5).
+JEmuleServer is an eMule server written in Java (version 1.5.1).
 
 Downloads (installers and JAR) are on the [releases page](https://github.com/dagga/JEmuleServer/releases); the changes
-of each version are described in `doc/release-notes-v<version>.md` (latest: [1.5](doc/release-notes-v1.5.md)).
+of each version are described in `doc/release-notes-v<version>.md` (latest: [1.5.1](doc/release-notes-v1.5.1.md)).
 
 ## Why this project?
 
@@ -27,7 +27,7 @@ Building requires a JDK 25 (Gradle toolchain; Gradle downloads it when the machi
 ./gradlew build
 ```
 
-The JAR file will be generated in `build/libs/JEmuleServer-1.5.jar`.
+The JAR file will be generated in `build/libs/JEmuleServer-1.5.1.jar`.
 
 ## Installation from the release packages
 
@@ -70,7 +70,7 @@ Once the project is compiled, you can start the server with the following comman
 client thread blocked in a `synchronized` block holds its carrier thread, which on one CPU stalls every client):
 
 ```bash
-java -XX:MaxRAMPercentage=75 -XX:ThreadPriorityPolicy=1 --add-modules=jdk.httpserver -jar build/libs/JEmuleServer-1.5.jar [config_file] [port]
+java -XX:MaxRAMPercentage=75 -XX:ThreadPriorityPolicy=1 --add-modules=jdk.httpserver -jar build/libs/JEmuleServer-1.5.1.jar [config_file] [port]
 ```
 
 - `-XX:ThreadPriorityPolicy=1`: on Linux, the JVM ignores thread priorities without it. The server runs its threads
@@ -570,30 +570,59 @@ and aMule Kad nodes has not been validated yet.
 
 ## Relay server
 
-A server whose index is full can hand over to a larger one, the relay server, and only act as its proxy:
+A server can run in **relay mode**: it keeps its own Kad node, its own peer servers and its own clients, but uses the
+index of another server, the relay server, and feeds it with every file it finds.
+
+On the relay (the server in relay mode):
 
 ```properties
-# eD2K server (host:TCP-port) that takes over once the index is full (default: empty, no relay)
-relayServer=54.37.74.32:4661
+# Relay mode: eD2K server (host:TCP-port) whose index is used and fed (default: empty, no relay mode)
+relayServer=main.example.net:4661
+# Admin panel HTTP port of the relay server, where the files found are posted (default: 8080, 0: no feed)
+relayFeedPort=8080
+# Shared secret, at least 16 characters, also set on the relay server (or JEMULE_RELAY_TOKEN); never shown
+relayToken=<a long random string>
 ```
 
-While the index is full (`maxFiles` reached, or the heap guard), with a relay server set:
+On the relay server (the one whose index is used):
+
+```properties
+# Relay servers allowed to post their files to /api/relay/files (host names, IPs or CIDR blocks; default: empty, nobody)
+relayClients=relay.example.net
+relayToken=<the same string>
+```
+
+With a relay server set:
 
 - **The clients stay connected here.** At login, each client also gets the relay server in an `OP_SERVERLIST`
   (added to its list when it accepts server lists from servers), without any "server full" message.
-- **Their searches are played on the relay server**, through client sessions of this server there (TCP, LowID, 4 at
-  the same time), with the pages the "More" button brings: up to 900 results per search, which return to the client
-  first, before the local ones; the client waits for them at most 8 seconds, later ones come with "More". The files
-  go through the child abuse filter, the banned names and the fake file detector, like the Kad ones.
-- **Their source requests too**: the relay server's HighID sources of the file follow in a second
-  `OP_FOUNDSOURCES` (its LowID sources are only reachable through its own callbacks).
-- **The UDP global searches of other servers' clients** get the relay server's first page after the local results
-  (100 files at most in all), except those sent by the relay server itself, which would loop between the two servers.
-- A relay server that cannot be reached, or warns, is left alone for 30 seconds: the requests stay local meanwhile.
+- **Their searches are answered by the relay server's index**, played there through client sessions of this server
+  (TCP, LowID, 4 at the same time), with the pages the "More" button brings: up to 900 results per search. The client
+  waits for them at most 8 seconds; later ones come with "More". Kad and the other servers are searched meanwhile, and
+  their results follow. The files go through the child abuse filter, the banned names and the fake file detector.
+- **Their source requests**: the sources among this server's own clients first, then Kad's when they are few, then the
+  relay server's HighID sources in a second `OP_FOUNDSOURCES` (its LowID sources are only reachable through its own
+  callbacks).
+- **The UDP global searches of other servers' clients** are answered with the relay server's first page (100 files at
+  most), except those sent by a server, which get the local answer.
+- **Every file found here goes to the relay server**: the Kad results, the other servers' results, the index update
+  and the clients' `OP_OFFERFILES` (the files, not their sources). They are posted by batches of 2,000 files every
+  2 seconds at most to `http://<relay server>:<relayFeedPort>/api/relay/files`, gzip compressed, with
+  `Authorization: Bearer <relayToken>`. A file is sent again only when its source count rose. The relay server indexes
+  them like search results, after the child abuse filter and the fake file detector.
+- **The local index is only a fallback.** It is no longer written (nor `maxFiles` reached: the relay server decides)
+  and only answers the searches while the relay server cannot. It keeps the online sources of this server's clients.
+- **The relay server is not searched as a peer** (UDP global searches, source searches, index update): it is asked
+  over its TCP sessions already.
+- A relay server that cannot be reached, or warns, is left alone for 30 seconds: the local index answers meanwhile.
+  The files found wait in memory (200,000 at most, then the oldest are lost) and leave when it is back.
 
-The relay server needs nothing special; list it in `serverPeers` too, so that it is searched and asked for sources
-like the other verified servers when the index has room again. `relayServer` applies at once from the Settings view.
-The Overview shows the relayed searches, results, sources and logins.
+`/api/relay/files` is open to the addresses of `relayClients` with the token only; the rest of the admin panel keeps
+`adminAllowedIps`. The posts travel in clear HTTP: open the admin port of the relay server to the relay's address only
+(for example `firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="<relay IP>" port
+port="8080" protocol="tcp" accept'`). `relayServer`, `relayFeedPort` and `relayClients` apply at once from the
+Settings view; `relayToken` is only read from `server.properties`. The Overview shows the relayed searches and
+sources, the files sent and waiting on the relay, and the files received on the relay server.
 
 ## Administration Interface
 
