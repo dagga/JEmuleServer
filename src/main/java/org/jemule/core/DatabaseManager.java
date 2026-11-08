@@ -72,7 +72,8 @@ public class DatabaseManager implements AutoCloseable {
      * keeps in files ({@link #bindSourceCount}). The hashes are bound by {@link #setHash}.
      */
     record Sql(String mergeFile, String mergeSourceCount, String mergeSourceCountOfSavedFile, String mergeBannedName,
-               String insertBannedNameIfAbsent, String mergeMetricsSample, String mergeStat, int maxBannedNameLength) {
+               String insertBannedNameIfAbsent, String mergeMetricsSample, String mergeStat, int maxBannedNameLength,
+               String mergeBannedServer) {
     }
 
     static final Sql H2_SQL = new Sql(
@@ -85,7 +86,8 @@ public class DatabaseManager implements AutoCloseable {
             "INSERT INTO banned_names (name, reason) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM banned_names WHERE name = ?)",
             "MERGE INTO metrics_history (sampled_at, files, clients) KEY (sampled_at) VALUES (?, ?, ?)",
             "MERGE INTO stats (stat_key, stat_value) KEY (stat_key) VALUES (?, ?)",
-            1024);
+            1024,
+            "MERGE INTO banned_servers (ip, reason, banned_at) KEY (ip) VALUES (?, ?, ?)");
 
     static final Sql MYSQL_SQL = new Sql(
             "INSERT INTO files (hash, name, size, type) VALUES (?, ?, ?, ?) "
@@ -102,7 +104,9 @@ public class DatabaseManager implements AutoCloseable {
             "INSERT INTO stats (stat_key, stat_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE stat_value = VALUES(stat_value)",
             // The longest primary key of InnoDB is 3,072 bytes, 4 per utf8mb4 character; no file system takes a
             // name that long anyway
-            768);
+            768,
+            "INSERT INTO banned_servers (ip, reason, banned_at) VALUES (?, ?, ?) "
+                    + "ON DUPLICATE KEY UPDATE reason = VALUES(reason), banned_at = VALUES(banned_at)");
 
     /**
      * MySQL files table (schema version 4), named {@code %1$s}: the MD4 hash on its 16 bytes, which every random
@@ -157,6 +161,12 @@ public class DatabaseManager implements AutoCloseable {
                 reason VARCHAR(255),
                 added_at TIMESTAMP(6) NULL DEFAULT CURRENT_TIMESTAMP(6),
                 KEY (added_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin""",
+            """
+            CREATE TABLE IF NOT EXISTS banned_servers (
+                ip VARCHAR(15) NOT NULL PRIMARY KEY,
+                reason VARCHAR(255),
+                banned_at TIMESTAMP(6) NULL DEFAULT CURRENT_TIMESTAMP(6)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin""");
 
     /** One page of files with their source counts and tags, in hash order (MySQL). */
@@ -820,6 +830,70 @@ public class DatabaseManager implements AutoCloseable {
                     added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
                 """);
+
+            // eD2K servers banned by the administrator, by IPv4 address (all their ports): a table of its own, created
+            // at every start like the others, that older versions ignore
+            stmt.execute("""
+                CREATE TABLE IF NOT EXISTS banned_servers (
+                    ip VARCHAR(15) PRIMARY KEY,
+                    reason VARCHAR(255),
+                    banned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """);
+        }
+    }
+
+    /** An eD2K server banned by the administrator: its IPv4 address in dotted form. */
+    public record BannedServer(String ip, String reason, java.sql.Timestamp bannedAt) {}
+
+    /** Bans a server, or replaces the reason and date of its ban. */
+    public void addBannedServer(String ip, String reason, Timestamp bannedAt) {
+        String stored = reason == null || reason.length() <= 255 ? reason : reason.substring(0, 255);
+        try {
+            locked(() -> {
+                try (PreparedStatement ps = connection.prepareStatement(sql.mergeBannedServer())) {
+                    ps.setString(1, ip);
+                    ps.setString(2, stored);
+                    if (mysql) ps.setString(3, mySqlTimestamp(bannedAt));
+                    else ps.setTimestamp(3, bannedAt);
+                    ps.executeUpdate();
+                }
+                return null;
+            });
+        } catch (Throwable e) {
+            logger.error("Circuit breaker prevented or caught error during addBannedServer: {}", e.getMessage());
+        }
+    }
+
+    public void removeBannedServer(String ip) {
+        try {
+            locked(() -> {
+                try (PreparedStatement ps = connection.prepareStatement("DELETE FROM banned_servers WHERE ip = ?")) {
+                    ps.setString(1, ip);
+                    ps.executeUpdate();
+                }
+                return null;
+            });
+        } catch (Throwable e) {
+            logger.error("Circuit breaker prevented or caught error during removeBannedServer: {}", e.getMessage());
+        }
+    }
+
+    /** Every banned server, the most recent first. */
+    public List<BannedServer> loadBannedServers() {
+        try {
+            return locked(() -> {
+                List<BannedServer> servers = new ArrayList<>();
+                try (Statement stmt = connection.createStatement();
+                     ResultSet rs = stmt.executeQuery(
+                             "SELECT ip, reason, banned_at FROM banned_servers ORDER BY banned_at DESC, ip")) {
+                    while (rs.next()) servers.add(new BannedServer(rs.getString(1), rs.getString(2), rs.getTimestamp(3)));
+                }
+                return servers;
+            });
+        } catch (Throwable e) {
+            logger.error("Circuit breaker prevented or caught error during loadBannedServers: {}", e.getMessage());
+            return new ArrayList<>();
         }
     }
 

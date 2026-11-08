@@ -93,6 +93,8 @@ public final class ServerRelay implements AutoCloseable {
     private volatile long retryAt;
     private volatile String parsedFrom;
     private volatile ServerGossip.Endpoint endpoint;
+    /** Servers banned by the administrator: a banned relay server is not used, relay mode is off while it is. */
+    private volatile java.util.function.Predicate<InetAddress> banned = address -> false;
 
     private final AtomicLong searches = new AtomicLong();
     private final AtomicLong pages = new AtomicLong();
@@ -135,8 +137,22 @@ public final class ServerRelay implements AutoCloseable {
         this.executor = Executors.newFixedThreadPool(SESSIONS, ServerThreads.factory(ServerThreads.Tier.SEARCH, "relay"));
     }
 
-    /** The relay server, or null when none is configured or its address does not resolve to IPv4. */
+    /** Tells which servers the administrator banned. */
+    void setBanned(java.util.function.Predicate<InetAddress> banned) {
+        this.banned = banned != null ? banned : address -> false;
+    }
+
+    /**
+     * The relay server, or null when none is configured, its address does not resolve to IPv4, or the administrator
+     * banned it.
+     */
     ServerGossip.Endpoint endpoint() {
+        ServerGossip.Endpoint relay = configuredEndpoint();
+        return relay == null || banned.test(relay.address()) ? null : relay;
+    }
+
+    /** The relay server of the configuration, banned or not; null when none or not IPv4. */
+    private ServerGossip.Endpoint configuredEndpoint() {
         String value = relayServer.get();
         if (value == null || value.isBlank()) return null;
         if (!value.equals(parsedFrom)) {
@@ -157,6 +173,12 @@ public final class ServerRelay implements AutoCloseable {
     /** True while a relay server is configured (relay mode): the requests are played there. */
     public boolean active() {
         return running && endpoint() != null;
+    }
+
+    /** True when {@code address} is the configured relay server's, even banned: for the warning of a ban. */
+    boolean isConfiguredRelayServer(InetAddress address) {
+        ServerGossip.Endpoint relay = configuredEndpoint();
+        return relay != null && relay.address().equals(address);
     }
 
     /** True when {@code address} is the relay server's: its own requests are never played back on it. */
@@ -322,11 +344,16 @@ public final class ServerRelay implements AutoCloseable {
         return stats;
     }
 
+    /** Closes the idle sessions on the relay server, once the administrator banned it. */
+    void closeIdleSessions() {
+        Session session;
+        while ((session = idle.poll()) != null) session.close();
+    }
+
     @Override
     public void close() {
         running = false;
         executor.shutdownNow();
-        Session session;
-        while ((session = idle.poll()) != null) session.close();
+        closeIdleSessions();
     }
 }

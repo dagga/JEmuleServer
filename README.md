@@ -462,6 +462,29 @@ Up to 1.2.23 the server banned hashes (`banned_hashes`), nearly all written by t
 that table at its first start (database schema version 3): its hashes cannot be turned into names, the banned files
 having been deleted, and the child abuse filter rejects the same names each time they come back.
 
+## Banned eD2K servers
+
+The administrator can ban an eD2K server by its IPv4 address, all its ports. A banned server is dropped at once from
+the known and verified servers, then never probed, verified, listed (to the clients or to other servers), searched,
+asked for sources or used by the index update. Its UDP server traffic (status requests, global searches,
+registrations, server lists) is dropped silently, and its TCP sessions are refused like a client's: a server connects
+as a client for its relay and index update sessions, and its open sessions are closed by the ban. A configured
+`serverPeers` entry or the `relayServer` may be banned too: the ban wins, with a warning in the log, and relay mode is
+off while the relay server is banned. Lifting a ban lets the server be discovered and verified again (a configured
+peer at the next start); the relay server is used again at once.
+
+The bans are kept in the `banned_servers` table (`ip`, `reason`, `banned_at`) of H2 or MySQL, loaded at startup. The
+admin API:
+
+- `GET /api/servers/bans`: the banned servers, the most recent first, `[{"ip": "192.0.2.10", "reason": "...",
+  "bannedAt": <epoch milliseconds>}]`; `GET /api/servers` also gives a `banned` field for each known server.
+- `POST /api/servers/ban` (form-encoded `ip=<IPv4>&reason=<optional, up to 240 characters>`): `{"banned": "<ip>"}`,
+  400 when the address is not a dotted IPv4 address (host names are not resolved).
+- `POST /api/servers/unban` (form-encoded `ip=<IPv4>`): `{"unbanned": "<ip>", "wasBanned": true|false}`.
+
+Like the other POST requests of the panel, they need the panel's own `Origin` header. The CLI has `servers ban <ip>
+[reason]`, `servers unban <ip>` and `servers bans`.
+
 ## HighID / LowID
 
 At login, the server connects back to the TCP port announced by the client and sends an `OP_HELLO`. The client gets
@@ -701,6 +724,8 @@ Available commands:
 - `peers`: Lists verified server peers and their names.
 - `servers`: Monitors every known eD2K server (configured, server.met, client-reported or gossip-discovered) with its
   state (candidate, probing, verified, rejected), source, reported users/files/limits, probe latency and missed probes.
+- `servers ban <ip> [reason]`, `servers unban <ip>`, `servers bans`: Bans an eD2K server (all its ports), lifts its
+  ban, lists the banned servers (see [Banned eD2K servers](#banned-ed2k-servers)).
 - `ingestion`: Shows the number and share of new database files by ingestion channel (client push, Kad search,
   eD2K server search) since the server started.
 - `searches`: Shows, for Kad and eD2K servers, the search queries forked, requests sent, results returned, files

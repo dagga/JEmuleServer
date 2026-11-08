@@ -2,6 +2,7 @@ package org.jemule.network;
 
 import org.jemule.protocol.Tag;
 import org.jemule.security.IPFilter;
+import org.jemule.security.ServerBans;
 import org.jemule.security.ServerObfuscation;
 
 import java.net.DatagramPacket;
@@ -121,6 +122,8 @@ final class ServerGossip {
     }
 
     private final IPFilter ipFilter;
+    /** Servers banned by the administrator: blocked whatever the configuration says. */
+    private final ServerBans bans;
     /** Addresses of the configured servers (serverPeers), which the IP filter never blocks. */
     private final java.util.Set<InetAddress> trusted;
     /** Trusted addresses already logged as being in a blocked range. */
@@ -155,7 +158,17 @@ final class ServerGossip {
      *                        (a blocklist may cover a whole hosting provider, the administrator's own servers included)
      */
     ServerGossip(String configuredPeers, IPFilter ipFilter) {
+        this(configuredPeers, ipFilter, null);
+    }
+
+    /**
+     * @param configuredPeers the servers of {@code serverPeers}: trusted, kept and heard whatever the IP filter says
+     *                        (a blocklist may cover a whole hosting provider, the administrator's own servers included)
+     * @param bans            the servers banned by the administrator, never used, even when configured
+     */
+    ServerGossip(String configuredPeers, IPFilter ipFilter, ServerBans bans) {
         this.ipFilter = ipFilter != null ? ipFilter : new IPFilter();
+        this.bans = bans != null ? bans : new ServerBans();
         java.util.Set<InetAddress> configured = new java.util.HashSet<>();
         parseEndpoints(configuredPeers).forEach(endpoint -> {
             candidates.put(endpoint, Boolean.TRUE);
@@ -178,10 +191,11 @@ final class ServerGossip {
     }
 
     /**
-     * Whether the IP filter blocks a server (its ranges of hosting providers left out): never one of {@link #trusted},
-     * which is logged once.
+     * Whether a server is banned by the administrator, configured or not, or blocked by the IP filter (its ranges of
+     * hosting providers left out): the IP filter never blocks one of {@link #trusted}, which is logged once.
      */
     private boolean blocked(InetAddress address) {
+        if (bans.isBanned(address)) return true;
         if (!ipFilter.isServerBlocked(address)) return false;
         if (!trusted.contains(address)) return true;
         if (trustedInBlockedRange.add(address)) {
@@ -194,7 +208,7 @@ final class ServerGossip {
 
     /** Whether an address is an eD2K server: a configured peer, or a verified one. */
     boolean isServer(InetAddress address) {
-        if (address == null) return false;
+        if (address == null || bans.isBanned(address)) return false;
         if (trusted.contains(address)) return true;
         for (Endpoint endpoint : verified.keySet()) {
             if (endpoint.address().equals(address)) return true;
@@ -224,6 +238,7 @@ final class ServerGossip {
             candidates.keySet().removeIf(endpoint -> blocked(endpoint.address()));
             verified.keySet().removeIf(endpoint -> blocked(endpoint.address()));
         }
+        rejected.keySet().removeIf(endpoint -> bans.isBanned(endpoint.address()));
         java.util.Set<Endpoint> endpoints = new java.util.TreeSet<>(
                 Comparator.comparing((Endpoint endpoint) -> endpoint.address().getHostAddress())
                         .thenComparingInt(Endpoint::tcpPort));
@@ -264,6 +279,28 @@ final class ServerGossip {
                     missedStatusProbes.getOrDefault(endpoint, 0)));
         }
         return views;
+    }
+
+    /**
+     * Forgets at once every server at {@code address} (all its ports), when the administrator bans it: no longer a
+     * candidate, verified, rejected or in a probe or handshake, so neither listed nor used as a peer.
+     *
+     * @return the number of servers forgotten
+     */
+    synchronized int forget(InetAddress address) {
+        if (address == null) return 0;
+        java.util.Set<Endpoint> known = new java.util.HashSet<>();
+        for (Map<Endpoint, ?> map : List.of(candidates, verified, rejected, pending)) {
+            for (Endpoint endpoint : map.keySet()) {
+                if (endpoint.address().equals(address)) known.add(endpoint);
+            }
+        }
+        for (Map<Endpoint, ?> map : List.of(candidates, verified, rejected, pending, missedStatusProbes, sources,
+                serverStatuses, probeSentAt, obfuscatedSessions, statusChallenges)) {
+            map.keySet().removeIf(endpoint -> endpoint.address().equals(address));
+        }
+        receivedPings.keySet().removeIf(socket -> socket.getAddress().equals(address));
+        return known.size();
     }
 
     int addServerMetCandidates(Collection<Endpoint> endpoints) {
