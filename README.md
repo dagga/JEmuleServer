@@ -29,6 +29,23 @@ Building requires a JDK 25 (Gradle toolchain; Gradle downloads it when the machi
 
 The JAR file will be generated in `build/libs/JEmuleServer-1.5.4.jar`.
 
+The admin web panel is a [Next.js](https://nextjs.org/) app in `admin-ui/` (TypeScript, React), exported as static
+files and packaged in the JAR under `admin-ui/`. Node.js is not needed on the machine: the Gradle build downloads a
+pinned Node.js LTS and npm into `.gradle/` (plugin `com.github.node-gradle.node`), runs `npm ci` from the committed
+`package-lock.json`, then `next build` (task `buildAdminUi`, output `admin-ui/out`) before `processResources`. Both
+steps are skipped while `admin-ui/` is unchanged. The first build needs access to nodejs.org and the npm registry.
+
+To work on the panel, start a server, then the Next.js development server, which sends `/api/*` to that server
+(rewriting `Host` and `Origin` so that its checks accept the requests):
+
+```bash
+cd admin-ui
+npm ci
+JEMULE_ADMIN_URL=http://127.0.0.1:8080 npm run dev   # http://localhost:3000/
+```
+
+`npm run build` writes the static export to `admin-ui/out`; `npm run typecheck` checks the types.
+
 ## Installation from the release packages
 
 Each release on GitHub provides installers bundling their own Java runtime:
@@ -711,7 +728,11 @@ on the relay server, the Overview shows the new files the relays brought.
 ## Administration Interface
 
 JEmuleServer includes a built-in web panel and a command-line interface (CLI). The web panel is enabled by default at
-`http://127.0.0.1:8080/` and is bound to loopback only.
+`http://127.0.0.1:8080/` and is bound to loopback only. It is a static app served from the JAR (no external resource:
+it works on a LAN without Internet access) that reads the JSON API of the same port (`/api/*`). It fits any screen
+from a phone to a wide monitor: the views are in a side bar (a bar of tabs on narrow screens), tables scroll inside
+their box with a fixed header, long names and hashes are cut with an ellipsis and shown in full on hover, and the
+columns can be sorted.
 
 It opens on an **Overview**: the number of indexed files with its change over 24 hours and 7 days, the index capacity
 against `maxFiles` and the heap guard, and tiles for the connected clients (with their LowID share), the heap, the verified eD2K servers,
@@ -727,7 +748,10 @@ follows the light or dark theme of the system.
 The other views show server status, searchable clients, verified named
 server peers, a monitoring view of every known eD2K server and its state, active filters, potential bot-name matches,
 the banned file names, an ingestion breakdown of new database files by channel, Kad and eD2K server search counters
-(queries sent and results returned), and runtime settings. The bot list is
+(queries sent and results returned), and runtime settings. On a server that has them, the Servers view also bans a
+server (with a reason) and lists the banned servers to unban them, and a **Name cleaning** view manages the texts
+removed from file names, with the files cleaned at ingestion and a job that applies the rules to the files already
+indexed (progress, stop); the Remote searches tile then also shows the cache hits of the Kad and server searches. The bot list is
 only a nickname heuristic; it does not verify or automatically block clients. From the panel you can disconnect a
 client, ban or unban a file name, export the banned names, reload the IP filter, and edit any `server.properties` parameter. Settings whose scope is
 `hot` (limits, timeouts, flood protection, fake-file detection) take effect immediately; `admin` settings rebuild the
@@ -735,6 +759,9 @@ admin interfaces; `restart` settings are written to the file and shown as pendin
 its current value. Saving updates the
 file in place (comments and key order are preserved) and **Reload from file** applies external edits without a restart.
 Nothing is applied when a value is invalid.
+
+The panel's pages carry a Content Security Policy that only allows the scripts of the panel (its inline scripts by
+their SHA-256 hash) and forbids framing; its changes are same-origin form posts whose `Origin` header the server checks.
 
 The web panel has no password: any local user who can reach loopback can administer the server. Do not expose it through
 a reverse proxy, tunnel, or port forward. Set `adminWebPort=0` in `server.properties` to disable it, or change the port

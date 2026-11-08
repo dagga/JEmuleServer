@@ -60,265 +60,12 @@ import java.util.concurrent.TimeUnit;
 final class AdminWebPanel implements AutoCloseable {
     private static final Logger log = LoggerFactory.getLogger(AdminWebPanel.class);
     private static final int MAX_BODY_BYTES = 4096;
-    private static final String PAGE = """
-            <!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-            <title>JEmuleServer admin</title>
-            <style>
-            :root{color-scheme:dark;--page:#0d0d0d;--surface:#1a1a19;--raised:#252523;--ink:#f0efec;--ink2:#c3c2b7;--muted:#898781;
-            --grid:#2c2c2a;--axis:#383835;--border:rgba(255,255,255,.10);--accent:#3987e5;--s1:#3987e5;--s2:#d95926;--track:#184f95;
-            --goodText:#0ca30c;--good:#0ca30c;--warning:#fab219;--critical:#d03b3b}
-            @media (prefers-color-scheme: light){:root{color-scheme:light;--page:#f9f9f7;--surface:#fcfcfb;--raised:#f1f0ec;--ink:#0b0b0b;
-            --ink2:#52514e;--grid:#e1e0d9;--axis:#c3c2b7;--border:rgba(11,11,11,.10);--accent:#2a78d6;--s1:#2a78d6;--s2:#eb6834;--track:#cde2fb;
-            --goodText:#006300}}
-            *{box-sizing:border-box}
-            body{margin:0;font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--page);color:var(--ink)}
-            .wrap{max-width:1180px;margin:0 auto;padding:20px 16px 48px}
-            header{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap}
-            h1{font-size:20px;margin:0;font-weight:650}
-            .meta,.note,.sub{color:var(--muted);font-size:13px}
-            .note{margin:4px 0 0}
-            nav{display:flex;gap:2px;flex-wrap:wrap;border-bottom:1px solid var(--border);margin:14px 0 16px}
-            nav button{background:none;border:0;border-bottom:2px solid transparent;color:var(--ink2);padding:9px 12px;font:inherit;cursor:pointer}
-            nav button:hover{color:var(--ink)}
-            nav button[aria-selected=true]{color:var(--ink);border-bottom-color:var(--accent);font-weight:600}
-            .card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px;min-width:0}
-            .grid{display:grid;gap:12px}
-            .hero{grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);margin-bottom:12px}
-            .kpis{grid-template-columns:repeat(auto-fill,minmax(250px,1fr))}
-            @media (max-width:760px){.hero{grid-template-columns:1fr}}
-            .label{color:var(--ink2);font-size:13px}
-            .value{font-size:26px;font-weight:600;margin:4px 0 2px}
-            .big{font-size:52px;font-weight:650;line-height:1.1;margin:6px 0 8px}
-            .deltas{display:flex;gap:16px;flex-wrap:wrap;font-size:14px}
-            .up{color:var(--goodText)}.flat,.down{color:var(--ink2)}
-            .meter{height:8px;border-radius:4px;background:var(--track);overflow:hidden;margin:10px 0 8px}
-            .meter>i{display:block;height:100%;border-radius:4px}
-            .state{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--ink2)}
-            .state svg{flex:none}
-            .charts{margin-top:12px}
-            .range{display:flex;align-items:center;gap:10px;margin:18px 0 0;flex-wrap:wrap}
-            .seg{display:inline-flex;border:1px solid var(--border);border-radius:8px;overflow:hidden}
-            .seg button{background:none;border:0;color:var(--ink2);padding:6px 12px;font:inherit;font-size:13px;cursor:pointer}
-            .seg button[aria-pressed=true]{background:var(--raised);color:var(--ink);font-weight:600}
-            .chart-title{font-size:15px;font-weight:600;margin:0 0 2px}
-            .plot{position:relative;margin-top:8px}
-            .plot svg{display:block;width:100%;height:240px;overflow:visible}
-            .plot svg:focus{outline:2px solid var(--accent);outline-offset:2px}
-            .tip{position:absolute;top:0;pointer-events:none;background:var(--raised);border:1px solid var(--border);border-radius:8px;
-            padding:6px 10px;font-size:12px;white-space:nowrap;box-shadow:0 6px 18px rgba(0,0,0,.25);display:none;color:var(--ink2)}
-            .tip strong{display:block;font-size:15px;color:var(--ink);font-weight:600}
-            .empty{color:var(--muted);padding:40px 0;text-align:center}
-            details{margin-top:10px}summary{cursor:pointer;color:var(--ink2);font-size:13px}
-            .scroll{overflow-x:auto;max-height:420px;overflow-y:auto}
-            table{border-collapse:collapse;width:100%;font-size:13px}
-            th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--grid);overflow-wrap:anywhere;vertical-align:top}
-            thead th{color:var(--ink2);font-weight:600;position:sticky;top:0;background:var(--surface)}
-            tbody tr:hover{background:var(--raised)}
-            .num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
-            .toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-            .toolbar:empty{display:none}
-            input{background:var(--page);color:var(--ink);border:1px solid var(--border);border-radius:7px;padding:7px 9px;font:inherit}
-            button.btn{background:var(--raised);color:var(--ink);border:1px solid var(--border);border-radius:7px;padding:7px 11px;font:inherit;cursor:pointer}
-            button.btn:hover{border-color:var(--accent)}
-            #notice{color:var(--ink2);min-height:1.2em;margin:8px 0}
-            </style>
-            <body><div class="wrap">
-            <header><h1>JEmuleServer admin</h1><div class="meta" id="meta"></div></header>
-            <p class="note">Administration only. Potential bots are identified by nickname heuristic, not verified.</p>
-            <nav role="tablist"><button role="tab" data-view="overview">Overview</button><button role="tab" data-view="status">Status</button>
-            <button role="tab" data-view="clients">Clients</button><button role="tab" data-view="peers">Peers</button>
-            <button role="tab" data-view="servers">Servers</button><button role="tab" data-view="ingestion">Ingestion</button>
-            <button role="tab" data-view="searches">Searches</button><button role="tab" data-view="filters">Filters</button>
-            <button role="tab" data-view="bots">Bots</button><button role="tab" data-view="blocks">Blocks</button>
-            <button role="tab" data-view="settings">Settings</button></nav>
-            <main><div class="toolbar" id="controls"></div><p id="notice"></p><div id="content">Loading…</div></main>
-            </div>
-            <script>
-            const $=s=>document.querySelector(s);
-            const content=$('#content'),controls=$('#controls'),notice=$('#notice'),meta=$('#meta');
-            const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-            const NF=new Intl.NumberFormat('en'),CF=new Intl.NumberFormat('en',{notation:'compact',maximumFractionDigits:1});
-            const fmt=n=>n==null?'–':NF.format(n),compact=n=>n==null?'–':CF.format(n);
-            const DAY=86400000;
-            let timers=[],range=30,hist=null;
-            function stopTimers(){timers.forEach(clearInterval);timers=[]}
-            async function getJson(path){const r=await fetch(path);const d=await r.json();if(!r.ok)throw Error(d.error||r.statusText);return d}
-            async function post(path,data){const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams(data)});const x=await r.json();if(!r.ok)throw Error(x.error||(x.errors&&x.errors.join('; '))||r.statusText);return x}
-            function summarize(r){const parts=[];if(r.applied&&r.applied.length)parts.push('applied: '+r.applied.join(', '));if(r.deferred&&r.deferred.length)parts.push('restart required: '+r.deferred.join(', '));if(r.errors&&r.errors.length)parts.push('errors: '+r.errors.join('; '));return parts.join(' | ')||'No change.'}
-            function duration(s){const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);return d?d+' d '+h+' h':h?h+' h '+m+' min':m+' min'}
-            function clock(t){return new Date(t).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})}
-            function day(t){return new Date(t).toLocaleDateString('en-GB',{day:'numeric',month:'short'})}
-            function stamp(t){return day(t)+', '+clock(t)}
-
-            /* Status: an icon and a label, never color alone */
-            const STATES={good:['Normal','var(--good)','M3 7l3 3 5-6'],warning:['High','var(--warning)','M7 3v5M7 10.5v.5'],critical:['Critical','var(--critical)','M4 4l6 6M10 4l-6 6']};
-            function state(level,label){const[def,color,path]=STATES[level];
-              return '<span class="state"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="7" fill="'+color+'"/><path d="'+path+'" stroke="#0b0b0b" stroke-width="1.8" fill="none" stroke-linecap="round"/></svg>'+esc(label||def)+'</span>'}
-            function level(ratio){return ratio>=.9?'critical':ratio>=.75?'warning':'good'}
-            function meter(ratio){const l=level(ratio);const color=l==='good'?'var(--accent)':'var(--'+l+')';
-              return '<div class="meter" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="'+Math.round(ratio*100)+'"><i style="width:'+Math.min(100,ratio*100).toFixed(1)+'%;background:'+color+'"></i></div>'}
-            function delta(now,before,span){if(before==null)return '<span class="flat">'+esc(span)+': no sample yet</span>';
-              const d=now-before;const cls=d>0?'up':d<0?'down':'flat';const sign=d>0?'▲ +':d<0?'▼ ':'';
-              return '<span class="'+cls+'">'+sign+fmt(d)+'</span> <span class="sub">'+esc(span)+'</span>'}
-            function tile(label,value,sub,extra){return '<div class="card"><div class="label">'+esc(label)+'</div><div class="value">'+value+'</div>'+(extra||'')+'<div class="sub">'+sub+'</div></div>'}
-
-            function show(view){
-              stopTimers();notice.textContent='';controls.replaceChildren();
-              document.querySelectorAll('[data-view]').forEach(b=>b.setAttribute('aria-selected',String(b.dataset.view===view)));
-              if(view==='overview'){overview();return}
-              if(view==='clients'){controls.innerHTML='<input id="query" placeholder="Search nickname, IP, or client ID"><button class="btn" id="search">Search</button>';
-                $('#search').onclick=()=>load(view,$('#query').value);}
-              else if(view==='blocks'){controls.innerHTML='<input id="name" placeholder="File name (any case)"><input id="reason" placeholder="Reason"><button class="btn" id="ban">Ban name</button><button class="btn" id="unban">Unban name</button><a class="btn" href="/api/blocks/export" download="banned-names.txt">Export</a>';
-                $('#ban').onclick=async()=>{try{const r=await post('/api/blocks',{name:$('#name').value,reason:$('#reason').value});notice.textContent='Name banned; '+r.filesRemoved+' indexed file(s) removed.';load(view)}catch(e){notice.textContent=e.message}};
-                $('#unban').onclick=async()=>{try{const r=await post('/api/unblock',{name:$('#name').value});notice.textContent=r.wasBanned?'Name unbanned.':'This name was not banned.';load(view)}catch(e){notice.textContent=e.message}}}
-              else if(view==='settings'){controls.innerHTML='<button class="btn" id="reload">Reload from file</button><button class="btn" id="save">Save changes</button>';
-                $('#reload').onclick=async()=>{try{const r=await post('/api/settings/reload',{});notice.textContent=summarize(r);load(view)}catch(e){notice.textContent=e.message}};
-                $('#save').onclick=()=>saveSettings();}
-              else if(view==='filters'){controls.innerHTML='<button class="btn" id="reloadIp">Reload IP filter</button>';
-                $('#reloadIp').onclick=async()=>{try{const r=await post('/api/filters/reload',{});notice.textContent=(r.reloaded?'IP filter reload requested.':'IP filter path is empty.')+' Child abuse keywords reloaded.';load(view)}catch(e){notice.textContent=e.message}}}
-              load(view);
-            }
-
-            /* Overview: headline figures refreshed every 30 s, curves every 5 minutes (the sampling interval) */
-            async function overview(){
-              content.innerHTML='<div class="grid hero"><div class="card" id="heroFiles"></div><div class="card" id="heroCapacity"></div></div>'+
-                '<div class="grid kpis" id="kpis"></div>'+
-                '<div class="range"><span class="label">Range</span><div class="seg" id="range">'+[[1,'24 h'],[7,'7 days'],[30,'30 days']].map(([d,l])=>'<button data-days="'+d+'" aria-pressed="'+(d===range)+'">'+l+'</button>').join('')+'</div><span class="sub" id="histNote"></span></div>'+
-                '<div class="grid charts">'+chartCard('files','Indexed files','Files known to the index')+chartCard('clients','Connected clients','eD2K clients connected to this server')+'</div>';
-              $('#range').onclick=e=>{const b=e.target.closest('button');if(!b)return;range=+b.dataset.days;
-                document.querySelectorAll('#range button').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));drawCharts()};
-              await Promise.all([refreshKpis(),refreshHistory()]);
-              timers.push(setInterval(refreshKpis,30000),setInterval(refreshHistory,300000));
-            }
-            function chartCard(key,title,desc){return '<div class="card"><p class="chart-title">'+title+'</p><div class="sub">'+desc+', sampled every 5 minutes</div>'+
-              '<div class="plot" id="plot-'+key+'"></div><details><summary>Show as table</summary><div class="scroll" id="table-'+key+'"></div></details></div>'}
-            async function refreshKpis(){
-              let o;try{o=await getJson('/api/overview')}catch(e){notice.textContent='Request failed: '+e.message;return}
-              notice.textContent='';
-              meta.textContent='v'+o.version+' · up '+duration(o.uptimeSeconds)+' · updated '+clock(Date.now());
-              const f=o.files,c=o.clients,m=o.memory,s=o.searches,v=o.offerFilesV1,k=o.kadSources||{},ss=o.serverSources||{},iu=o.serverIndexUpdate||{},r=o.relay||{},rf=o.relayFeed||{},rr=o.relayFeedReceived||{};
-              $('#heroFiles').innerHTML='<div class="label">'+(f.relayMode?'Files of the relay server':'Indexed files')+'</div><div class="big">'+fmt(f.indexed)+'</div><div class="deltas">'+
-                delta(f.indexed,f.ago24h,'in 24 h')+delta(f.indexed,f.ago7d,'in 7 days')+'</div><div class="sub" style="margin-top:6px">'+
-                (f.relayMode?'the index of '+esc(r.server||'')+' answers the searches'+(f.relayIndexError?' · <b>its figures are not reachable: '+esc(f.relayIndexError)+'</b>':f.relayIndexAgeSeconds!=null?' · figures of '+(f.relayIndexAgeSeconds<60?f.relayIndexAgeSeconds+' s':duration(f.relayIndexAgeSeconds))+' ago':'')+' · local fallback index: '+fmt(f.local)+' files':fmt(f.newSinceStart)+' new files since the last start')+'</div>';
-              // The index is full at maxFiles or when the live heap reaches the guard, whichever comes first
-              const fileFill=f.max?f.local/f.max:0,heapFill=m.guardMb?m.liveOldMb/m.guardMb:0,fill=Math.min(1,Math.max(fileFill,heapFill));
-              const byHeap=heapFill>fileFill,pct=r=>(r*100).toFixed(1)+' %';
-              $('#heroCapacity').innerHTML='<div class="label">Index capacity · limited by '+(byHeap?'the heap':'maxFiles')+'</div><div class="value">'+pct(fill)+'</div>'+meter(fill)+
-                state(m.heapFull||fileFill>=1?'critical':level(fill),m.heapFull?'Full: heap':fileFill>=1?'Full: maxFiles':fill>=.9?'Near the limit':fill>=.75?'Filling up':'Room to grow')+
-                '<div class="sub" style="margin-top:6px">maxFiles: '+fmt(f.indexed)+' of '+fmt(f.max)+' files ('+pct(fileFill)+')'+
-                (m.guardMb?' · heap guard: '+fmt(m.liveOldMb)+' of '+fmt(m.guardMb)+' MB of live heap ('+pct(heapFill)+')':'')+
-                ' · '+fmt(f.refusedFull||0)+' new files refused since the last start; known files still get sources</div>';
-              if(f.relayMode){const ago=rf.lastSentAt?Math.round((Date.now()-rf.lastSentAt)/1000):null,fill=Math.min(1,(rf.queued||0)/200000);
-                $('#heroCapacity').innerHTML='<div class="label">Files sent to the relay server</div><div class="value">'+fmt(rf.sent||0)+'</div>'+meter(fill)+
-                  (!rf.target?state('critical','No feed: relayFeedPort or relayToken missing'):rf.lastError?state('warning','Failing: '+esc(rf.lastError)):state(level(fill),ago==null?'Nothing sent yet':'Last batch '+(ago<60?ago+' s':duration(ago))+' ago'))+
-                  '<div class="sub" style="margin-top:6px">'+fmt(rf.queued||0)+' waiting of 200,000 at most · '+fmt(rf.batches||0)+' batches · '+fmt(rf.offered||0)+' files found, '+fmt(rf.alreadyQueued||0)+' already sent with as many sources · '+fmt(rf.dropped||0)+' lost while the relay server was away · '+fmt(rf.failures||0)+' failed posts</div>'}
-              const heap=m.heapMaxMb?m.heapUsedMb/m.heapMaxMb:0,lowShare=c.connected?Math.round(c.lowId*100/c.connected):0;
-              $('#kpis').innerHTML=
-                tile('Connected clients',fmt(c.connected),fmt(c.lowId)+' LowID ('+lowShare+' %) · max '+fmt(c.max))+
-                tile('Heap',fmt(m.heapUsedMb)+' MB','of '+fmt(m.heapMaxMb)+' MB, including uncollected garbage'+(m.systemLoad!=null?' · load '+m.systemLoad.toFixed(2):''),meter(heap))+
-                tile('Peer eD2K servers',fmt(o.servers.verified),'verified of '+fmt(o.servers.known)+' known')+
-                tile('Remote searches',fmt(s.kad+s.ed2kServers),'Kad '+fmt(s.kad)+' · eD2K servers '+fmt(s.ed2kServers)+' · UDP global received '+fmt(s.udpGlobal))+
-                tile('Files found by searches',fmt(s.filesIngested),f.relayMode?'since the last start, sent to the relay server':'indexed since the last start')+
-                tile('Kad and server sources for clients',fmt(k.sourcesDelivered||0),'sent in '+fmt(k.answersSent||0)+' answers · '+fmt(k.searches||0)+' searches, '+fmt(k.cacheHits||0)+' from cache · '+fmt(ss.highIdSources||0)+' HighID sources from other servers · '+fmt(k.firewalledMatched||0)+' firewalled Kad sources reachable through this server · quota '+fmt(k.quota||0)+' of '+fmt(k.quotaMax||0)+' searches a minute ('+fmt(k.kadRefusals||0)+' Kad refusals)',k.enabled?state('good','Enabled'):'<div class="sub">Disabled (kadSourceSearchEnabled)</div>')+
-                tile('Index update from eD2K index peers',fmt(iu.newFiles||0),'new files since the last start · '+fmt(iu.searches||0)+' searches ('+fmt(iu.refinements||0)+' refinements, '+fmt(iu.fullPages||0)+' full pages) on '+fmt(iu.servers||0)+' peers · '+fmt(iu.accepted||0)+' of '+fmt(iu.results||0)+' results kept · '+fmt(iu.incidents||0)+' pauses after an incident',iu.enabled?state('good','Enabled'):'<div class="sub">Disabled (serverIndexUpdateEnabled)</div>')+
-                tile('Relay server',fmt(r.searches||0),'searches played on '+(r.server||'no relay server')+(r.announcedFiles!=null?' · '+fmt(r.announcedFiles)+' files announced to the clients':'')+' · '+fmt(r.results||0)+' results in '+fmt(r.pages||0)+' pages · '+fmt(r.sourcesFound||0)+' HighID sources for '+fmt(r.sourceRequests||0)+' requests · '+fmt(r.announcedLogins||0)+' logins told of it · '+fmt(r.failures||0)+' failures',r.active?state('good','Relay mode: this index is only a fallback'):'<div class="sub">Not configured (relayServer)</div>')+
-                (rr.clients?tile('Files from relay servers',fmt(rr.newFiles||0),'new files indexed since the last start · '+fmt(rr.files||0)+' received in '+fmt(rr.batches||0)+' batches from '+esc(rr.clients)+' · '+fmt(rr.rejected||0)+' rejected by the filters · '+fmt(rr.denied||0)+' refused posts · '+fmt(rr.busy||0)+' deferred (ingestion busy)'+(rr.lastFrom?' · last from '+esc(rr.lastFrom):'')):'')+
-                tile('OFFERFILES v1',fmt(v.newFiles),'new files from fast-publishing clients since the last start · '+fmt(v.newFilesLegacy)+' from legacy clients · '+fmt(v.sessionsAdvertised)+' of '+fmt(v.loginsAsked)+' asking logins answered',v.enabled?state('good','Enabled'):'<div class="sub">Disabled (offerFilesV1Enabled)</div>')+
-                tile('Banned names',compact(o.protection.bannedNames),fmt(o.protection.bannedNames)+' file names, from the administrator and the child abuse filter · '+fmt(o.protection.childAbuseRejected)+' files and '+fmt(o.protection.childAbuseQueries||0)+' searches refused by the child abuse filter since the last start · '+fmt(o.protection.ipFilterRanges)+' IP filter ranges')+
-                tile('Database'+(o.database.type?' ('+o.database.type+')':''),o.database.sizeMb==null?'–':fmt(o.database.sizeMb)+' MB',o.database.reopens?state('critical',(o.database.type==='MySQL'?'Reconnected ':'Reopened ')+o.database.reopens+' times after a fatal error'):state('good','No fatal error'))+
-                tile('Uptime',duration(o.uptimeSeconds),'version '+esc(o.version));
-            }
-            async function refreshHistory(){try{hist=await getJson('/api/history?days=30')}catch(e){notice.textContent='Request failed: '+e.message;return}drawCharts()}
-            function drawCharts(){
-              if(!hist||!$('#plot-files'))return;
-              const from=Date.now()-range*DAY,pts=hist.points.filter(p=>p[0]>=from);
-              const all=hist.points;
-              $('#histNote').textContent=all.length?fmt(all.length)+' samples since '+stamp(all[0][0]):'';
-              lineChart($('#plot-files'),pts,1,'var(--s1)','Indexed files',hist.intervalSeconds*1000);
-              lineChart($('#plot-clients'),pts,2,'var(--s2)','Connected clients',hist.intervalSeconds*1000);
-              dailyTable($('#table-files'),pts,1,'Indexed files');dailyTable($('#table-clients'),pts,2,'Connected clients');
-            }
-            function dailyTable(el,pts,k,name){const byDay=new Map();pts.forEach(p=>byDay.set(day(p[0]),p));
-              const rows=[...byDay.entries()].reverse();
-              el.innerHTML=rows.length?'<table><thead><tr><th>Day</th><th>Last sample</th><th class="num">'+esc(name)+'</th></tr></thead><tbody>'+
-                rows.map(([d,p])=>'<tr><td>'+esc(d)+'</td><td>'+esc(clock(p[0]))+'</td><td class="num">'+fmt(p[k])+'</td></tr>').join('')+'</tbody></table>':'<p class="sub">No sample yet.</p>'}
-            function ticks(lo,hi,n){if(lo===hi){lo-=1;hi+=1}const raw=(hi-lo)/n,mag=10**Math.floor(Math.log10(raw)),e=raw/mag;
-              const step=(e>=7.5?10:e>=3.5?5:e>=1.5?2:1)*mag,a=Math.floor(lo/step)*step,b=Math.ceil(hi/step)*step,t=[];
-              for(let v=a;v<=b+step/2;v+=step)t.push(Math.round(v*1e6)/1e6);return{a,b,t}}
-            function timeTicks(t0,t1){const out=[];const span=t1-t0;
-              if(span<=2*DAY){const step=(span<=12*3600000?2:span<=DAY*1.1?3:6)*3600000;let t=Math.ceil(t0/step)*step;for(;t<=t1;t+=step)out.push([t,clock(t)]);return out}
-              const stepDays=span<=8*DAY?1:span<=16*DAY?2:5;const d=new Date(t0);d.setHours(24,0,0,0);
-              for(let t=d.getTime(),i=0;t<=t1;t+=DAY,i++)if(i%stepDays===0)out.push([t,day(t)]);return out}
-            /* More samples than pixels: one point per bucket of about 2 px, the average of its samples */
-            function buckets(pts,k,interval,width){
-              const span=pts[pts.length-1][0]-pts[0][0],size=Math.max(interval,span/(width/2));
-              const out=[];let cur=null,prev=null;
-              pts.forEach(p=>{const gap=prev!==null&&p[0]-prev>3*interval;
-                if(!cur||gap||p[0]-cur.a>=size){cur={a:p[0],b:p[0],sum:0,n:0,gap};out.push(cur)}
-                cur.b=p[0];cur.sum+=p[k];cur.n++;prev=p[0]});
-              return out.map(c=>({t:c.n>1?(c.a+c.b)/2:c.a,v:c.sum/c.n,n:c.n,a:c.a,b:c.b,gap:c.gap}))}
-            function lineChart(el,pts,k,color,name,interval){
-              if(pts.length<2){el.innerHTML='<div class="empty">'+(pts.length?'One sample so far: '+fmt(pts[0][k])+'. ':'')+'The curve appears after the next samples (every 5 minutes).</div>';return}
-              const W=Math.max(320,el.clientWidth),H=240,L=64,R=16,T=12,B=28,iw=W-L-R,ih=H-T-B;
-              const raw=pts,t0=raw[0][0],t1=raw[raw.length-1][0];
-              pts=buckets(raw,k,interval,iw);let lo=Infinity,hi=-Infinity;pts.forEach(p=>{lo=Math.min(lo,p.v);hi=Math.max(hi,p.v)});
-              const pad=(hi-lo)*.08||1,yt=ticks(Math.max(0,lo-pad),hi+pad,4);
-              const x=t=>L+(t-t0)/((t1-t0)||1)*iw,y=v=>T+ih-(v-yt.a)/((yt.b-yt.a)||1)*ih;
-              let d='';pts.forEach((p,i)=>{d+=(i===0||p.gap?'M':'L')+x(p.t).toFixed(1)+' '+y(p.v).toFixed(1)});
-              const last=pts[pts.length-1],lastRaw=raw[raw.length-1];
-              let s='<svg viewBox="0 0 '+W+' '+H+'" tabindex="0" role="img" aria-label="'+esc(name)+': '+fmt(lastRaw[k])+' at '+esc(stamp(lastRaw[0]))+'. Use the arrow keys to read the samples.">';
-              yt.t.forEach(v=>{const yy=y(v).toFixed(1);s+='<line x1="'+L+'" x2="'+(W-R)+'" y1="'+yy+'" y2="'+yy+'" style="stroke:var(--grid)"/><text x="'+(L-8)+'" y="'+yy+'" dy="4" text-anchor="end" style="fill:var(--muted);font-size:11px;font-variant-numeric:tabular-nums">'+compact(v)+'</text>'});
-              s+='<line x1="'+L+'" x2="'+(W-R)+'" y1="'+(T+ih)+'" y2="'+(T+ih)+'" style="stroke:var(--axis)"/>';
-              timeTicks(t0,t1).forEach(([t,l])=>{s+='<text x="'+x(t).toFixed(1)+'" y="'+(H-8)+'" text-anchor="middle" style="fill:var(--muted);font-size:11px">'+esc(l)+'</text>'});
-              s+='<path d="'+d+'" fill="none" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" style="stroke:'+color+'"/>';
-              s+='<circle cx="'+x(last.t).toFixed(1)+'" cy="'+y(last.v).toFixed(1)+'" r="4" stroke-width="2" style="fill:'+color+';stroke:var(--surface)"/>';
-              s+='<line class="cross" y1="'+T+'" y2="'+(T+ih)+'" style="stroke:var(--ink2);display:none"/><circle class="dot" r="4.5" stroke-width="2" style="fill:'+color+';stroke:var(--surface);display:none"/>';
-              s+='<rect x="'+L+'" y="'+T+'" width="'+iw+'" height="'+ih+'" fill="transparent"/></svg><div class="tip"></div>';
-              el.innerHTML=s;
-              const svg=el.querySelector('svg'),cross=svg.querySelector('.cross'),dot=svg.querySelector('.dot'),tip=el.querySelector('.tip');
-              let cur=pts.length-1;
-              function at(i){cur=Math.max(0,Math.min(pts.length-1,i));const p=pts[cur],px=x(p.t),py=y(p.v),scale=svg.getBoundingClientRect().width/W;
-                cross.setAttribute('x1',px);cross.setAttribute('x2',px);cross.style.display='';dot.setAttribute('cx',px);dot.setAttribute('cy',py);dot.style.display='';
-                tip.replaceChildren();const v=document.createElement('strong');v.textContent=fmt(Math.round(p.v));
-                tip.append(v,document.createTextNode(p.n>1?name+' · average of '+p.n+' samples · '+stamp(p.a)+' to '+clock(p.b):name+' · '+stamp(p.a)));
-                tip.style.display='block';const left=px*scale+12,w=tip.offsetWidth;tip.style.left=(left+w>el.clientWidth?px*scale-w-12:left)+'px';tip.style.top=Math.max(0,py*scale-48)+'px'}
-              function hide(){cross.style.display='none';dot.style.display='none';tip.style.display='none'}
-              function nearest(t){let a=0,b=pts.length-1;while(b-a>1){const m=(a+b)>>1;if(pts[m].t<t)a=m;else b=m}return t-pts[a].t<pts[b].t-t?a:b}
-              svg.addEventListener('pointermove',e=>{const r=svg.getBoundingClientRect(),vx=(e.clientX-r.left)*W/r.width;at(nearest(t0+(vx-L)/iw*(t1-t0)))});
-              svg.addEventListener('pointerleave',hide);svg.addEventListener('blur',hide);svg.addEventListener('focus',()=>at(cur));
-              svg.addEventListener('keydown',e=>{if(e.key==='ArrowLeft'){at(cur-1);e.preventDefault()}else if(e.key==='ArrowRight'){at(cur+1);e.preventDefault()}else if(e.key==='Home'){at(0)}else if(e.key==='End'){at(pts.length-1)}});
-            }
-            let resizeTimer;window.addEventListener('resize',()=>{clearTimeout(resizeTimer);resizeTimer=setTimeout(drawCharts,150)});
-
-            /* The other views: tables from the JSON API */
-            async function load(view,q=''){content.textContent='Loading…';try{
-              const data=await getJson('/api/'+view+(view==='clients'&&q?'?q='+encodeURIComponent(q):''));
-              if(view==='status'||view==='filters'){content.innerHTML='<div class="card"><table><tbody>'+Object.entries(data).map(([k,v])=>'<tr><th>'+esc(k)+'</th><td class="'+(typeof v==='number'?'num':'')+'">'+esc(typeof v==='number'?fmt(v):v)+'</td></tr>').join('')+'</tbody></table></div>';return}
-              if(view==='settings'){renderSettings(data);return}
-              const rows=Array.isArray(data)?data:(data.clients||[]);
-              if(view==='clients')notice.textContent='Matching clients: '+data.total+' (showing '+rows.length+'; limit '+data.limit+')';
-              if(view==='bots')notice.textContent='Potential bots matched by nickname only: '+rows.length;
-              if(!rows.length){content.innerHTML='<div class="card empty">No entries.</div>';return}
-              const keys=Object.keys(rows[0]),numeric=keys.map(k=>rows.every(r=>r[k]==null||typeof r[k]==='number'));
-              content.innerHTML='<div class="card scroll"><table><thead><tr>'+keys.map((k,i)=>'<th class="'+(numeric[i]?'num':'')+'">'+esc(k)+'</th>').join('')+'<th></th></tr></thead><tbody>'+
-                rows.map(row=>'<tr>'+keys.map((k,i)=>'<td class="'+(numeric[i]?'num':'')+'">'+esc(numeric[i]&&row[k]!=null&&!/port|Id|Port/.test(k)?fmt(row[k]):row[k])+'</td>').join('')+
-                '<td>'+(row.clientId?'<button class="btn" data-kick="'+esc(row.clientId)+'">Kick</button>':'')+'</td></tr>').join('')+'</tbody></table></div>';
-              content.querySelectorAll('[data-kick]').forEach(b=>b.onclick=async()=>{try{await post('/api/kick',{clientId:b.dataset.kick});notice.textContent='Client kicked.';load(view,q)}catch(e){notice.textContent=e.message}});
-            }catch(e){content.textContent='Request failed: '+e.message}}
-            function renderSettings(list){
-              content.innerHTML='<div class="card scroll"><table><thead><tr><th>Key</th><th>Value</th><th>Scope</th><th>Description</th></tr></thead><tbody>'+
-                list.map(p=>'<tr><th>'+esc(p.key)+'</th><td>'+field(p)+(p.pending!==''?'<br><small>After restart: '+esc(p.pending)+'</small>':'')+'</td><td>'+esc(p.scope)+'</td><td>'+esc(p.description)+'</td></tr>').join('')+'</tbody></table></div>';
-            }
-            function field(p){const id='set_'+p.key,orig=esc(String(p.value));
-              if(p.type==='BOOLEAN')return '<input type="checkbox" id="'+id+'" data-orig="'+orig+'" '+(p.value?'checked':'')+'>';
-              return '<input id="'+id+'" data-orig="'+orig+'" value="'+orig+'">';}
-            async function saveSettings(){const data={};
-              document.querySelectorAll('#content input[id^=set_]').forEach(el=>{const key=el.id.slice(4);const value=el.type==='checkbox'?String(el.checked):el.value;if(value!==el.dataset.orig)data[key]=value});
-              if(!Object.keys(data).length){notice.textContent='No change.';return}
-              try{const r=await post('/api/settings',data);notice.textContent=summarize(r);if(r.errors&&r.errors.length)return;load('settings')}catch(e){notice.textContent=e.message}}
-            document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>show(b.dataset.view));show('overview');
-            </script></body></html>
-            """;
+    /** Classpath folder of the panel's static files, the Next.js export of admin-ui/ built by Gradle. */
+    static final String UI_ROOT = "admin-ui/";
+    /** Policy of the JSON answers and of the files that are not pages. */
+    private static final String API_SECURITY_POLICY = "default-src 'self' 'unsafe-inline'; frame-ancestors 'none'";
+    /** The files of the export already read, by resource name. */
+    private final Map<String, UiFile> uiFiles = new java.util.concurrent.ConcurrentHashMap<>();
 
     private final Server server;
     private final long startedAt = System.currentTimeMillis();
@@ -396,8 +143,9 @@ final class AdminWebPanel implements AutoCloseable {
         }
         String path = exchange.getRequestURI().getPath();
         String method = exchange.getRequestMethod();
-        if (path.equals("/") && method.equals("GET")) {
-            send(exchange, 200, "text/html; charset=utf-8", PAGE);
+        // HEAD too: the client-side router of the panel checks its routes with it
+        if ((method.equals("GET") || method.equals("HEAD")) && !path.startsWith("/api/")) {
+            serveUi(exchange, path);
             return;
         }
         if (method.equals("GET")) {
@@ -422,7 +170,7 @@ final class AdminWebPanel implements AutoCloseable {
             return;
         }
         if (!method.equals("POST")) {
-            exchange.getResponseHeaders().set("Allow", "GET, POST");
+            exchange.getResponseHeaders().set("Allow", path.startsWith("/api/") ? "GET, POST" : "GET, HEAD, POST");
             sendError(exchange, 405, "Method not allowed");
             return;
         }
@@ -507,6 +255,124 @@ final class AdminWebPanel implements AutoCloseable {
             }
             default -> sendError(exchange, 404, "Not found");
         }
+    }
+
+    /**
+     * GET of the panel's static files (the Next.js export of admin-ui/, packaged under {@value #UI_ROOT} in the JAR):
+     * a route ending with a slash gives its index.html, a route without the slash is redirected to it, anything else
+     * that is not a file of the export gets the 404 page.
+     */
+    private void serveUi(HttpExchange exchange, String path) throws IOException {
+        String resource = uiResource(path);
+        UiFile file = resource == null ? null : uiFile(resource);
+        if (file == null && resource != null && !path.endsWith("/") && uiFile(resource + "/index.html") != null) {
+            String query = exchange.getRequestURI().getRawQuery();
+            exchange.getResponseHeaders().set("Location", path + "/" + (query == null ? "" : "?" + query));
+            send(exchange, 308, "text/plain; charset=utf-8", "");
+            return;
+        }
+        if (file != null) {
+            sendUiFile(exchange, 200, file);
+            return;
+        }
+        UiFile notFound = uiFile("404.html");
+        if (notFound != null) {
+            sendUiFile(exchange, 404, notFound);
+        } else if (uiFile("index.html") == null) {
+            send(exchange, 404, "text/plain; charset=utf-8",
+                    "The admin web panel is not part of this build; the JSON API answers under /api/.\n");
+        } else {
+            send(exchange, 404, "text/plain; charset=utf-8", "Not found\n");
+        }
+    }
+
+    /** The resource of a request path relative to {@link #UI_ROOT}, null when the path tries to leave it. */
+    static String uiResource(String path) {
+        if (path == null || !path.startsWith("/") || path.indexOf('\\') >= 0 || path.indexOf('\0') >= 0) return null;
+        String relative = path.substring(1);
+        for (String segment : relative.split("/", -1)) {
+            if (segment.equals("..") || segment.equals(".")) return null;
+        }
+        return relative.isEmpty() || relative.endsWith("/") ? relative + "index.html" : relative;
+    }
+
+    private UiFile uiFile(String resource) {
+        // A last segment without an extension is a route (a directory of the export), never a file
+        String last = resource.substring(resource.lastIndexOf('/') + 1);
+        if (last.indexOf('.') <= 0) return null;
+        UiFile cached = uiFiles.get(resource);
+        if (cached != null) return cached;
+        try (java.io.InputStream in = AdminWebPanel.class.getClassLoader().getResourceAsStream(UI_ROOT + resource)) {
+            if (in == null) return null;
+            byte[] body = in.readAllBytes();
+            String type = contentType(resource);
+            UiFile file = new UiFile(body, type, cacheControl(resource),
+                    type.startsWith("text/html") ? pageSecurityPolicy(new String(body, StandardCharsets.UTF_8)) : API_SECURITY_POLICY);
+            // Only the files of the export are kept (a megabyte or so), never the misses
+            uiFiles.put(resource, file);
+            return file;
+        } catch (IOException e) {
+            log.warn("Admin web panel file {} unreadable: {}", resource, e.getMessage());
+            return null;
+        }
+    }
+
+    private record UiFile(byte[] body, String contentType, String cacheControl, String securityPolicy) {
+    }
+
+    static String contentType(String resource) {
+        String extension = resource.substring(resource.lastIndexOf('.') + 1).toLowerCase(Locale.ROOT);
+        return switch (extension) {
+            case "html" -> "text/html; charset=utf-8";
+            case "js", "mjs" -> "text/javascript; charset=utf-8";
+            case "css" -> "text/css; charset=utf-8";
+            case "json", "map" -> "application/json; charset=utf-8";
+            // The RSC payloads of the client-side navigation
+            case "txt" -> "text/plain; charset=utf-8";
+            case "svg" -> "image/svg+xml";
+            case "png" -> "image/png";
+            case "ico" -> "image/x-icon";
+            case "webp" -> "image/webp";
+            case "woff2" -> "font/woff2";
+            case "woff" -> "font/woff";
+            default -> "application/octet-stream";
+        };
+    }
+
+    /** Pages are never stored; the files of _next/static have a content hash in their name and never change. */
+    private static String cacheControl(String resource) {
+        if (resource.endsWith(".html")) return "no-store";
+        if (resource.startsWith("_next/static/")) return "public, max-age=31536000, immutable";
+        return "no-cache";
+    }
+
+    private static final java.util.regex.Pattern INLINE_SCRIPT = java.util.regex.Pattern.compile(
+            "<script(?![^>]*\\ssrc=)[^>]*>(.*?)</script>", java.util.regex.Pattern.DOTALL | java.util.regex.Pattern.CASE_INSENSITIVE);
+
+    /**
+     * The policy of a page: scripts from this origin, and the inline scripts of that page only (Next.js hydrates with
+     * them), allowed by their SHA-256 hash rather than by 'unsafe-inline'.
+     */
+    static String pageSecurityPolicy(String html) {
+        StringBuilder scripts = new StringBuilder("'self'");
+        java.util.regex.Matcher matcher = INLINE_SCRIPT.matcher(html);
+        try {
+            java.security.MessageDigest sha256 = java.security.MessageDigest.getInstance("SHA-256");
+            while (matcher.find()) {
+                if (matcher.group(1).isEmpty()) continue;
+                byte[] hash = sha256.digest(matcher.group(1).getBytes(StandardCharsets.UTF_8));
+                scripts.append(" 'sha256-").append(java.util.Base64.getEncoder().encodeToString(hash)).append('\'');
+            }
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
+        return "default-src 'self'; script-src " + scripts + "; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+                + "connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
+    }
+
+    private static void sendUiFile(HttpExchange exchange, int status, UiFile file) throws IOException {
+        if (file.contentType().startsWith("text/html")) exchange.getResponseHeaders().set("Referrer-Policy", "no-referrer");
+        sendBytes(exchange, status, file.contentType(), file.body(), file.cacheControl(), file.securityPolicy());
     }
 
     /** GET of this index's figures by a relay server (relay mode): see {@link RelayIndexView}. */
@@ -1152,14 +1018,22 @@ final class AdminWebPanel implements AutoCloseable {
     }
 
     private static void send(HttpExchange exchange, int status, String type, String body) throws IOException {
-        byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+        sendBytes(exchange, status, type, body.getBytes(StandardCharsets.UTF_8), "no-store", API_SECURITY_POLICY);
+    }
+
+    private static void sendBytes(HttpExchange exchange, int status, String type, byte[] bytes, String cacheControl,
+                                  String securityPolicy) throws IOException {
         exchange.getResponseHeaders().set("Content-Type", type);
-        exchange.getResponseHeaders().set("Cache-Control", "no-store");
+        exchange.getResponseHeaders().set("Cache-Control", cacheControl);
         exchange.getResponseHeaders().set("X-Content-Type-Options", "nosniff");
         exchange.getResponseHeaders().set("X-Frame-Options", "DENY");
-        exchange.getResponseHeaders().set("Content-Security-Policy", "default-src 'self' 'unsafe-inline'; frame-ancestors 'none'");
-        exchange.sendResponseHeaders(status, bytes.length);
-        exchange.getResponseBody().write(bytes);
+        exchange.getResponseHeaders().set("Content-Security-Policy", securityPolicy);
+        if (exchange.getRequestMethod().equals("HEAD")) {
+            exchange.sendResponseHeaders(status, -1);
+            return;
+        }
+        exchange.sendResponseHeaders(status, bytes.length == 0 ? -1 : bytes.length);
+        if (bytes.length > 0) exchange.getResponseBody().write(bytes);
     }
 
     private static String encode(Object value) {

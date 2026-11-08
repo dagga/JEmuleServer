@@ -4,6 +4,8 @@ plugins {
     java
     id("com.gradleup.shadow") version "8.3.10"
     jacoco
+    // Builds the admin web panel (admin-ui/) with a Node.js and npm it downloads: nothing to install
+    id("com.github.node-gradle.node") version "7.1.0"
 }
 
 group = "org.jemule"
@@ -87,8 +89,41 @@ tasks.withType<JavaCompile>().configureEach {
     options.compilerArgs.add("-parameters")
 }
 
+// Admin web panel: a Next.js app exported as static files (admin-ui/out), served by AdminWebPanel from the JAR.
+// Node.js and npm are pinned and downloaded into .gradle/ (nodejs, npm); the packages come from package-lock.json.
+node {
+    download.set(true)
+    version.set("24.22.2")
+    npmVersion.set("11.19.1")
+    npmInstallCommand.set("ci")
+    nodeProjectDir.set(file("admin-ui"))
+}
+
+tasks.named<com.github.gradle.node.npm.task.NpmInstallTask>("npmInstall").configure {
+    // The lockfile npm writes in node_modules stands for the whole tree, much faster to check than every file
+    nodeModulesOutputFilter {
+        include(".package-lock.json")
+    }
+}
+
+val buildAdminUi = tasks.register<com.github.gradle.node.npm.task.NpmTask>("buildAdminUi") {
+    description = "Builds the admin web panel (Next.js static export) into admin-ui/out."
+    group = "build"
+    dependsOn(tasks.named("npmInstall"))
+    npmCommand.set(listOf("run", "build"))
+    environment.put("NEXT_TELEMETRY_DISABLED", "1")
+    inputs.dir("admin-ui/src").withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.files("admin-ui/package.json", "admin-ui/package-lock.json", "admin-ui/next.config.mjs",
+        "admin-ui/tsconfig.json").withPathSensitivity(PathSensitivity.RELATIVE)
+    outputs.dir("admin-ui/out")
+}
+
 // Ensure server.properties (project root) is included in the jar resources
-tasks.named("processResources") {
+tasks.named<ProcessResources>("processResources") {
+    // The exported panel, under admin-ui/ in the JAR
+    from(buildAdminUi) {
+        into("admin-ui")
+    }
     doLast {
         copy {
             from(rootProject.file("server.properties"))

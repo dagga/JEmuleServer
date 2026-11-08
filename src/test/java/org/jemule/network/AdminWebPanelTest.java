@@ -624,4 +624,115 @@ class AdminWebPanelTest {
             released.countDown();
         }
     }
+
+    @Test
+    void theRootServesTheExportedPanelWithItsSecurityHeaders() throws Exception {
+        Server server = mock(Server.class);
+        try (AdminWebPanel panel = new AdminWebPanel(server)) {
+            panel.start(0);
+            HttpClient client = HttpClient.newHttpClient();
+            String base = "http://127.0.0.1:" + panel.port();
+            HttpResponse<String> page = client.send(HttpRequest.newBuilder(URI.create(base + "/")).GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, page.statusCode());
+            assertTrue(page.headers().firstValue("Content-Type").orElse("").startsWith("text/html"));
+            assertEquals("no-store", page.headers().firstValue("Cache-Control").orElse(""));
+            assertEquals("DENY", page.headers().firstValue("X-Frame-Options").orElse(""));
+            assertEquals("nosniff", page.headers().firstValue("X-Content-Type-Options").orElse(""));
+            String policy = page.headers().firstValue("Content-Security-Policy").orElse("");
+            assertTrue(policy.contains("frame-ancestors 'none'"), policy);
+            assertFalse(policy.matches(".*script-src[^;]*'unsafe-inline'.*"), "inline scripts by hash only: " + policy);
+            assertEquals(AdminWebPanel.pageSecurityPolicy(page.body()), policy);
+            assertTrue(page.body().contains("<title>JEmuleServer admin</title>"), page.body());
+
+            // Every script and stylesheet of the page is served from the root, with a long cache
+            java.util.regex.Matcher assets = java.util.regex.Pattern.compile("(?:src|href)=\"(/_next/static/[^\"]+)\"")
+                    .matcher(page.body());
+            int count = 0;
+            while (assets.find()) {
+                HttpResponse<String> asset = client.send(HttpRequest.newBuilder(URI.create(base + assets.group(1))).GET().build(),
+                        HttpResponse.BodyHandlers.ofString());
+                assertEquals(200, asset.statusCode(), assets.group(1));
+                assertTrue(asset.headers().firstValue("Cache-Control").orElse("").contains("immutable"), assets.group(1));
+                String type = asset.headers().firstValue("Content-Type").orElse("");
+                assertTrue(type.startsWith(assets.group(1).endsWith(".css") ? "text/css" : "text/javascript"), assets.group(1) + ": " + type);
+                count++;
+            }
+            assertTrue(count > 0, "no asset in the page");
+        }
+    }
+
+    @Test
+    void viewsAreDirectoriesOfTheExportAndUnknownPathsGetThe404Page() throws Exception {
+        Server server = mock(Server.class);
+        try (AdminWebPanel panel = new AdminWebPanel(server)) {
+            panel.start(0);
+            HttpClient client = HttpClient.newHttpClient();
+            String base = "http://127.0.0.1:" + panel.port();
+            HttpResponse<String> view = client.send(HttpRequest.newBuilder(URI.create(base + "/clients/")).GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, view.statusCode());
+            assertTrue(view.headers().firstValue("Content-Type").orElse("").startsWith("text/html"));
+
+            HttpResponse<String> head = client.send(HttpRequest.newBuilder(URI.create(base + "/clients/"))
+                    .method("HEAD", HttpRequest.BodyPublishers.noBody()).build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, head.statusCode());
+            assertEquals("", head.body());
+
+            HttpResponse<String> noSlash =client.send(HttpRequest.newBuilder(URI.create(base + "/settings")).GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(308, noSlash.statusCode());
+            assertEquals("/settings/", noSlash.headers().firstValue("Location").orElse(""));
+
+            HttpResponse<String> payload = client.send(HttpRequest.newBuilder(URI.create(base + "/clients/index.txt")).GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, payload.statusCode());
+            assertTrue(payload.headers().firstValue("Content-Type").orElse("").startsWith("text/plain"));
+
+            HttpResponse<String> unknown = client.send(HttpRequest.newBuilder(URI.create(base + "/no-such-view/")).GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(404, unknown.statusCode());
+            assertTrue(unknown.headers().firstValue("Content-Type").orElse("").startsWith("text/html"));
+            assertTrue(unknown.body().contains("Page not found"), unknown.body());
+
+            HttpResponse<String> missingFile = client.send(HttpRequest.newBuilder(URI.create(base + "/_next/static/missing.js")).GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(404, missingFile.statusCode());
+
+            // The API keeps its JSON answers
+            HttpResponse<String> api = client.send(HttpRequest.newBuilder(URI.create(base + "/api/missing")).GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(404, api.statusCode());
+            assertTrue(api.body().contains("\"error\":\"Not found\""), api.body());
+            assertTrue(api.headers().firstValue("Content-Type").orElse("").startsWith("application/json"));
+
+            HttpResponse<String> post = client.send(HttpRequest.newBuilder(URI.create(base + "/"))
+                    .header("Origin", base).header("Content-Type", "application/x-www-form-urlencoded")
+                    .POST(HttpRequest.BodyPublishers.ofString("")).build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(404, post.statusCode(), "the panel's files are only read");
+        }
+    }
+
+    @Test
+    void thePanelFilesStayInsideTheExport() {
+        assertEquals("index.html", AdminWebPanel.uiResource("/"));
+        assertEquals("clients/index.html", AdminWebPanel.uiResource("/clients/"));
+        assertEquals("_next/static/chunks/a.js", AdminWebPanel.uiResource("/_next/static/chunks/a.js"));
+        assertEquals(null, AdminWebPanel.uiResource("/../server.properties"));
+        assertEquals(null, AdminWebPanel.uiResource("/clients/../../x.html"));
+        assertEquals(null, AdminWebPanel.uiResource("/a\\b.js"));
+        assertTrue(AdminWebPanel.contentType("x/y.woff2").equals("font/woff2"));
+        assertTrue(AdminWebPanel.contentType("icon.svg").equals("image/svg+xml"));
+    }
+
+    @Test
+    void inlineScriptsAreAllowedByTheirHash() throws Exception {
+        String script = "self.__next_f.push([1,\"x\"])";
+        String hash = java.util.Base64.getEncoder().encodeToString(java.security.MessageDigest.getInstance("SHA-256")
+                .digest(script.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        String policy = AdminWebPanel.pageSecurityPolicy("<html><script src=\"/_next/static/a.js\" async></script>"
+                + "<script>" + script + "</script></html>");
+        assertTrue(policy.contains("script-src 'self' 'sha256-" + hash + "';"), policy);
+        assertTrue(policy.contains("frame-ancestors 'none'"), policy);
+    }
 }

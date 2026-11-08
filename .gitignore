@@ -38,3 +38,12 @@ Thumbs.db
 
 # Specifications (kept local)
 /SFD_*.md
+
+# Admin web panel (admin-ui/): npm packages, Next.js build and static export; Node.js and npm downloaded by Gradle
+/admin-ui/node_modules/
+/admin-ui/.next/
+/admin-ui/out/
+/admin-ui/next-env.d.ts
+/admin-ui/*.tsbuildinfo
+/.gradle/nodejs/
+/.gradle/npm/
