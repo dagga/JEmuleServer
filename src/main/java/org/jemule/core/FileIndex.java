@@ -581,6 +581,19 @@ public class FileIndex implements AutoCloseable {
     }
 
     private volatile RelayFeed relayFeed;
+    /** Relay mode: the files handed to the feed, by channel. */
+    private final java.util.concurrent.ConcurrentHashMap<FileSource, LongAdder> relayedBySource =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** Relay mode: the files sent to the relay server since the start, by channel (each channel listed). */
+    public Map<FileSource, Long> relayedFileCounts() {
+        Map<FileSource, Long> counts = new java.util.EnumMap<>(FileSource.class);
+        for (FileSource source : FileSource.values()) {
+            LongAdder adder = relayedBySource.get(source);
+            counts.put(source, adder == null ? 0L : adder.sum());
+        }
+        return counts;
+    }
 
     /** Sets the feed of the relay mode (null: none). */
     public void setRelayFeed(RelayFeed feed) {
@@ -594,7 +607,7 @@ public class FileIndex implements AutoCloseable {
     }
 
     /** Relay mode: the files go to the feed, only the clients' online sources stay here. */
-    private List<FileMetadata> relay(RelayFeed feed, Collection<FileMetadata> files) {
+    private List<FileMetadata> relay(RelayFeed feed, Collection<FileMetadata> files, FileSource source) {
         List<FileMetadata> handed = new ArrayList<>(files.size());
         for (FileMetadata file : files) {
             if (file == null || file.hash() == null) continue;
@@ -608,6 +621,7 @@ public class FileIndex implements AutoCloseable {
             }
             handed.add(file);
         }
+        if (!handed.isEmpty()) relayedBySource.computeIfAbsent(source, k -> new LongAdder()).add(handed.size());
         return List.copyOf(handed);
     }
 
@@ -633,7 +647,7 @@ public class FileIndex implements AutoCloseable {
     public FileMetadata addFile(FileMetadata meta, FileSource source) {
         RelayFeed feed = relayFeed;
         if (feed != null && feed.relayMode()) {
-            List<FileMetadata> handed = relay(feed, java.util.Collections.singletonList(meta));
+            List<FileMetadata> handed = relay(feed, java.util.Collections.singletonList(meta), source);
             return handed.isEmpty() ? null : handed.getFirst();
         }
         Writes writes = new Writes(1);
@@ -655,7 +669,7 @@ public class FileIndex implements AutoCloseable {
     public List<FileMetadata> addFiles(Collection<FileMetadata> files, FileSource source) {
         if (files == null || files.isEmpty()) return List.of();
         RelayFeed feed = relayFeed;
-        if (feed != null && feed.relayMode()) return relay(feed, files);
+        if (feed != null && feed.relayMode()) return relay(feed, files, source);
         Writes writes = new Writes(files.size());
         List<FileMetadata> stored = new ArrayList<>(files.size());
         for (FileMetadata file : files) {

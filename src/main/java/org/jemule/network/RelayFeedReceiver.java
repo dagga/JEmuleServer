@@ -93,14 +93,7 @@ final class RelayFeedReceiver {
 
     /** Checks the sender and the token, then queues the files of the body for indexing. */
     Answer receive(InetAddress from, String authorization, InputStream body) throws IOException {
-        String token = config.get().effectiveToken();
-        if (token.isEmpty() || !allowed(from) || !validToken(authorization, token)) {
-            if (denied.incrementAndGet() % 100 == 1) {
-                log.warn("Relay feed refused from {} (not in relayClients, or wrong relayToken)",
-                        from == null ? "?" : from.getHostAddress());
-            }
-            return new Answer(403, Map.of("error", "Not an allowed relay server"));
-        }
+        if (!authorized(from, authorization)) return new Answer(403, Map.of("error", "Not an allowed relay server"));
         byte[] payload = gunzip(body);
         if (payload == null) return new Answer(413, Map.of("error", "Body too large"));
         List<FileMetadata> decoded = ServerSearchBridge.decodeSearchResult(payload);
@@ -124,6 +117,17 @@ final class RelayFeedReceiver {
         lastFrom = from.getHostAddress();
         lastAt = System.currentTimeMillis();
         return new Answer(200, Map.of("received", decoded.size(), "accepted", kept.size()));
+    }
+
+    /** Whether {@code from} is one of relayClients and sends relayToken: a relay server of this one. */
+    boolean authorized(InetAddress from, String authorization) {
+        String token = config.get().effectiveToken();
+        if (!token.isEmpty() && allowed(from) && validToken(authorization, token)) return true;
+        if (denied.incrementAndGet() % 100 == 1) {
+            log.warn("Relay request refused from {} (not in relayClients, or wrong relayToken)",
+                    from == null ? "?" : from.getHostAddress());
+        }
+        return false;
     }
 
     private static boolean validToken(String authorization, String token) {

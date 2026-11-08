@@ -48,6 +48,12 @@ public interface ClientContext {
         return getServer() != null ? getServer().getServerRelay() : null;
     }
 
+    /** Files announced to the client: the relay server's in relay mode, see {@link Server#announcedFileCount}. */
+    default int announcedFileCount() {
+        Server server = getServer();
+        return server != null ? server.announcedFileCount() : getFileIndex().fileCount();
+    }
+
     /** Kad source searches for OP_GETSOURCES, null without a server or a Kad node. */
     default org.jemule.network.KadSourceService getKadSourceService() {
         return getServer() != null ? getServer().getKadSourceService() : null;

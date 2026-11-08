@@ -121,11 +121,16 @@ public final class RelayFeed implements FileIndex.RelayFeed, AutoCloseable {
 
     /** The relay server's feed address, or null without a relay server, a port or a token. */
     static URI target(String relayServer, int port, String token) {
+        return uri(relayServer, port, token, PATH);
+    }
+
+    /** {@code path} on the relay server's admin panel, or null without a relay server, a port or a token. */
+    static URI uri(String relayServer, int port, String token, String path) {
         if (relayServer == null || relayServer.isBlank() || port <= 0 || token == null || token.isEmpty()) return null;
         int colon = relayServer.lastIndexOf(':');
         String host = colon > 0 ? relayServer.substring(0, colon).trim() : relayServer.trim();
         try {
-            return new URI("http", null, host, port, PATH, null, null);
+            return new URI("http", null, host, port, path, null, null);
         } catch (java.net.URISyntaxException e) {
             return null;
         }

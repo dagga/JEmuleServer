@@ -78,6 +78,7 @@ public class Server {
     private final ServerRelay serverRelay;
     private final RelayFeed relayFeed;
     private final RelayFeedReceiver relayFeedReceiver;
+    private final RelayIndexView relayIndexView;
     private final ClientRegistry registry = new ClientRegistry();
     private final java.util.Set<Socket> clientSockets = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private final FileIndex fileIndex;
@@ -327,6 +328,10 @@ public class Server {
         this.relayFeed = new RelayFeed(() -> serverRelay.endpoint() != null, this::relayFeedTarget,
                 () -> this.config.relayFeed().effectiveToken());
         this.fileIndex.setRelayFeed(relayFeed);
+        // The relay server's file count and history, shown here instead of the fallback index's
+        this.relayIndexView = new RelayIndexView(() -> RelayFeed.uri(this.config.relayServer(),
+                this.config.relayFeed().port(), this.config.relayFeed().effectiveToken(), RelayIndexView.PATH),
+                () -> this.config.relayFeed().effectiveToken());
         // Receiving side: the files of the relay servers allowed by relayClients
         this.relayFeedReceiver = new RelayFeedReceiver(() -> this.config.relayFeed(), fileIndex, fakeFileDetector, ingestion);
         if (!config.relayServer().isBlank()) {
@@ -486,6 +491,10 @@ public class Server {
         return relayFeedReceiver;
     }
 
+    RelayIndexView getRelayIndexView() {
+        return relayIndexView;
+    }
+
     private volatile ServerConfig relayFeedTargetOf;
     private volatile java.net.URI relayFeedTarget;
 
@@ -498,6 +507,29 @@ public class Server {
             relayFeedTargetOf = current;
         }
         return relayFeedTarget;
+    }
+
+    /**
+     * Files announced to the clients (OP_SERVERSTATUS) and to the other servers (OP_GLOBSERVSTATRES): in relay mode,
+     * those of the relay server's index, whose files the searches return, as its last status gave them.
+     */
+    public int announcedFileCount() {
+        int local = fileIndex.fileCount();
+        ServerRelay relay = serverRelay;
+        if (relay == null || relay.endpoint() == null) return local;
+        Long relayFiles = serverGossip.serverViews().stream()
+                .filter(view -> view.files() != null && relay.isRelayServer(view.endpoint().address()))
+                .map(ServerGossip.ServerView::files)
+                .max(Long::compare).orElse(null);
+        // Before its first status (at the start), what its admin panel told
+        if (relayFiles == null) relayFiles = relayIndexView.files();
+        return announcedFiles(local, relayFiles);
+    }
+
+    /** The relay server's file count when known, the local one otherwise. */
+    static int announcedFiles(int local, Long relayFiles) {
+        if (relayFiles == null || relayFiles < 0) return local;
+        return (int) Math.min(Integer.MAX_VALUE, relayFiles);
     }
 
     /** The verified peers, but the relay server in relay mode: that one is asked over its TCP sessions. */
@@ -949,6 +981,14 @@ public class Server {
 
             startIpFilterLoading();
             startServerMetLoading();
+            // Relay mode: the relay server's file count and history, at once then every 5 minutes (maintenance tier)
+            maintenance.scheduleWithFixedDelay(() -> {
+                try {
+                    if (serverRelay.endpoint() != null) relayIndexView.refresh();
+                } catch (RuntimeException e) {
+                    log.debug("Relay index refresh failed: {}", e.getMessage());
+                }
+            }, 0, RelayIndexView.REFRESH_MILLIS, TimeUnit.MILLISECONDS);
             // Curves of the admin panel: one sample now, then every 5 minutes (maintenance tier)
             maintenance.scheduleAtFixedRate(this::recordMetrics, 0, org.jemule.core.MetricsHistory.INTERVAL_MS,
                     TimeUnit.MILLISECONDS);
@@ -1296,7 +1336,7 @@ public class Server {
         resp.put((byte) 0x97); // OP_GLOBSERVSTATRES
         resp.putInt(challenge);
         resp.putInt(registry.size());
-        resp.putInt(fileIndex.fileCount());
+        resp.putInt(announcedFileCount());
         resp.putInt(config.maxUsers());
         resp.putInt(config.maxFilesPerUser()); // SoftFiles: distinct files indexed per client
         resp.putInt(org.jemule.network.handler.PublishHandler.HARD_FILES); // HardFiles: an OP_OFFERFILES must declare fewer
@@ -1512,7 +1552,8 @@ public class Server {
 
     private void recordMetrics() {
         try {
-            metricsHistory.record(System.currentTimeMillis(), fileIndex.fileCount(), registry.size());
+            // Relay mode: the files the clients can find, those of the relay server's index
+            metricsHistory.record(System.currentTimeMillis(), announcedFileCount(), registry.size());
         } catch (RuntimeException e) {
             log.warn("Could not record the metrics sample: {}", e.getMessage());
         }
