@@ -73,6 +73,8 @@ class KadAcceptanceTest {
     KadUdpService peer;
     /** Files the remote peer returns, per keyword hash. */
     final Map<KadId, List<FileMetadata>> peerCatalog = new ConcurrentHashMap<>();
+    /** Keyword searches the remote peer received. */
+    final java.util.concurrent.atomic.AtomicInteger keywordRequests = new java.util.concurrent.atomic.AtomicInteger();
 
     @BeforeEach
     void setup() throws Exception {
@@ -86,6 +88,7 @@ class KadAcceptanceTest {
         peer = new KadUdpService(0);
         peer.start();
         peer.registerListener(KadOpCode.SEARCH_KEY_REQ, (packet, addr, port) -> {
+            keywordRequests.incrementAndGet();
             KadPacket.SearchKeyReq req = KadPacket.parseSearchKeyReq(packet.data());
             List<FileMetadata> files = req != null ? peerCatalog.get(req.keywordHash()) : null;
             if (files != null) {
@@ -320,6 +323,7 @@ class KadAcceptanceTest {
                 kadFile(desktop, "ubuntu desktop.iso", 5),
                 kadFile(server, "ubuntu server.iso", 3)));
         peerJoinsTheRoutingTable();
+        node.getSearchBridge().setResultCacheTtl(() -> 0L); // played on Kad again (remoteSearchCacheMinutes=0)
 
         // Cold search: discovered on Kad and ingested
         assertEquals(List.of(desktop, server), hashes(search(client("10.1.1.1"), "ubuntu")));
@@ -344,6 +348,7 @@ class KadAcceptanceTest {
         String desktop = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
         peerCatalog.put(KadId.fromKeyword("ubuntu"), List.of(kadFile(desktop, "ubuntu desktop.iso", 5)));
         peerJoinsTheRoutingTable();
+        node.getSearchBridge().setResultCacheTtl(() -> 0L); // without the result cache (remoteSearchCacheMinutes=0)
         for (int i = 0; i < KadSearchBridge.MAX_REPLAYS; i++) {
             FakeContext ctx = client("10.1.1." + (i + 1));
             if (search(ctx, "ubuntu").more() == 1) queryMore(ctx); // waits for the end of the Kad session
@@ -354,6 +359,34 @@ class KadAcceptanceTest {
         assertEquals(List.of(desktop), hashes(local), "answered from H2");
         assertEquals(0, local.more(), "not sent on Kad a fourth time");
         assertEquals(1, node.getSearchBridge().getSearchesSkippedAsRecent());
+    }
+
+    @Test
+    void aSearchRepeatedWithinTheCacheTimeGetsTheKadResultsAtOnceWithoutAskingKadAgain() throws Exception {
+        String desktop = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+        String server = "ffffffffffffffffffffffffffffffff";
+        peerCatalog.put(KadId.fromKeyword("ubuntu"), List.of(
+                kadFile(desktop, "ubuntu desktop.iso", 5),
+                kadFile(server, "ubuntu server.iso", 3)));
+        peerJoinsTheRoutingTable();
+        assertEquals(List.of(desktop, server), hashes(search(client("10.1.1.1"), "ubuntu")), "cold search on Kad");
+        int requests = keywordRequests.get();
+        long ingested = node.getSearchBridge().getFilesIngested();
+        assertTrue(requests > 0);
+
+        // The same search by another client, written otherwise
+        FakeContext ctx = client("10.2.2.2");
+        long start = System.nanoTime();
+        SearchAnswer again = search(ctx, "Ubuntu");
+        long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+
+        assertEquals(List.of(desktop, server), hashes(again));
+        assertEquals(0, again.more(), "no Kad search to wait for");
+        assertTrue(elapsedMs < 100, "answered without waiting for Kad: " + elapsedMs + " ms");
+        assertEquals(requests, keywordRequests.get(), "not sent on Kad again");
+        assertEquals(ingested, node.getSearchBridge().getFilesIngested(), "not ingested again");
+        assertEquals(1, node.getSearchBridge().getResultCache().hits());
+        assertEquals(1, node.getSearchBridge().getResultCache().misses());
     }
 
     @Test

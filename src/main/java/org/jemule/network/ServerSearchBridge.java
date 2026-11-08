@@ -5,6 +5,7 @@ import org.jemule.core.FileMetadata;
 import org.jemule.core.FileSource;
 import org.jemule.core.IngestionExecutor;
 import org.jemule.core.RecentQueries;
+import org.jemule.core.RemoteSearchCache;
 import org.jemule.core.SearchQuery;
 import org.jemule.protocol.FileTypes;
 import org.jemule.protocol.Tag;
@@ -32,6 +33,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
 /** Fans client searches out to verified eD2K servers and ingests their matching results. */
@@ -103,6 +105,10 @@ public final class ServerSearchBridge implements AutoCloseable {
     private volatile IngestionExecutor ingestion = IngestionExecutor.direct();
     private volatile boolean running = true;
     private volatile RecentQueries recentQueries = new RecentQueries(REPLAY_WINDOW_MS, MAX_REPLAYS, MAX_RECENT_QUERIES);
+    /** Time to live of the results of a search (remoteSearchCacheMinutes), read at every search. */
+    private volatile LongSupplier resultCacheTtlMs = () -> RemoteSearchCache.ttlMs(RemoteSearchCache.DEFAULT_MINUTES);
+    /** The same search played within the time to live gets the results found then, without asking the servers again. */
+    private final RemoteSearchCache resultCache = new RemoteSearchCache(() -> resultCacheTtlMs.getAsLong());
 
     ServerSearchBridge(Supplier<Collection<ServerGossip.VerifiedPeer>> peers,
                        Supplier<DatagramSocket> socket,
@@ -129,6 +135,13 @@ public final class ServerSearchBridge implements AutoCloseable {
                 || searchTree.length > MAX_QUERY_BYTES) {
             return CompletableFuture.completedFuture(List.of());
         }
+        // A search played within remoteSearchCacheMinutes is not played again: its clean results are returned, and
+        // not ingested again. The same search still running is joined, even when another client encoded it otherwise.
+        return resultCache.search(RemoteSearchCache.key(query), () -> playSearch(query, searchTree));
+    }
+
+    /** Sends {@code searchTree} to the verified servers, without the result cache. */
+    private CompletableFuture<List<FileMetadata>> playSearch(SearchQuery query, byte[] searchTree) {
         String key = query.toString();
         SearchSession session = new SearchSession(query, searchTree);
         SearchSession existing = sessions.putIfAbsent(key, session);
@@ -175,6 +188,16 @@ public final class ServerSearchBridge implements AutoCloseable {
     /** Searches not sent because an identical one was sent {@link #MAX_REPLAYS} times within {@link #REPLAY_WINDOW_MS}. */
     public long getSearchesSkippedAsRecent() {
         return recentQueries.skipped();
+    }
+
+    /** Changes the time to live of the results of a search (0 or less: every search is sent to the servers). */
+    void setResultCacheTtl(LongSupplier ttlMs) {
+        this.resultCacheTtlMs = ttlMs == null ? () -> 0L : ttlMs;
+    }
+
+    /** The results of the searches played recently, with their hit, miss and join counters. */
+    public RemoteSearchCache getResultCache() {
+        return resultCache;
     }
 
     /** Changes the time during which an identical search is sent at most {@link #MAX_REPLAYS} times (0: always sent). */
@@ -428,5 +451,6 @@ public final class ServerSearchBridge implements AutoCloseable {
         running = false;
         sessions.values().forEach(SearchSession::complete);
         sessions.clear();
+        resultCache.clear();
     }
 }

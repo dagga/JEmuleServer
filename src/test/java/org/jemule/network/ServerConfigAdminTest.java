@@ -54,6 +54,24 @@ class ServerConfigAdminTest {
     }
 
     @Test
+    void theRemoteSearchCacheTimeIsAppliedWithoutRestart() throws Exception {
+        Path file = tempDir.resolve("server.properties");
+        Files.writeString(file, "port=4661\n");
+        Server server = server(file);
+        try {
+            assertEquals(15, server.configSnapshot().remoteSearchCacheMinutes());
+            ConfigApplyResult result = server.updateConfig(Map.of("remoteSearchCacheMinutes", "0"));
+
+            assertTrue(result.applied().contains("remoteSearchCacheMinutes"), result.summary());
+            assertEquals(0, server.configSnapshot().remoteSearchCacheMinutes());
+            assertTrue(Files.readString(file).contains("remoteSearchCacheMinutes=0"));
+            assertFalse(server.updateConfig(Map.of("remoteSearchCacheMinutes", "1441")).success());
+        } finally {
+            server.stop();
+        }
+    }
+
+    @Test
     void aNewMaxFilesAppliesToTheIndexAtOnce() throws Exception {
         // 1.2.24 kept the maxFiles of the start: raised from 1,200,000 to 3,000,000 with 1,521,140 files indexed,
         // the index still refused every new file

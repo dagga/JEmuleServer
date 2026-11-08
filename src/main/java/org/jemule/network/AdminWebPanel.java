@@ -593,6 +593,9 @@ final class AdminWebPanel implements AutoCloseable {
         searches.put("udpGlobal", global == null ? 0L : global.getReceived());
         searches.put("filesIngested", (kad == null ? 0L : kad.getFilesIngested())
                 + (serverBridge == null ? 0L : serverBridge.getFilesIngested()));
+        // Result cache of the remote searches (remoteSearchCacheMinutes): searches answered without being played again
+        searches.putAll(cacheStats("kadCache", kad == null ? null : kad.getResultCache()));
+        searches.putAll(cacheStats("serverCache", serverBridge == null ? null : serverBridge.getResultCache()));
 
         Map<String, Object> protection = new java.util.LinkedHashMap<>();
         protection.put("bannedNames", database != null ? database.countBannedNames()
@@ -643,6 +646,14 @@ final class AdminWebPanel implements AutoCloseable {
         received.put("newFiles", index.newFileCount(org.jemule.core.FileSource.RELAY_FEED));
         overview.put("relayFeedReceived", received);
         return overview;
+    }
+
+    /** Hits, misses, joins and entries of a remote search cache, 0 when the bridge does not run. */
+    private static Map<String, Object> cacheStats(String prefix, org.jemule.core.RemoteSearchCache cache) {
+        if (cache != null) return cache.stats(prefix);
+        Map<String, Object> none = new java.util.LinkedHashMap<>();
+        for (String counter : List.of("Hits", "Misses", "Joins", "Entries")) none.put(prefix + counter, 0L);
+        return none;
     }
 
     /** Relay mode: the relay server's index figures, null when not known. */

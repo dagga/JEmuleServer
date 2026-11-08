@@ -23,6 +23,7 @@ import org.jemule.core.FileIndex;
 import org.jemule.core.FileSource;
 import org.jemule.core.IngestionExecutor;
 import org.jemule.core.RecentQueries;
+import org.jemule.core.RemoteSearchCache;
 import org.jemule.core.ServerThreads;
 import org.jemule.core.FileMetadata;
 import org.jemule.core.SearchQuery;
@@ -53,6 +54,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.LongSupplier;
 
 /**
  * Asynchronous search bridge that forks incoming ed2k search queries to the Kademlia DHT.
@@ -131,6 +133,10 @@ public class KadSearchBridge implements AutoCloseable {
 
     private volatile boolean running = false;
     private volatile RecentQueries recentQueries = new RecentQueries(REPLAY_WINDOW_MS, MAX_REPLAYS, MAX_RECENT_QUERIES);
+    /** Time to live of the results of a search (remoteSearchCacheMinutes), read at every search. */
+    private volatile LongSupplier resultCacheTtlMs = () -> RemoteSearchCache.ttlMs(RemoteSearchCache.DEFAULT_MINUTES);
+    /** The same search played within the time to live gets the results found then, without a new Kad search. */
+    private final RemoteSearchCache resultCache = new RemoteSearchCache(() -> resultCacheTtlMs.getAsLong());
 
     @FunctionalInterface
     public interface IllicitFileListener {
@@ -342,7 +348,17 @@ public class KadSearchBridge implements AutoCloseable {
      * @return A CompletableFuture providing discovered files, or completing with an empty list if not applicable.
      */
     public CompletableFuture<List<FileMetadata>> forkSearch(SearchQuery query) {
-        String keyword = query == null ? null : KadSearchTerms.keyword(query);
+        if (query == null) {
+            return CompletableFuture.completedFuture(List.of());
+        }
+        // A search played within remoteSearchCacheMinutes is not played again: its clean results are returned, and
+        // not ingested again. The same search still running is joined.
+        return resultCache.search(RemoteSearchCache.key(query), () -> playSearch(query));
+    }
+
+    /** Plays {@code query} on Kad, without the result cache. */
+    private CompletableFuture<List<FileMetadata>> playSearch(SearchQuery query) {
+        String keyword = KadSearchTerms.keyword(query);
         if (keyword == null) {
             return CompletableFuture.completedFuture(List.of());
         }
@@ -831,6 +847,16 @@ public class KadSearchBridge implements AutoCloseable {
         return recentQueries.skipped();
     }
 
+    /** Changes the time to live of the results of a search (0 or less: every search is played on Kad). */
+    public void setResultCacheTtl(LongSupplier ttlMs) {
+        this.resultCacheTtlMs = ttlMs == null ? () -> 0L : ttlMs;
+    }
+
+    /** The results of the searches played recently, with their hit, miss and join counters. */
+    public RemoteSearchCache getResultCache() {
+        return resultCache;
+    }
+
     /** Changes the time during which an identical search is sent at most {@link #MAX_REPLAYS} times (0: always sent). */
     public void setReplayWindowMs(long windowMs) {
         this.recentQueries = new RecentQueries(windowMs, MAX_REPLAYS, MAX_RECENT_QUERIES);
@@ -914,6 +940,7 @@ public class KadSearchBridge implements AutoCloseable {
         pageFollower.clear();
         activeSessions.values().forEach(KadSearchSession::complete);
         activeSessions.clear();
+        resultCache.clear();
         pendingLookups.values().forEach(lookup -> lookup.done.complete(null));
         pendingLookups.clear();
         closestNodes.clear();
