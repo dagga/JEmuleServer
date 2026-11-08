@@ -589,6 +589,8 @@ final class AdminWebPanel implements AutoCloseable {
         GlobalSearchForwarder global = server.getGlobalSearchForwarder();
         Map<String, Object> searches = new java.util.LinkedHashMap<>();
         searches.put("kad", kad == null ? 0L : kad.getSearchesForked());
+        // The other words of the client searches, searched on Kad in the background for the index
+        searches.put("kadWordSearches", kad == null ? 0L : kad.getWordSearches());
         searches.put("ed2kServers", serverBridge == null ? 0L : serverBridge.getSearchesForked());
         searches.put("udpGlobal", global == null ? 0L : global.getReceived());
         searches.put("filesIngested", (kad == null ? 0L : kad.getFilesIngested())

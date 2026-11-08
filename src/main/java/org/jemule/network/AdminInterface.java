@@ -581,6 +581,8 @@ public class AdminInterface implements Runnable {
         KadMaintenanceService maintenance = node.getMaintenanceService();
         out().println("--- Kademlia Statistics ---");
         out().println("Searches forked: " + bridge.getSearchesForked());
+        out().println("Background word searches: " + bridge.getWordSearches() + " (queued: "
+                + bridge.getQueuedWordSearches() + ", dropped: " + bridge.getWordSearchesDropped() + ")");
         out().println("Active searches: " + bridge.getActiveSessionCount());
         out().println("Searches not sent (already sent " + KadSearchBridge.MAX_REPLAYS + " times in "
                 + KadSearchBridge.REPLAY_WINDOW_MS / 60_000 + " min): "

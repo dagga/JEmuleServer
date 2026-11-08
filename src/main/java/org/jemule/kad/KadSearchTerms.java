@@ -23,6 +23,7 @@ import org.jemule.core.SearchQuery;
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 
@@ -79,6 +80,25 @@ public final class KadSearchTerms {
             if (best == null || w.length() > best.length()) best = w;
         }
         return best;
+    }
+
+    /**
+     * Every keyword whose index may be searched for a client search: the keyword of {@link #keyword} first, then the
+     * other indexable words of its file name terms, longest first (the words of excluded terms are never searched).
+     *
+     * @return the distinct keywords, empty if the query has no indexable word
+     */
+    public static List<String> keywords(SearchQuery query) {
+        String first = keyword(query);
+        if (first == null) return List.of();
+        List<String> all = new ArrayList<>();
+        collectWords(query, all, false);
+        List<String> keywords = new ArrayList<>();
+        keywords.add(first);
+        all.stream().distinct().filter(w -> !w.equals(first))
+                .sorted(Comparator.comparingInt(String::length).reversed()) // stable: query order among equals
+                .forEach(keywords::add);
+        return keywords;
     }
 
     private static void collectWords(SearchQuery query, List<String> out, boolean requiredOnly) {
