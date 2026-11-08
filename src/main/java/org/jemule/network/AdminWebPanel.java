@@ -29,6 +29,8 @@ import org.jemule.core.DatabaseManager;
 import org.jemule.core.FileIndex;
 import org.jemule.core.FileSource;
 import org.jemule.core.MetricsHistory;
+import org.jemule.core.NameCleaner;
+import org.jemule.core.NameCleaningJob;
 import org.jemule.kad.GlobalSearchForwarder;
 import org.jemule.kad.KadContact;
 import org.jemule.kad.KadNode;
@@ -414,6 +416,7 @@ final class AdminWebPanel implements AutoCloseable {
                 case "/api/blocks" -> json(exchange, 200, blocks());
                 case "/api/blocks/export" -> exportBannedNames(exchange);
                 case "/api/settings" -> json(exchange, 200, settings());
+                case "/api/namecleaning" -> json(exchange, 200, nameCleaning());
                 default -> sendError(exchange, 404, "Not found");
             }
             return;
@@ -459,6 +462,28 @@ final class AdminWebPanel implements AutoCloseable {
                 answer.put("unbanned", address.getHostAddress());
                 answer.put("wasBanned", server.unbanServer(address));
                 json(exchange, 200, answer);
+            }
+            case "/api/namecleaning" -> {
+                NameCleaner cleaner = nameCleaner();
+                String text = form.getOrDefault("text", "");
+                if (NameCleaner.normalize(text) == null) {
+                    throw new IllegalArgumentException("A rule must hold 1 to " + NameCleaner.MAX_RULE_LENGTH + " characters");
+                }
+                switch (form.getOrDefault("action", "")) {
+                    case "add" -> cleaner.add(text);
+                    case "remove" -> cleaner.remove(text);
+                    default -> throw new IllegalArgumentException("action must be add or remove");
+                }
+                json(exchange, 200, nameCleaning());
+            }
+            case "/api/namecleaning/apply" -> {
+                NameCleaningJob job = nameCleaningJob();
+                switch (form.getOrDefault("action", "")) {
+                    case "start" -> job.start();
+                    case "stop" -> job.stop();
+                    default -> throw new IllegalArgumentException("action must be start or stop");
+                }
+                json(exchange, 200, nameCleaningJob(job));
             }
             case "/api/settings" -> json(exchange, 200, configResult(server.updateConfig(form)));
             case "/api/settings/reload" -> json(exchange, 200, configResult(server.reloadConfig()));
@@ -960,6 +985,45 @@ final class AdminWebPanel implements AutoCloseable {
             row.put("bannedAt", n.addedAt() == null ? "" : n.addedAt().toString());
             return row;
         }).toList();
+    }
+
+    private NameCleaner nameCleaner() {
+        NameCleaner cleaner = server.getNameCleaner();
+        if (cleaner == null) throw new IllegalStateException("Name cleaning is not available");
+        return cleaner;
+    }
+
+    private NameCleaningJob nameCleaningJob() {
+        NameCleaningJob job = server.getNameCleaningJob();
+        if (job == null) throw new IllegalStateException("Name cleaning is not available");
+        return job;
+    }
+
+    /** The name cleaning rules, the files cleaned at their ingestion and the renaming of the indexed files. */
+    private Map<String, Object> nameCleaning() {
+        NameCleaner cleaner = nameCleaner();
+        Map<String, Object> result = new java.util.LinkedHashMap<>();
+        result.put("rules", cleaner.rules().stream().map(rule -> {
+            Map<String, Object> row = new java.util.LinkedHashMap<>();
+            row.put("text", rule.text());
+            row.put("addedAt", rule.addedAt());
+            return row;
+        }).toList());
+        result.put("cleanedAtIngestion", cleaner.cleanedAtIngestion());
+        result.put("job", nameCleaningJob(nameCleaningJob()));
+        return result;
+    }
+
+    private static Map<String, Object> nameCleaningJob(NameCleaningJob job) {
+        NameCleaningJob.Status status = job.status();
+        Map<String, Object> result = new java.util.LinkedHashMap<>();
+        result.put("state", status.stateName());
+        result.put("scanned", status.scanned());
+        result.put("renamed", status.renamed());
+        result.put("startedAt", status.startedAt());
+        result.put("finishedAt", status.finishedAt());
+        result.put("lastError", status.lastError());
+        return result;
     }
 
     private List<Map<String, Object>> settings() {

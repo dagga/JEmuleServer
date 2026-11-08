@@ -54,7 +54,7 @@ class MySqlDatabaseTest {
         Assumptions.assumeTrue(URL != null && !URL.isBlank(), "no MySQL server given (-Pmysql.url)");
         try (Connection c = DriverManager.getConnection(URL, USER, PASSWORD); Statement stmt = c.createStatement()) {
             for (String table : List.of("file_tags", "file_sources", "files", "file_tags_v4", "files_v4", "file_tags_v3",
-                    "files_v3", "stats", "metrics_history", "banned_names", "banned_servers")) {
+                    "files_v3", "stats", "metrics_history", "banned_names", "banned_servers", "name_cleaning_rules")) {
                 stmt.execute("DROP TABLE IF EXISTS " + table);
             }
         }
@@ -129,6 +129,35 @@ class MySqlDatabaseTest {
         }
         assertEquals(2, count("file_tags"), "the tags of the deleted file went with it");
         assertEquals(1, count("files WHERE source_count IS NOT NULL"));
+    }
+
+    @Test
+    void nameCleaningRulesAndRenamesUseBothBackendsAlike() throws Exception {
+        try (DatabaseManager db = open()) {
+            NameCleaner cleaner = NameCleaner.load(db);
+            assertEquals(List.of(NameCleaner.DEFAULT_RULE), cleaner.rules().stream().map(NameCleaner.Rule::text).toList());
+            cleaner.add("100%_off");
+            db.saveFiles(List.of(file(1, "[kad eMule-Qt.org] Song.mp3", 3), file(2, "plain.mp3", 0),
+                    file(3, "Deal 100%_OFF.zip", 0), file(4, "Deal 100x off.zip", 0)));
+
+            DatabaseManager.NameWindow first = db.filesNamedLike(List.of("emule-qt.org", "100%_off"), "", 2);
+            assertEquals(2, first.scanned());
+            assertEquals(hash(2), first.last());
+            assertEquals(List.of(hash(1)), first.matches().stream().map(DatabaseManager.NamedFile::hash).toList());
+            DatabaseManager.NameWindow second = db.filesNamedLike(List.of("emule-qt.org", "100%_off"), first.last(), 2);
+            assertEquals(List.of(hash(3)), second.matches().stream().map(DatabaseManager.NamedFile::hash).toList(),
+                    "the wildcards of a rule are matched as they are");
+            assertNull(db.filesNamedLike(List.of("emule-qt.org"), second.last(), 2).last());
+
+            assertTrue(db.renameFiles(Map.of(hash(1), "Song.mp3")));
+        }
+        try (DatabaseManager db = open()) {
+            assertEquals(2, NameCleaner.load(db).rules().size(), "the default rule is not written again");
+            FileMetadata renamed = byHash(db.loadFiles()).get(hash(1));
+            assertEquals("Song.mp3", renamed.name());
+            assertEquals(3, renamed.sourceCount());
+            assertEquals(List.of("xvid", 3601), values(renamed));
+        }
     }
 
     @Test
