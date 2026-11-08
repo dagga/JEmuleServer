@@ -134,7 +134,9 @@ class KadSearchBridgeTest {
             AtomicReference<KadPacket.SearchKeyReq> received = new AtomicReference<>();
             CountDownLatch latch = new CountDownLatch(1);
             peerUdp.registerListener(KadOpCode.SEARCH_KEY_REQ, (packet, addr, port) -> {
-                received.set(KadPacket.parseSearchKeyReq(packet.data()));
+                KadPacket.SearchKeyReq req = KadPacket.parseSearchKeyReq(packet.data());
+                if (!req.keywordHash().equals(KadId.fromKeyword("reloaded"))) return; // the other word's search
+                received.set(req);
                 latch.countDown();
             });
 

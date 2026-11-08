@@ -488,6 +488,12 @@ that brings this content to its clients without exposing them to illicit files:
   seconds (under the 3 requests a minute a node accepts), while its pages come back full, until the search has kept
   60,000 results from all its nodes (files with at least `kadMinSourcesForIngest` sources that pass the filters).
   These files only go to the index; the Searches view counts these background pages.
+- **Word searches for the index**: Kad indexes files by word, so the other words of a search, of at least 5
+  characters (5 at most, longest first, never the words of excluded terms nor a word the child abuse filter matches),
+  are then searched alone in their own keyword index, in the background. The client neither waits for them nor gets
+  their files: their clean files only go to the index, even those not matching the search. These searches wait in a
+  queue of 100 words (further words are dropped), 2 at a time and 20 a minute at most, and are counted in the admin
+  overview (`kadWordSearches`) and `kad stats`.
 - **Flood limits**: the server never sends a Kad node more requests than the node accepts per minute from one IP, so
   that the nodes neither drop its requests nor ban it.
 - **Filtering**: every file returned by Kad goes through the [child abuse filter](#child-abuse-filter), the banned
