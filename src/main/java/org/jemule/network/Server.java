@@ -179,6 +179,11 @@ public class Server {
         this.kadSearchBridge = kadSearchBridge;
     }
 
+    /** Time the results of a Kad or eD2K server search are reused (remoteSearchCacheMinutes, hot). */
+    private long remoteSearchCacheTtlMs() {
+        return org.jemule.core.RemoteSearchCache.ttlMs(config.remoteSearchCacheMinutes());
+    }
+
     private static final long MB = 1024 * 1024;
     /**
      * Live heap per indexed file, everything included (Kad, clients, H2 cache): 365 MB of old generation for 1,521,140
@@ -320,6 +325,7 @@ public class Server {
         this.serverSearchBridge = new ServerSearchBridge(this::peersButRelay,
                 () -> boundUdpSockets.get(config.port() + 4), fileIndex, fakeFileDetector);
         this.serverSearchBridge.setIngestionExecutor(ingestion);
+        this.serverSearchBridge.setResultCacheTtl(this::remoteSearchCacheTtlMs);
         this.serverIndexUpdater = new ServerIndexUpdater(this::peersButRelay, fileIndex, fakeFileDetector,
                 () -> this.config.serverIndexUpdate(), this::nearlyFull);
         this.serverIndexUpdater.setIngestionExecutor(ingestion);
@@ -1153,7 +1159,9 @@ public class Server {
             try {
                 kadNode.start();
                 if (kadNode.getConfig().forkSearchEnabled() && kadSearchBridge == null) {
-                    kadSearchBridge = kadNode.getSearchBridge();
+                    KadSearchBridge bridge = kadNode.getSearchBridge();
+                    bridge.setResultCacheTtl(this::remoteSearchCacheTtlMs);
+                    kadSearchBridge = bridge;
                 }
             } catch (IOException e) {
                 log.error("Kad UDP port {} unavailable, Kademlia disabled: {}", kadNode.getUdpPort(), e.getMessage());

@@ -187,6 +187,75 @@ class ServerSearchBridgeTest {
         }
     }
 
+    @Test
+    void theSameSearchWithinTheCacheTimeIsNotSentToTheServersAgain() throws Exception {
+        InetAddress loopback = InetAddress.getByName("127.0.0.1");
+        try (DatagramSocket local = bind(loopback); DatagramSocket peerSocket = bind(loopback);
+             DatabaseManager database = new DatabaseManager("mem:server_search_cache_" + System.nanoTime())) {
+            peerSocket.setSoTimeout(500);
+            ServerGossip.VerifiedPeer peer = new ServerGossip.VerifiedPeer(
+                    new ServerGossip.Endpoint(loopback, peerSocket.getLocalPort() - 4), "verified", 0, System.currentTimeMillis());
+            FileIndex index = new FileIndex(database);
+            try (ServerSearchBridge bridge = new ServerSearchBridge(() -> List.of(peer), () -> local, index,
+                    new FakeFileDetector(), 300)) {
+                // "linux iso" as one keyword
+                SearchQuery oneTerm = new SearchQuery.TermQuery("linux iso", SearchQuery.ID_FILENAME);
+                var first = bridge.forkSearch(oneTerm, keywordTree("linux iso"));
+                receive(peerSocket);
+                assertTrue(bridge.handle(loopback, peerSocket.getLocalPort(),
+                        searchResult("0123456789ABCDEF0123456789ABCDEF", "Linux.iso", 1024, 4)));
+                assertEquals(1, first.get(2, TimeUnit.SECONDS).size());
+                assertEquals(1, bridge.getFilesIngested());
+
+                // The same search as "ISO" AND "linux", as another client encodes it
+                SearchQuery twoTerms = new SearchQuery.AndQuery(new SearchQuery.TermQuery("ISO", SearchQuery.ID_FILENAME),
+                        new SearchQuery.TermQuery("linux", SearchQuery.ID_FILENAME));
+                byte[] andTree = ByteBuffer.allocate(2 + keywordTree("ISO").length + keywordTree("linux").length)
+                        .put((byte) 0x00).put(SearchQuery.OP_AND).put(keywordTree("ISO")).put(keywordTree("linux")).array();
+                var again = bridge.forkSearch(twoTerms, andTree);
+                assertTrue(again.isDone(), "answered from the cache");
+                assertEquals(first.get(), again.get());
+                assertThrows(java.net.SocketTimeoutException.class, () -> receive(peerSocket), "not sent again");
+                assertEquals(1, bridge.getSearchesForked());
+                assertEquals(1, bridge.getFilesIngested(), "not ingested again");
+                assertEquals(1, bridge.getResultCache().hits());
+
+                // Cache disabled: sent to the servers again
+                bridge.setResultCacheTtl(() -> 0L);
+                bridge.forkSearch(twoTerms, andTree);
+                assertArrayEquals(ServerSearchBridge.searchRequest(andTree), data(receive(peerSocket)));
+                assertEquals(2, bridge.getSearchesForked());
+            }
+        }
+    }
+
+    @Test
+    void theSameSearchStillRunningIsJoined() throws Exception {
+        InetAddress loopback = InetAddress.getByName("127.0.0.1");
+        try (DatagramSocket local = bind(loopback); DatagramSocket peerSocket = bind(loopback);
+             DatabaseManager database = new DatabaseManager("mem:server_search_join_" + System.nanoTime())) {
+            peerSocket.setSoTimeout(500);
+            ServerGossip.VerifiedPeer peer = new ServerGossip.VerifiedPeer(
+                    new ServerGossip.Endpoint(loopback, peerSocket.getLocalPort() - 4), "verified", 0, System.currentTimeMillis());
+            try (ServerSearchBridge bridge = new ServerSearchBridge(() -> List.of(peer), () -> local,
+                    new FileIndex(database), new FakeFileDetector(), 300)) {
+                SearchQuery query = new SearchQuery.TermQuery("linux", SearchQuery.ID_FILENAME);
+                var first = bridge.forkSearch(query, keywordTree("linux"));
+                var second = bridge.forkSearch(query, keywordTree("linux"));
+                receive(peerSocket);
+                assertTrue(bridge.handle(loopback, peerSocket.getLocalPort(),
+                        searchResult("0123456789ABCDEF0123456789ABCDEF", "Linux.iso", 1024, 4)));
+                assertFalse(second.isDone(), "waits for the running search");
+
+                assertEquals(1, second.get(2, TimeUnit.SECONDS).size());
+                assertThrows(java.net.SocketTimeoutException.class, () -> receive(peerSocket), "sent once");
+                assertEquals(first.get(), second.get());
+                assertEquals(1, bridge.getResultCache().joins());
+                assertEquals(1, bridge.getSearchesForked());
+            }
+        }
+    }
+
     private static byte[] keywordTree(String keyword) {
         return ByteBuffer.allocate(3 + keyword.length()).order(ByteOrder.LITTLE_ENDIAN)
                 .put((byte) 0x01).putShort((short) keyword.length()).put(keyword.getBytes()).array();

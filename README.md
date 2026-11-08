@@ -521,6 +521,16 @@ Searches are also forked to the verified eD2K servers (UDP global search). A ser
 30 matches only, and UDP has no "More" request: when a server returns a full answer, the search is repeated on it once
 per file type (at most 4 times per minute and per server), which returns about five times as many files.
 
+**Remote search cache.** A search already played on Kad or on the other eD2K servers within the last
+`remoteSearchCacheMinutes` (15 by default, applied without restart; 0 disables the cache) is not played again: the
+client gets the clean results found then at once, and they are not ingested again. The same search arriving while it
+is still running waits for it instead of starting another one. Searches are compared in a normalized form, so that
+two clients encoding the same search differently share the results: words in lower case and split as the index splits
+them (`Linux ISO` is the same as `iso` AND `linux`), the operands of AND and OR in any order. Each network keeps at most
+2,000 searches, 1,000 files per search and 30,000 files in all, the oldest forgotten first; an empty answer is not
+kept. The Overview's `searches` figures count the hits, misses (searches played) and joins (`kadCacheHits`,
+`serverCacheHits`...).
+
 ### Index update from eD2K index peers
 
 With `serverIndexUpdateEnabled=true` (off by default), the server logs in to each eD2K index peer (a verified eD2K
