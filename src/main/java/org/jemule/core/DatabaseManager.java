@@ -157,6 +157,11 @@ public class DatabaseManager implements AutoCloseable {
                 reason VARCHAR(255),
                 added_at TIMESTAMP(6) NULL DEFAULT CURRENT_TIMESTAMP(6),
                 KEY (added_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin""",
+            """
+            CREATE TABLE IF NOT EXISTS name_cleaning_rules (
+                text VARCHAR(255) NOT NULL PRIMARY KEY,
+                added_at TIMESTAMP(6) NULL DEFAULT CURRENT_TIMESTAMP(6)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin""");
 
     /** One page of files with their source counts and tags, in hash order (MySQL). */
@@ -820,6 +825,173 @@ public class DatabaseManager implements AutoCloseable {
                     added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
                 """);
+
+            // Name cleaning rules, in lower case: the text removed from the file names (NameCleaner)
+            stmt.execute("""
+                CREATE TABLE IF NOT EXISTS name_cleaning_rules (
+                    text VARCHAR(255) PRIMARY KEY,
+                    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """);
+        }
+    }
+
+    /** A name cleaning rule, as stored: in lower case. */
+    public record NameCleaningRule(String text, java.sql.Timestamp addedAt) {}
+
+    /** Records a name cleaning rule (already normalized by the caller) unless it is already there. */
+    public void addNameCleaningRule(String text) {
+        try {
+            locked(() -> {
+                try (PreparedStatement ps = connection.prepareStatement(mysql
+                        ? "INSERT INTO name_cleaning_rules (text, added_at) SELECT ?, ? FROM DUAL "
+                                + "WHERE NOT EXISTS (SELECT 1 FROM name_cleaning_rules WHERE text = ?)"
+                        : "INSERT INTO name_cleaning_rules (text, added_at) SELECT ?, ? "
+                                + "WHERE NOT EXISTS (SELECT 1 FROM name_cleaning_rules WHERE text = ?)")) {
+                    Timestamp now = Timestamp.from(Instant.now());
+                    ps.setString(1, text);
+                    if (mysql) ps.setString(2, mySqlTimestamp(now));
+                    else ps.setTimestamp(2, now);
+                    ps.setString(3, text);
+                    ps.executeUpdate();
+                }
+                return null;
+            });
+        } catch (Throwable e) {
+            logger.error("Circuit breaker prevented or caught error during addNameCleaningRule: {}", e.getMessage());
+        }
+    }
+
+    public void removeNameCleaningRule(String text) {
+        try {
+            locked(() -> {
+                try (PreparedStatement ps = connection.prepareStatement("DELETE FROM name_cleaning_rules WHERE text = ?")) {
+                    ps.setString(1, text);
+                    ps.executeUpdate();
+                }
+                return null;
+            });
+        } catch (Throwable e) {
+            logger.error("Circuit breaker prevented or caught error during removeNameCleaningRule: {}", e.getMessage());
+        }
+    }
+
+    /** Every name cleaning rule, the oldest first. */
+    public List<NameCleaningRule> loadNameCleaningRules() {
+        try {
+            return locked(() -> {
+                List<NameCleaningRule> rules = new ArrayList<>();
+                try (Statement stmt = connection.createStatement();
+                     ResultSet rs = stmt.executeQuery(
+                             "SELECT text, added_at FROM name_cleaning_rules ORDER BY added_at, text")) {
+                    while (rs.next()) rules.add(new NameCleaningRule(rs.getString(1), rs.getTimestamp(2)));
+                }
+                return rules;
+            });
+        } catch (Throwable e) {
+            logger.error("Circuit breaker prevented or caught error during loadNameCleaningRules: {}", e.getMessage());
+            return new ArrayList<>();
+        }
+    }
+
+    /** A file of the database by its hash and name. */
+    public record NamedFile(String hash, String name) {}
+
+    /**
+     * A window of the files table read by {@link #filesNamedLike}: the files of the window whose name holds one of
+     * the texts, the last hash of the window (null: the table is over) and the number of files in the window.
+     */
+    public record NameWindow(List<NamedFile> matches, String last, int scanned) {}
+
+    /**
+     * The files whose name holds one of {@code texts} (in lower case, compared with the name in lower case), among
+     * the {@code window} files following {@code after} in hash order ("": from the first). The window bounds the
+     * time each query holds the database, whatever the share of the files that match: the whole table is read
+     * window after window, by the primary key, never loaded at once.
+     *
+     * @return null if the read failed
+     */
+    public NameWindow filesNamedLike(List<String> texts, String after, int window) {
+        if (texts.isEmpty()) return new NameWindow(List.of(), null, 0);
+        try {
+            return locked(() -> {
+                int scanned;
+                String last;
+                try (PreparedStatement bounds = connection.prepareStatement("SELECT COUNT(*), MAX(hash) FROM "
+                        + "(SELECT hash FROM files WHERE hash > ? ORDER BY hash LIMIT ?) w")) {
+                    bindAfter(bounds, 1, after);
+                    bounds.setInt(2, window);
+                    try (ResultSet rs = bounds.executeQuery()) {
+                        rs.next();
+                        scanned = rs.getInt(1);
+                        last = scanned == 0 ? null : hash(rs, 2);
+                    }
+                }
+                if (last == null) return new NameWindow(List.of(), null, 0);
+                StringBuilder like = new StringBuilder();
+                for (int i = 0; i < texts.size(); i++) like.append(i == 0 ? "" : " OR ").append("LOWER(name) LIKE ? ESCAPE '!'");
+                List<NamedFile> matches = new ArrayList<>();
+                try (PreparedStatement select = connection.prepareStatement("SELECT hash, name FROM files "
+                        + "WHERE hash > ? AND hash <= ? AND (" + like + ") ORDER BY hash")) {
+                    bindAfter(select, 1, after);
+                    setHash(select, 2, last);
+                    for (int i = 0; i < texts.size(); i++) select.setString(3 + i, "%" + likeEscaped(texts.get(i)) + "%");
+                    try (ResultSet rs = select.executeQuery()) {
+                        while (rs.next()) matches.add(new NamedFile(hash(rs, 1), rs.getString(2)));
+                    }
+                }
+                return new NameWindow(matches, last, scanned);
+            });
+        } catch (Throwable e) {
+            logger.error("Circuit breaker prevented or caught error during filesNamedLike: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /** Binds the hash a read starts after: "" before every hash. */
+    private void bindAfter(PreparedStatement ps, int index, String after) throws SQLException {
+        if (after.isEmpty() && mysql) ps.setBytes(index, new byte[0]);
+        else setHash(ps, index, after);
+    }
+
+    /** A text for LIKE with '!' as escape character, its wildcards matched as they are. */
+    static String likeEscaped(String text) {
+        return text.replace("!", "!!").replace("%", "!%").replace("_", "!_");
+    }
+
+    /**
+     * Renames files, by hash, in one transaction; their tags and source count stay.
+     *
+     * @return false if the write failed
+     */
+    public boolean renameFiles(Map<String, String> namesByHash) {
+        if (namesByHash.isEmpty()) return true;
+        try {
+            return locked(() -> {
+                try {
+                    connection.setAutoCommit(false);
+                    try (PreparedStatement ps = connection.prepareStatement("UPDATE files SET name = ? WHERE hash = ?")) {
+                        for (Map.Entry<String, String> file : namesByHash.entrySet()) {
+                            if (mysql && hashBytes(file.getKey()) == null) continue;
+                            ps.setString(1, file.getValue());
+                            setHash(ps, 2, file.getKey());
+                            ps.addBatch();
+                        }
+                        ps.executeBatch();
+                    }
+                    connection.commit();
+                } catch (SQLException e) {
+                    try { connection.rollback(); } catch (SQLException ex) { /* ignore */ }
+                    throw e;
+                } finally {
+                    try { connection.setAutoCommit(true); } catch (SQLException e) { /* ignore */ }
+                }
+                return true;
+            });
+        } catch (Throwable e) {
+            logger.error("Circuit breaker prevented or caught error during renameFiles ({} files): {}",
+                    namesByHash.size(), e.getMessage());
+            return false;
         }
     }
 

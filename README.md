@@ -462,6 +462,46 @@ Up to 1.2.23 the server banned hashes (`banned_hashes`), nearly all written by t
 that table at its first start (database schema version 3): its hashes cannot be turned into names, the banned files
 having been deleted, and the child abuse filter rejects the same names each time they come back.
 
+## File name cleaning
+
+Some clients and servers alter the names of the files they relay by adding a text, such as
+`[kad emule-qt.org] The Matrix Resurrections - Dual.avi`, `[torrent emule-qt.org] ...` or
+`Viktor Kane - Sin testigos [kad emule-qt.org].epub`. The server gives these files their original name back.
+
+A rule is a text, compared without case. Each group between brackets (`[...]`, `(...)` or `{...}`) holding it is
+removed with its brackets, and so is the text itself where it stands outside such a group. The spaces are then tidied
+up: a run of spaces becomes one, and the spaces, underscores and dashes left dangling at the start or the end of the
+name before its extension go (`[kad emule-qt.org] - Song.mp3` becomes `Song.mp3`; a dash stuck to a word, as in
+`-=Title=-`, stays). The extension is never changed. A name holding no rule is never touched, and a name that would be
+empty or invalid once cleaned (`[kad emule-qt.org].mp3`) keeps its original name.
+
+The rule `emule-qt.org` is written at the first start; once removed, it is not written again. The rules are kept in
+lower case in the `name_cleaning_rules` table (H2 and MySQL alike) and in memory.
+
+Where the rules apply:
+
+- **Ingestion**: `FileIndex.addFile` and `FileIndex.addFiles` are the single way in of every channel (client publishing,
+  OFFERFILES v1, Kad and server searches, index update, relay feed). They clean each file there, before it is indexed,
+  saved in the database or handed to the relay server in relay mode.
+- **Search results**: every result sent to a client (TCP `OP_SEARCHRESULT` and UDP `OP_GLOBSEARCHRES`) goes with its
+  name cleaned, including the Kad, server and relay results that are not ingested.
+- **Files already indexed**: an admin action renames them. The files table is read 20,000 files at a time in hash
+  order, the database selecting those whose name holds a rule (`LOWER(name) LIKE '%rule%'`); each one is renamed in the
+  Lucene index (its whole document rewritten, so that the searches find its new words; its hash, size, type, tags and
+  source count stay) and in the database, one transaction per window. It runs on a thread of the ingestion tier, one
+  run at a time, and stops by a flag between two windows (never by an interrupt, which would close the H2 file channel).
+
+The admin web panel API (admin IP filter, and a same-origin `Origin` header for POST, as for the other endpoints):
+
+| Request | Answer |
+|---------|--------|
+| `GET /api/namecleaning` | `{"rules":[{"text":"emule-qt.org","addedAt":<epoch ms>}],"cleanedAtIngestion":<files cleaned since the start>,"job":{...}}` |
+| `POST /api/namecleaning` with `action=add&text=<rule>` or `action=remove&text=<rule>` | the `GET` object; 400 for an empty rule or one longer than 120 characters |
+| `POST /api/namecleaning/apply` with `action=start` or `action=stop` | the job object |
+
+The job object is `{"state":"idle|running|done|stopped|failed","scanned":<files read>,"renamed":<files renamed>,
+"startedAt":<epoch ms>,"finishedAt":<epoch ms>,"lastError":""}`, 0 for a date not reached yet.
+
 ## HighID / LowID
 
 At login, the server connects back to the TCP port announced by the client and sends an `OP_HELLO`. The client gets

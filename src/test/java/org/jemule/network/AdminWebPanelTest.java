@@ -367,6 +367,78 @@ class AdminWebPanelTest {
     }
 
     @Test
+    void theNameCleaningApiListsAddsAndRemovesRulesAndRunsTheJob(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir)
+            throws Exception {
+        Server server = mock(Server.class);
+        try (org.jemule.core.DatabaseManager db = new org.jemule.core.DatabaseManager(dir.resolve("db").toString());
+             FileIndex index = new FileIndex(db);
+             AdminWebPanel panel = new AdminWebPanel(server)) {
+            db.saveFiles(List.of(new FileMetadata("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "Song [kad emule-qt.org].mp3", 1,
+                    "Audio")));
+            org.jemule.core.NameCleaner cleaner = org.jemule.core.NameCleaner.load(db);
+            index.setNameCleaner(cleaner);
+            org.jemule.core.NameCleaningJob job = new org.jemule.core.NameCleaningJob(db, index, cleaner);
+            when(server.getNameCleaner()).thenReturn(cleaner);
+            when(server.getNameCleaningJob()).thenReturn(job);
+            index.addFile(new FileMetadata("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "[web emule-qt.org] Clip.avi", 1, "Video"));
+            panel.start(0);
+            String base = "http://127.0.0.1:" + panel.port();
+
+            HttpResponse<String> listed = HttpClient.newHttpClient().send(HttpRequest.newBuilder(
+                    URI.create(base + "/api/namecleaning")).GET().build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, listed.statusCode());
+            assertTrue(listed.body().matches("\\{\"rules\":\\[\\{\"text\":\"emule-qt\\.org\",\"addedAt\":\\d+}],"
+                    + "\"cleanedAtIngestion\":1,\"job\":\\{\"state\":\"idle\",\"scanned\":0,\"renamed\":0,"
+                    + "\"startedAt\":0,\"finishedAt\":0,\"lastError\":\"\"}}"), listed.body());
+
+            HttpResponse<String> added = post(panel, "/api/namecleaning", "action=add&text=+%5BSome+Tag%5D+");
+            assertEquals(200, added.statusCode());
+            assertTrue(added.body().contains("{\"text\":\"[some tag]\",\"addedAt\":"), added.body());
+            assertTrue(added.body().contains("\"job\":{\"state\":\"idle\""), added.body());
+            assertEquals(List.of("emule-qt.org", "[some tag]"),
+                    db.loadNameCleaningRules().stream().map(r -> r.text()).toList(), "saved");
+
+            HttpResponse<String> removed = post(panel, "/api/namecleaning", "action=remove&text=%5Bsome+tag%5D");
+            assertEquals(200, removed.statusCode());
+            assertFalse(removed.body().contains("[some tag]"), removed.body());
+            assertEquals(1, db.loadNameCleaningRules().size());
+
+            assertEquals(400, post(panel, "/api/namecleaning", "action=add&text=+++").statusCode());
+            assertEquals(400, post(panel, "/api/namecleaning", "action=add&text=" + "x".repeat(121)).statusCode());
+            assertEquals(200, post(panel, "/api/namecleaning", "action=add&text=" + "x".repeat(120)).statusCode());
+            assertEquals(400, post(panel, "/api/namecleaning", "action=rename&text=abc").statusCode());
+            assertEquals(400, post(panel, "/api/namecleaning/apply", "action=pause").statusCode());
+
+            HttpResponse<String> started = post(panel, "/api/namecleaning/apply", "action=start");
+            assertEquals(200, started.statusCode());
+            assertTrue(started.body().startsWith("{\"state\":\""), started.body());
+            for (int i = 0; i < 300 && job.status().state() == org.jemule.core.NameCleaningJob.State.RUNNING; i++) {
+                Thread.sleep(20);
+            }
+            HttpResponse<String> stopped = post(panel, "/api/namecleaning/apply", "action=stop");
+            assertTrue(stopped.body().matches("\\{\"state\":\"done\",\"scanned\":2,\"renamed\":1,"
+                    + "\"startedAt\":\\d+,\"finishedAt\":\\d+,\"lastError\":\"\"}"), stopped.body());
+            assertEquals(List.of("Clip.avi", "Song.mp3"),
+                    db.loadFiles().stream().map(FileMetadata::name).sorted().toList());
+
+            HttpRequest crossOrigin = HttpRequest.newBuilder(URI.create(base + "/api/namecleaning/apply"))
+                    .header("Origin", "http://evil.example")
+                    .header("Content-Type", "application/x-www-form-urlencoded")
+                    .POST(HttpRequest.BodyPublishers.ofString("action=start")).build();
+            assertEquals(403, HttpClient.newHttpClient().send(crossOrigin, HttpResponse.BodyHandlers.ofString())
+                    .statusCode());
+        }
+    }
+
+    private static HttpResponse<String> post(AdminWebPanel panel, String path, String body) throws Exception {
+        return HttpClient.newHttpClient().send(HttpRequest.newBuilder(
+                        URI.create("http://127.0.0.1:" + panel.port() + path))
+                .header("Origin", "http://127.0.0.1:" + panel.port())
+                .header("Content-Type", "application/x-www-form-urlencoded")
+                .POST(HttpRequest.BodyPublishers.ofString(body)).build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    @Test
     void rejectsRequestsFromDeniedIpAddress() throws Exception {
         Server server = mock(Server.class);
         org.jemule.security.AdminAccessFilter filter = new org.jemule.security.AdminAccessFilter("192.168.1.10", "");

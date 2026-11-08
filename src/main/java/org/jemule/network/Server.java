@@ -92,6 +92,10 @@ public class Server {
     private final FakeFileDetector fakeFileDetector;
     private final ExecutorService executor;
     private final DatabaseManager db;
+    /** Name cleaning rules, applied by the file index to every file coming in and to the results sent. */
+    private final org.jemule.core.NameCleaner nameCleaner;
+    /** Applies the name cleaning rules to the files indexed before them, on demand of the administrator. */
+    private final org.jemule.core.NameCleaningJob nameCleaningJob;
     private final byte[] serverHash = new byte[16];
 
     // Map of UDP sockets bound by startUdpResponder so other components can send via the same source port
@@ -299,6 +303,9 @@ public class Server {
         this.fileIndex = new FileIndex(db, eventManager, abuseFilter, indexPath);
         this.fileIndex.setPersistenceExecutor(ingestion);
         this.fileIndex.refreshEvery(INDEX_REFRESH_MILLIS);
+        this.nameCleaner = org.jemule.core.NameCleaner.load(db);
+        this.fileIndex.setNameCleaner(nameCleaner);
+        this.nameCleaningJob = new org.jemule.core.NameCleaningJob(db, fileIndex, nameCleaner);
         // Every channel (clients, Kad, other servers) stops bringing new files at maxFiles, or when the heap or the
         // disk of the index is full
         this.heapGuard = org.jemule.core.HeapGuard.jvm();
@@ -467,6 +474,14 @@ public class Server {
 
     DatabaseManager getDatabaseManager() {
         return db;
+    }
+
+    org.jemule.core.NameCleaner getNameCleaner() {
+        return nameCleaner;
+    }
+
+    org.jemule.core.NameCleaningJob getNameCleaningJob() {
+        return nameCleaningJob;
     }
 
     ServerConfig getConfig() {
@@ -1373,7 +1388,8 @@ public class Server {
         for (FileMetadata m : results) {
             if (!largeFiles && m.size() > 0xFFFFFFFFL) continue; // the requester cannot handle files > 4 GB
             if (fileIndex.isChildAbuse(m.hash(), m.name())) continue; // indexed before a keyword reload
-            byte[] item = org.jemule.network.handler.SearchHandler.encodeSearchResult(m);
+            // Indexed before a name cleaning rule, perhaps
+            byte[] item = org.jemule.network.handler.SearchHandler.encodeSearchResult(fileIndex.cleanedForClient(m));
             if (datagram.size() > 0 && datagram.size() + 2 + item.length > MAX_UDP_PAYLOAD) {
                 sendUdp(reply, datagram.toByteArray(), "SEARCH");
                 datagram.reset();
@@ -1605,6 +1621,8 @@ public class Server {
             executor.shutdownNow();
             Thread.currentThread().interrupt();
         }
+        // A renaming under way ends its window before the index and the database close
+        nameCleaningJob.close();
         // The files still waiting for ingestion are written before the database closes
         ingestion.close();
         // In relay mode they went to the feed, which posts what it can before stopping

@@ -205,6 +205,8 @@ public class FileIndex implements AutoCloseable {
     private final LongAdder refusedFull = new LongAdder();
     /** Count of files whose hash was not indexed yet, per ingestion channel (since server start). */
     private final Map<FileSource, LongAdder> newFilesBySource = new ConcurrentHashMap<>();
+    /** Cleans the names of the files given to the index and of the results sent to the clients: no rule by default. */
+    private volatile NameCleaner nameCleaner = new NameCleaner();
 
     // LRU Cache for searches (Thread-safe via Collections.synchronizedMap)
     private final Map<String, List<FileMetadata>> searchCache = Collections.synchronizedMap(new LinkedHashMap<>(128, 0.75f, true) {
@@ -625,6 +627,61 @@ public class FileIndex implements AutoCloseable {
         return List.copyOf(handed);
     }
 
+    /**
+     * Sets the name cleaning rules. {@link #addFile} and {@link #addFiles} are the single way in of every ingestion
+     * channel (clients, Kad, other servers, index update, relay feed): they clean each file there, before it is
+     * indexed, saved or handed to the relay feed.
+     */
+    public void setNameCleaner(NameCleaner cleaner) {
+        this.nameCleaner = cleaner == null ? new NameCleaner() : cleaner;
+    }
+
+    public NameCleaner nameCleaner() {
+        return nameCleaner;
+    }
+
+    /**
+     * A file about to be sent to a client, its name cleaned: the files found on Kad, on other servers or on the relay
+     * server are not all ingested, and the files indexed before a rule existed keep their name until
+     * {@link NameCleaningJob} renames them.
+     */
+    public FileMetadata cleanedForClient(FileMetadata file) {
+        return nameCleaner.clean(file);
+    }
+
+    /**
+     * Renames the file indexed under {@code hash} to its name cleaned by the current rules, rewriting its whole
+     * document so that its words follow: its hash, size, type, tags and source count stay, and so do its online
+     * sources. The database is not written ({@link NameCleaningJob} renames it there).
+     *
+     * @return the new name, null if the file is not indexed or its name does not change
+     */
+    public String renameToCleanName(String hash) {
+        if (hash == null) return null;
+        String id = id(hash);
+        String renamed;
+        synchronized (stripe(id)) {
+            long stamp = lock.readLock();
+            try {
+                FileMetadata existing = stored(id);
+                if (existing == null || existing.name() == null) return null;
+                renamed = nameCleaner.clean(existing.name());
+                if (renamed.equals(existing.name())) return null;
+                FileMetadata stored = existing.withName(renamed);
+                int count = existing.sourceCount();
+                writer.updateDocument(new Term(ID, id), document(stored, count));
+                pending.put(id, withoutSources(stored, count));
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            } finally {
+                lock.unlockRead(stamp);
+            }
+        }
+        if (pending.size() > MAX_UNREFRESHED) refresh();
+        searchCache.clear();
+        return renamed;
+    }
+
     /** New files refused because the index was full, since the server started. */
     public long refusedFullCount() {
         return refusedFull.sum();
@@ -645,6 +702,8 @@ public class FileIndex implements AutoCloseable {
      * Registers a published file, recording its ingestion channel for the monitoring counters.
      */
     public FileMetadata addFile(FileMetadata meta, FileSource source) {
+        NameCleaner cleaner = nameCleaner;
+        meta = cleaner.cleanForIngestion(meta);
         RelayFeed feed = relayFeed;
         if (feed != null && feed.relayMode()) {
             List<FileMetadata> handed = relay(feed, java.util.Collections.singletonList(meta), source);
@@ -668,6 +727,10 @@ public class FileIndex implements AutoCloseable {
      */
     public List<FileMetadata> addFiles(Collection<FileMetadata> files, FileSource source) {
         if (files == null || files.isEmpty()) return List.of();
+        NameCleaner cleaner = nameCleaner;
+        List<FileMetadata> cleaned = new ArrayList<>(files.size());
+        for (FileMetadata file : files) cleaned.add(file == null ? null : cleaner.cleanForIngestion(file));
+        files = cleaned;
         RelayFeed feed = relayFeed;
         if (feed != null && feed.relayMode()) return relay(feed, files, source);
         Writes writes = new Writes(files.size());
