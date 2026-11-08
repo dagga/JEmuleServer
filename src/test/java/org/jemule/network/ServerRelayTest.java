@@ -14,7 +14,6 @@ import java.util.List;
 import java.util.Properties;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -75,8 +74,8 @@ class ServerRelayTest {
         }
     }
 
-    private static ServerRelay relay(FakeRelay fake, AtomicBoolean full, String server) {
-        return new ServerRelay(() -> server, full::get, new FileIndex(null), null,
+    private static ServerRelay relay(FakeRelay fake, String server) {
+        return new ServerRelay(() -> server, new FileIndex(null), null,
                 (endpoint, hash) -> fake.open(), fake.clock::get);
     }
 
@@ -85,25 +84,29 @@ class ServerRelayTest {
     }
 
     @Test
-    void nothingIsRelayedWhileTheIndexHasRoom() {
+    void nothingIsRelayedWithoutARelayServer() {
         FakeRelay fake = new FakeRelay();
-        AtomicBoolean full = new AtomicBoolean(false);
-        try (ServerRelay relay = relay(fake, full, "192.0.2.1:4661")) {
-            assertFalse(relay.active());
+        try (ServerRelay relay = relay(fake, "")) {
+            assertFalse(relay.active(), "no relay server configured");
             assertNull(relay.forkSearch(tree(), ServerRelay.MAX_PAGES));
             assertNull(relay.forkSources(new byte[20]));
             assertEquals(0, relay.announce().length, "no server pushed to the clients");
-        }
-        try (ServerRelay relay = relay(fake, new AtomicBoolean(true), "")) {
-            assertFalse(relay.active(), "no relay server configured");
         }
         assertEquals(0, fake.logins.get());
     }
 
     @Test
-    void aFullServerPlaysTheSearchOnTheRelayServerWithTheMorePages() throws Exception {
+    void theRelayModeHoldsWhateverTheLocalIndex() {
+        // Before 1.5.1 the relay only took over once the local index was full
+        try (ServerRelay relay = relay(new FakeRelay(), "192.0.2.1:4661")) {
+            assertTrue(relay.active());
+        }
+    }
+
+    @Test
+    void theSearchIsPlayedOnTheRelayServerWithTheMorePages() throws Exception {
         FakeRelay fake = new FakeRelay();
-        try (ServerRelay relay = relay(fake, new AtomicBoolean(true), "192.0.2.1:4661")) {
+        try (ServerRelay relay = relay(fake, "192.0.2.1:4661")) {
             assertTrue(relay.active());
             List<FileMetadata> found = relay.forkSearch(tree(), ServerRelay.MAX_PAGES).get(5, TimeUnit.SECONDS);
             assertEquals(900, found.size(), "three pages of 300");
@@ -123,7 +126,7 @@ class ServerRelayTest {
 
     @Test
     void theClientsLearnTheRelayServerAtLogin() throws Exception {
-        try (ServerRelay relay = relay(new FakeRelay(), new AtomicBoolean(true), "192.0.2.1:4661")) {
+        try (ServerRelay relay = relay(new FakeRelay(), "192.0.2.1:4661")) {
             assertArrayEquals(new byte[]{(byte) 192, 0, 2, 1, (byte) (4661 & 0xFF), (byte) (4661 >> 8)}, relay.announce());
             assertEquals(1L, relay.stats().get("announcedLogins"));
             assertTrue(relay.isRelayServer(InetAddress.getByName("192.0.2.1")));
@@ -141,7 +144,7 @@ class ServerRelayTest {
         answer.putInt(1234).putShort((short) 4662);         // LowID on the relay server: unreachable from here
         answer.putInt(0x01020304).putShort((short) 0);      // no port
         fake.sources = answer.array();
-        try (ServerRelay relay = relay(fake, new AtomicBoolean(true), "192.0.2.1:4661")) {
+        try (ServerRelay relay = relay(fake, "192.0.2.1:4661")) {
             List<FoundSource> found = relay.forkSources(new byte[20]).get(5, TimeUnit.SECONDS);
             assertEquals(1, found.size());
             assertEquals(0x0A0B0C0DL, found.getFirst().id());
@@ -153,7 +156,7 @@ class ServerRelayTest {
     void aSessionClosedByTheRelayServerIsOpenedAgainOnce() throws Exception {
         FakeRelay fake = new FakeRelay();
         fake.pages = 1;
-        try (ServerRelay relay = relay(fake, new AtomicBoolean(true), "192.0.2.1:4661")) {
+        try (ServerRelay relay = relay(fake, "192.0.2.1:4661")) {
             relay.forkSearch(tree(), 1).get(5, TimeUnit.SECONDS);
             fake.cutNextRequest = true;
             assertEquals(300, relay.forkSearch(tree(), 1).get(5, TimeUnit.SECONDS).size());
@@ -166,11 +169,12 @@ class ServerRelayTest {
     void anUnreachableRelayServerIsLeftAloneForAWhile() throws Exception {
         FakeRelay fake = new FakeRelay();
         fake.unreachable = true;
-        try (ServerRelay relay = relay(fake, new AtomicBoolean(true), "192.0.2.1:4661")) {
-            assertEquals(List.of(), relay.forkSearch(tree(), 1).get(5, TimeUnit.SECONDS));
+        try (ServerRelay relay = relay(fake, "192.0.2.1:4661")) {
+            assertNull(relay.forkSearch(tree(), 1).get(5, TimeUnit.SECONDS), "no answer: the local index answers");
             assertEquals(1L, relay.stats().get("failures"));
             fake.unreachable = false;
-            assertEquals(List.of(), relay.forkSearch(tree(), 1).get(5, TimeUnit.SECONDS), "within the retry delay");
+            assertNull(relay.forkSearch(tree(), 1).get(5, TimeUnit.SECONDS), "within the retry delay");
+            assertEquals(List.of(), relay.forkSources(new byte[20]).get(5, TimeUnit.SECONDS), "no source either");
             assertEquals(0, fake.logins.get());
             fake.clock.addAndGet(ServerRelay.RETRY_AFTER);
             fake.pages = 1;
@@ -190,13 +194,13 @@ class ServerRelayTest {
     @Test
     void theRelayServerIsAHostAndPortInTheConfiguration() {
         Properties props = new Properties();
-        props.setProperty("relayServer", " 54.37.74.32:4661 ");
+        props.setProperty("relayServer", " main.example.net:4661 ");
         ServerConfig config = ServerConfig.fromProperties(props);
-        assertEquals("54.37.74.32:4661", config.relayServer());
-        assertEquals("54.37.74.32:4661", config.toProperties().get("relayServer"));
-        assertEquals("54.37.74.32:4661", config.withPort(4662).relayServer(), "kept by the other settings");
+        assertEquals("main.example.net:4661", config.relayServer());
+        assertEquals("main.example.net:4661", config.toProperties().get("relayServer"));
+        assertEquals("main.example.net:4661", config.withPort(4662).relayServer(), "kept by the other settings");
         assertEquals("", ServerConfig.DEFAULT.relayServer());
-        props.setProperty("relayServer", "54.37.74.32");
+        props.setProperty("relayServer", "main.example.net");
         assertThrows(IllegalArgumentException.class, () -> ServerConfig.fromProperties(props));
     }
 }

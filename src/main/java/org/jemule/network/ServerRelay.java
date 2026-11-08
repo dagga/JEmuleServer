@@ -41,16 +41,15 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.function.BooleanSupplier;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
 /**
- * Hands over to another eD2K server (the relay server, {@code relayServer}) once this server's index is full. The
- * clients stay connected here and get the relay server in their server list at login; their searches and source
- * requests, and the UDP global searches of other servers' clients, are played on the relay server through client
- * sessions of this server (TCP, LowID), and the answers return to them. This server then only acts as a proxy for
- * the relay server.
+ * Relay mode: this server uses the index of another eD2K server (the relay server, {@code relayServer}) and feeds it
+ * ({@link RelayFeed}). It keeps its own Kad node, peer servers and clients; the clients get the relay server in their
+ * server list at login, and their searches and source requests, and the UDP global searches of other servers'
+ * clients, are played on the relay server through client sessions of this server (TCP, LowID). The answers return
+ * to them; the local index only answers while the relay server cannot be reached.
  */
 public final class ServerRelay implements AutoCloseable {
     private static final Logger log = LoggerFactory.getLogger(ServerRelay.class);
@@ -83,7 +82,6 @@ public final class ServerRelay implements AutoCloseable {
     }
 
     private final Supplier<String> relayServer;
-    private final BooleanSupplier full;
     private final FileIndex fileIndex;
     private final FakeFileDetector fakeDetector;
     private final Connector connector;
@@ -104,8 +102,8 @@ public final class ServerRelay implements AutoCloseable {
     private final AtomicLong failures = new AtomicLong();
     private final AtomicLong announced = new AtomicLong();
 
-    ServerRelay(Supplier<String> relayServer, BooleanSupplier full, FileIndex fileIndex, FakeFileDetector fakeDetector) {
-        this(relayServer, full, fileIndex, fakeDetector, (endpoint, hash) -> {
+    ServerRelay(Supplier<String> relayServer, FileIndex fileIndex, FakeFileDetector fakeDetector) {
+        this(relayServer, fileIndex, fakeDetector, (endpoint, hash) -> {
             ServerUpdateSession session = ServerUpdateSession.open(endpoint, hash, CLIENT_NAME, ANSWER_TIMEOUT);
             return new Session() {
                 public ServerUpdateSession.Answer search(byte[] tree) throws IOException {
@@ -127,10 +125,9 @@ public final class ServerRelay implements AutoCloseable {
         }, System::currentTimeMillis);
     }
 
-    ServerRelay(Supplier<String> relayServer, BooleanSupplier full, FileIndex fileIndex, FakeFileDetector fakeDetector,
+    ServerRelay(Supplier<String> relayServer, FileIndex fileIndex, FakeFileDetector fakeDetector,
                 Connector connector, LongSupplier clock) {
         this.relayServer = relayServer;
-        this.full = full;
         this.fileIndex = fileIndex;
         this.fakeDetector = fakeDetector;
         this.connector = connector;
@@ -157,9 +154,9 @@ public final class ServerRelay implements AutoCloseable {
         return endpoint;
     }
 
-    /** True while the index is full and a relay server is configured: the requests are played there. */
+    /** True while a relay server is configured (relay mode): the requests are played there. */
     public boolean active() {
-        return running && full.getAsBoolean() && endpoint() != null;
+        return running && endpoint() != null;
     }
 
     /** True when {@code address} is the relay server's: its own requests are never played back on it. */
@@ -193,14 +190,14 @@ public final class ServerRelay implements AutoCloseable {
 
     /**
      * Plays a search on the relay server while {@link #active()}; the future gets the clean files of up to
-     * {@code maxPages} pages of 300, or nothing when the relay server cannot be reached.
+     * {@code maxPages} pages of 300, or null when the relay server could not answer: the local index answers then.
      *
      * @return null when the relay is not active
      */
     public CompletableFuture<List<FileMetadata>> forkSearch(byte[] searchTree, int maxPages) {
         if (!active() || searchTree == null || searchTree.length == 0 || searchTree.length > MAX_QUERY_BYTES) return null;
         searches.incrementAndGet();
-        return submit(session -> search(session, searchTree, maxPages), List.of());
+        return submit(session -> search(session, searchTree, maxPages), null);
     }
 
     /**

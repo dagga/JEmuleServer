@@ -119,21 +119,39 @@ class SearchFanOutTest {
     }
 
     @Test
-    void aFullServerAnswersWithTheRelayServerResultsFirst() throws Exception {
+    void inRelayModeTheRelayServerIndexAnswersInsteadOfTheLocalOne() throws Exception {
         String fromRelay = "44444444444444444444444444444444";
+        String onlyLocal = "55555555555555555555555555555555";
         index.addFile(new FileMetadata(LOCAL, "ubuntu local.iso", 100, "Iso"));
+        index.addFile(new FileMetadata(onlyLocal, "ubuntu stale.iso", 100, "Iso"));
         ServerRelay relay = mock(ServerRelay.class);
         when(relay.forkSearch(any(byte[].class), eq(ServerRelay.MAX_PAGES))).thenReturn(CompletableFuture.completedFuture(
                 List.of(FileMetadata.withoutSources(fromRelay, "ubuntu relay.iso", 400, "Iso", List.of()),
                         FileMetadata.withoutSources(LOCAL, "ubuntu local.iso", 100, "Iso", List.of()))));
-        when(kad.forkSearch(any(SearchQuery.class))).thenReturn(CompletableFuture.completedFuture(List.of()));
+        when(kad.forkSearch(any(SearchQuery.class))).thenReturn(CompletableFuture.completedFuture(
+                List.of(FileMetadata.withoutSources(FROM_KAD, "ubuntu kad.iso", 200, "Iso", List.of()))));
         when(servers.forkSearch(any(SearchQuery.class), any(byte[].class))).thenReturn(CompletableFuture.completedFuture(List.of()));
         FakeContext ctx = client();
         ctx.setServerRelay(relay);
 
         SearchAnswer answer = search(ctx, new SearchTree().keyword("ubuntu").toBytes());
 
-        assertEquals(List.of(fromRelay.toUpperCase(), LOCAL), answer.results().stream().map(r -> r.hash().toUpperCase()).toList(),
-                "the relay server's results first, each file once");
+        assertEquals(List.of(fromRelay.toUpperCase(), LOCAL, FROM_KAD),
+                answer.results().stream().map(r -> r.hash().toUpperCase()).toList(),
+                "the relay server's results first, each file once, then Kad; nothing from the local index");
+    }
+
+    @Test
+    void inRelayModeTheLocalIndexAnswersWhenTheRelayServerCannot() throws Exception {
+        index.addFile(new FileMetadata(LOCAL, "ubuntu local.iso", 100, "Iso"));
+        ServerRelay relay = mock(ServerRelay.class);
+        when(relay.forkSearch(any(byte[].class), eq(ServerRelay.MAX_PAGES)))
+                .thenReturn(CompletableFuture.completedFuture(null));
+        when(kad.forkSearch(any(SearchQuery.class))).thenReturn(CompletableFuture.completedFuture(List.of()));
+        when(servers.forkSearch(any(SearchQuery.class), any(byte[].class))).thenReturn(CompletableFuture.completedFuture(List.of()));
+        FakeContext ctx = client();
+        ctx.setServerRelay(relay);
+
+        assertEquals(List.of(LOCAL), hashes(search(ctx, new SearchTree().keyword("ubuntu").toBytes())));
     }
 }

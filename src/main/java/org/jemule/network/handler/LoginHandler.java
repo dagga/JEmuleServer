@@ -90,7 +90,7 @@ public class LoginHandler {
         sendServerStatus(context, out);
         sendServerMessage(context, out, "Welcome to JEmuleServer version " + Main.VERSION + "\n" +
                 "Your ID is: " + Long.toUnsignedString(clientId));
-        // Index full: the client stays here, and learns the relay server that its requests are played on
+        // Relay mode: the client stays here, and learns the relay server that its requests are played on
         org.jemule.network.ServerRelay relay = context.getServerRelay();
         if (relay != null && !relay.isRelayServer(clientIp)) sendRelayServerList(context, out, relay.announce());
 

@@ -197,7 +197,9 @@ public class PublishHandler {
                 && context.getState().publishedHashes().size() >= softFiles(context)) {
             return Outcome.OVER_SOFT_LIMIT;
         }
-        if (!context.getFileIndex().contains(hash) && (context.getFileIndex().fileCount() >= context.getConfig().maxFiles()
+        // Relay mode: never full, the files go to the relay server
+        if (!context.getFileIndex().relaying() && !context.getFileIndex().contains(hash)
+                && (context.getFileIndex().fileCount() >= context.getConfig().maxFiles()
                 || context.getFileIndex().isFull())) {
             // A known file still gets the client as a new source; only new files are refused
             long now = System.currentTimeMillis();

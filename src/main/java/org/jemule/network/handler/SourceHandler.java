@@ -49,7 +49,7 @@ public class SourceHandler {
         if (!fromServer) relaySources(context, data, hashBytes, obfu, answer);
     }
 
-    /** Index full: the relay server's HighID sources of the file follow in a second answer. */
+    /** Relay mode: the relay server's HighID sources of the file follow in a second answer. */
     private static void relaySources(ClientContext context, byte[] request, byte[] hashBytes, boolean obfu,
                                      List<FoundSource> sent) {
         org.jemule.network.ServerRelay relay = context.getServerRelay();

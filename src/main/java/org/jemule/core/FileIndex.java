@@ -558,9 +558,57 @@ public class FileIndex implements AutoCloseable {
         this.heapFull = full;
     }
 
-    /** True when new files are refused: maxFiles reached, or the heap or the disk full. */
+    /**
+     * True when new files are refused: maxFiles reached, or the heap or the disk full. Never in relay mode: the files
+     * go to the relay server, whose index decides.
+     */
     public boolean isFull() {
+        if (relaying()) return false;
         return fileCount() >= maxFiles.getAsInt() || heapFull.getAsBoolean();
+    }
+
+    /**
+     * Relay mode ({@code relayServer}): the index of another server is used, and this one is only kept as a fallback
+     * for when that server cannot be reached. Every file given to the index then goes to the feed; this index is no
+     * longer written, and only keeps the online sources of this server's clients for their source requests.
+     */
+    public interface RelayFeed {
+        /** Whether the server is in relay mode now. */
+        boolean relayMode();
+
+        /** Hands over a file found by any channel. */
+        void offer(FileMetadata file);
+    }
+
+    private volatile RelayFeed relayFeed;
+
+    /** Sets the feed of the relay mode (null: none). */
+    public void setRelayFeed(RelayFeed feed) {
+        this.relayFeed = feed;
+    }
+
+    /** Whether the files given to the index go to the relay server instead. */
+    public boolean relaying() {
+        RelayFeed feed = relayFeed;
+        return feed != null && feed.relayMode();
+    }
+
+    /** Relay mode: the files go to the feed, only the clients' online sources stay here. */
+    private List<FileMetadata> relay(RelayFeed feed, Collection<FileMetadata> files) {
+        List<FileMetadata> handed = new ArrayList<>(files.size());
+        for (FileMetadata file : files) {
+            if (file == null || file.hash() == null) continue;
+            feed.offer(file);
+            if (!file.sources().isEmpty()) {
+                liveSources.compute(id(file.hash()), (k, sources) -> {
+                    if (sources == null) sources = new ConcurrentHashMap<>();
+                    sources.putAll(file.sources());
+                    return sources;
+                });
+            }
+            handed.add(file);
+        }
+        return List.copyOf(handed);
     }
 
     /** New files refused because the index was full, since the server started. */
@@ -583,6 +631,11 @@ public class FileIndex implements AutoCloseable {
      * Registers a published file, recording its ingestion channel for the monitoring counters.
      */
     public FileMetadata addFile(FileMetadata meta, FileSource source) {
+        RelayFeed feed = relayFeed;
+        if (feed != null && feed.relayMode()) {
+            List<FileMetadata> handed = relay(feed, java.util.Collections.singletonList(meta));
+            return handed.isEmpty() ? null : handed.getFirst();
+        }
         Writes writes = new Writes(1);
         FileMetadata stored = addFileInternal(meta, writes, source);
         persist(writes);
@@ -601,6 +654,8 @@ public class FileIndex implements AutoCloseable {
      */
     public List<FileMetadata> addFiles(Collection<FileMetadata> files, FileSource source) {
         if (files == null || files.isEmpty()) return List.of();
+        RelayFeed feed = relayFeed;
+        if (feed != null && feed.relayMode()) return relay(feed, files);
         Writes writes = new Writes(files.size());
         List<FileMetadata> stored = new ArrayList<>(files.size());
         for (FileMetadata file : files) {

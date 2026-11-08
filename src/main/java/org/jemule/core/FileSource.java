@@ -33,6 +33,8 @@ public enum FileSource {
     SERVER_SEARCH("server search"),
     /** The index update from the eD2K index peers returned the file. */
     SERVER_INDEX_UPDATE("server index update"),
+    /** A relay server sent the file it found (relay mode, /api/relay/files). */
+    RELAY_FEED("relay server"),
     /** Any other origin (tests, administrative insertion). */
     UNKNOWN("other");
 
