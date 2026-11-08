@@ -2,6 +2,7 @@ package org.jemule.network;
 
 import org.jemule.protocol.Tag;
 import org.jemule.security.IPFilter;
+import org.jemule.security.ServerBans;
 import org.jemule.security.UdpObfuscation;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -334,6 +335,73 @@ class ServerGossipTest {
                     .filter(view -> view.endpoint().tcpPort() == 4665).findFirst().orElseThrow();
             assertEquals("candidate", discoveredView.state());
             assertEquals(ServerGossip.ServerSource.GOSSIP, discoveredView.source());
+        }
+    }
+
+    @Test
+    void aBannedServerIsDroppedAtOnceAndNeverProbedListedOrHeard() throws Exception {
+        try (DatagramSocket local = bindServerUdpSocket(); DatagramSocket peer = bindServerUdpSocket()) {
+            peer.setSoTimeout(2000);
+            int localTcpPort = local.getLocalPort() - 4;
+            int peerTcpPort = peer.getLocalPort() - 4;
+            ServerBans bans = new ServerBans();
+            ServerGossip gossip = new ServerGossip("127.0.0.1:" + peerTcpPort, new IPFilter(), bans);
+            InetAddress loopback = InetAddress.getByName("127.0.0.1");
+            InetAddress publicIp = InetAddress.getByName("203.0.113.2");
+            long now = System.currentTimeMillis();
+
+            gossip.poll(local, now);
+            int statusChallenge = ByteBuffer.wrap(receive(peer).getData(), 2, 4).order(ByteOrder.LITTLE_ENDIAN).getInt();
+            assertTrue(gossip.handle(local, loopback, peer.getLocalPort(),
+                    statusPacket(statusChallenge, 100, 200, 1000, 500, 0), null, loopback, localTcpPort, now));
+            int descriptionChallenge = ByteBuffer.wrap(receive(peer).getData(), 2, 4)
+                    .order(ByteOrder.LITTLE_ENDIAN).getInt();
+            assertTrue(gossip.handle(local, loopback, peer.getLocalPort(),
+                    descriptionPacket(descriptionChallenge, "Fake server", "Banned soon"), null, loopback,
+                    localTcpPort, now));
+            assertEquals((byte) 0xA0, receive(peer).getData()[1], "registered");
+            assertEquals(1, gossip.verifiedPeers().size());
+            assertEquals(2, gossip.clientServerList(publicIp, localTcpPort)[0], "this server and the peer");
+
+            bans.ban(ServerBans.parse("127.0.0.1"), "fake", now);
+            assertEquals(1, gossip.forget(loopback));
+            assertTrue(gossip.verifiedPeers().isEmpty(), "no longer searched, asked for sources or updated from");
+            assertTrue(gossip.candidateEndpoints().isEmpty());
+            assertTrue(gossip.serverViews().isEmpty());
+            assertFalse(gossip.isServer(loopback), "the ban wins over serverPeers");
+            byte[] list = gossip.clientServerList(publicIp, localTcpPort);
+            assertEquals(1, list[0], "only this server is listed");
+            assertArrayEquals(publicIp.getAddress(), java.util.Arrays.copyOfRange(list, 1, 5));
+
+            // Its registration and status requests are not heard, nor answered with a server list
+            byte[] registration = ByteBuffer.allocate(12).order(ByteOrder.LITTLE_ENDIAN).put((byte) 0xE3)
+                    .put((byte) 0xA0).put(loopback.getAddress()).putShort((short) peerTcpPort).putInt(7).array();
+            assertFalse(gossip.handle(local, loopback, peer.getLocalPort(), registration, null, loopback,
+                    localTcpPort, now + 1));
+            byte[] statusRequest = ByteBuffer.allocate(6).order(ByteOrder.LITTLE_ENDIAN)
+                    .put((byte) 0xE3).put((byte) 0x96).putInt(12345).array();
+            assertFalse(gossip.handle(local, loopback, peer.getLocalPort(), statusRequest, null, loopback,
+                    localTcpPort, now + 1));
+            assertEquals(0, gossip.addServerMetCandidates(List.of(new ServerGossip.Endpoint(loopback, 4661))),
+                    "all its ports are banned");
+            assertTrue(gossip.serverViews().isEmpty());
+
+            gossip.poll(local, now + 120_000);
+            peer.setSoTimeout(300);
+            assertThrows(java.net.SocketTimeoutException.class, () -> receive(peer), "never probed again");
+        }
+    }
+
+    @Test
+    void aConfiguredPeerBannedBeforeTheStartIsNeverProbed() throws Exception {
+        try (DatagramSocket local = bindServerUdpSocket(); DatagramSocket peer = bindServerUdpSocket()) {
+            ServerBans bans = new ServerBans();
+            bans.ban(ServerBans.parse("127.0.0.1"), null, 0);
+            ServerGossip gossip = new ServerGossip("127.0.0.1:" + (peer.getLocalPort() - 4), new IPFilter(), bans);
+            gossip.poll(local, System.currentTimeMillis());
+            assertTrue(gossip.candidateEndpoints().isEmpty());
+            peer.setSoTimeout(300);
+            assertThrows(java.net.SocketTimeoutException.class, () -> receive(peer));
         }
     }
 

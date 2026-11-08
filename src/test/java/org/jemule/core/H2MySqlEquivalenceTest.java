@@ -53,7 +53,7 @@ class H2MySqlEquivalenceTest {
     private static void requireMySql() throws Exception {
         Assumptions.assumeTrue(URL != null && !URL.isBlank(), "no MySQL server given (-Pmysql.url)");
         try (Connection c = DriverManager.getConnection(URL, USER, PASSWORD); Statement stmt = c.createStatement()) {
-            for (String table : List.of("file_tags", "file_sources", "files", "stats", "metrics_history", "banned_names")) {
+            for (String table : List.of("file_tags", "file_sources", "files", "stats", "metrics_history", "banned_names", "banned_servers")) {
                 stmt.execute("DROP TABLE IF EXISTS " + table);
             }
         }

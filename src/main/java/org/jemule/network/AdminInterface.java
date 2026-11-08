@@ -110,7 +110,7 @@ public class AdminInterface implements Runnable {
             case "events" -> showEvents();
             case "kad" -> handleKad(parts);
             case "peers" -> showPeers();
-            case "servers" -> showServers();
+            case "servers" -> handleServers(line.trim().substring(parts[0].length()).strip());
             case "filters" -> handleFilters(parts);
             case "bots" -> showBots();
             case "blocks" -> showBlocks();
@@ -325,6 +325,54 @@ public class AdminInterface implements Runnable {
             out().printf("%-34s | %s:%d | %-6d | %ds ago%n", contact.id(),
                     contact.address().getHostAddress(), contact.udpPort(), contact.tcpPort(),
                     Math.max(0, (now - contact.lastSeen()) / 1000));
+        }
+    }
+
+    /** 'servers', 'servers bans', 'servers ban &lt;ip&gt; [reason]', 'servers unban &lt;ip&gt;'. */
+    private void handleServers(String arguments) {
+        String[] args = arguments.split("\\s+", 3);
+        String sub = args[0].toLowerCase(Locale.ROOT);
+        if (sub.isEmpty()) {
+            showServers();
+            return;
+        }
+        org.jemule.security.ServerBans bans = server != null ? server.getServerBans() : null;
+        if (bans == null) {
+            out().println("Server bans are unavailable.");
+            return;
+        }
+        switch (sub) {
+            case "bans" -> {
+                List<org.jemule.security.ServerBans.Ban> list = bans.list();
+                out().println("--- Banned eD2K servers (" + list.size() + ") ---");
+                for (org.jemule.security.ServerBans.Ban ban : list) {
+                    out().println(ban.ip() + "  " + java.time.Instant.ofEpochMilli(ban.bannedAt())
+                            + (ban.reason().isEmpty() ? "" : "  (" + ban.reason() + ")"));
+                }
+            }
+            case "ban", "unban" -> {
+                java.net.Inet4Address address = args.length > 1 ? org.jemule.security.ServerBans.parse(args[1]) : null;
+                if (address == null) {
+                    out().println(sub.equals("ban") ? "Usage: servers ban <IPv4 address> [reason]"
+                            : "Usage: servers unban <IPv4 address>");
+                    return;
+                }
+                if (sub.equals("ban")) {
+                    String reason = args.length > 2 ? args[2].strip() : "";
+                    if (reason.length() > org.jemule.security.ServerBans.MAX_REASON_LENGTH) {
+                        out().println("Error: the reason is longer than " + org.jemule.security.ServerBans.MAX_REASON_LENGTH
+                                + " characters.");
+                        return;
+                    }
+                    server.banServer(address, reason);
+                    out().println("Server " + address.getHostAddress() + " banned (all ports).");
+                } else {
+                    out().println(server.unbanServer(address) ? "Server " + address.getHostAddress() + " no longer banned."
+                            : "Server " + address.getHostAddress() + " was not banned.");
+                }
+            }
+            default -> out().println("Usage: servers | servers bans | servers ban <IPv4 address> [reason] | "
+                    + "servers unban <IPv4 address>");
         }
     }
 
@@ -614,6 +662,9 @@ public class AdminInterface implements Runnable {
         out().println("  events          - Show event counts (total and last minute)");
         out().println("  peers           - List verified server peers and Kad contacts");
         out().println("  servers         - Monitor known eD2K servers and their state");
+        out().println("  servers ban <ip> [reason] - Ban an eD2K server (all its ports): never used, listed or heard");
+        out().println("  servers unban <ip> - Lift the ban of an eD2K server");
+        out().println("  servers bans    - List the banned eD2K servers");
         out().println("  filters         - Show active IP and fake-file filters");
         out().println("  filters reload  - Reload the IP filter and the child abuse keywords");
         out().println("  bots            - List potential bots by nickname heuristic");

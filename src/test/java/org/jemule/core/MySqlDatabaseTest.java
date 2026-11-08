@@ -54,7 +54,7 @@ class MySqlDatabaseTest {
         Assumptions.assumeTrue(URL != null && !URL.isBlank(), "no MySQL server given (-Pmysql.url)");
         try (Connection c = DriverManager.getConnection(URL, USER, PASSWORD); Statement stmt = c.createStatement()) {
             for (String table : List.of("file_tags", "file_sources", "files", "file_tags_v4", "files_v4", "file_tags_v3",
-                    "files_v3", "stats", "metrics_history", "banned_names")) {
+                    "files_v3", "stats", "metrics_history", "banned_names", "banned_servers")) {
                 stmt.execute("DROP TABLE IF EXISTS " + table);
             }
         }
@@ -189,6 +189,25 @@ class MySqlDatabaseTest {
     }
 
     @Test
+    void bannedServers() throws Exception {
+        try (DatabaseManager db = open()) {
+            db.addBannedServer("192.0.2.10", "fake", new java.sql.Timestamp(1_000_123));
+            db.addBannedServer("198.51.100.20", null, new java.sql.Timestamp(2_000_456));
+            db.addBannedServer("192.0.2.10", "again", new java.sql.Timestamp(3_000_789));
+        }
+        try (DatabaseManager db = open()) {
+            List<DatabaseManager.BannedServer> servers = db.loadBannedServers();
+            assertEquals(List.of("192.0.2.10", "198.51.100.20"), servers.stream().map(DatabaseManager.BannedServer::ip)
+                    .toList(), "the most recent first");
+            assertEquals("again", servers.getFirst().reason());
+            assertEquals(3_000_789, servers.getFirst().bannedAt().getTime(), "to the millisecond");
+            assertNull(servers.get(1).reason());
+            db.removeBannedServer("192.0.2.10");
+            assertEquals(1, db.loadBannedServers().size());
+        }
+    }
+
+    @Test
     void aLostConnectionIsReopened() throws Exception {
         try (DatabaseManager db = open()) {
             db.setStat("before", 1);
@@ -217,6 +236,7 @@ class MySqlDatabaseTest {
             h2.saveFiles(batch);
             h2.addBannedName("some fake.avi", "fake");
             h2.addBannedNameIfAbsent("y".repeat(900), "child abuse");
+            h2.addBannedServer("203.0.113.30", "fake", new java.sql.Timestamp(5_000_000));
             h2.setStat("kad_node_id_high", 1234);
             h2.setStat("kad_node_id_low", -5678);
             h2.saveMetricsSample(10_000, files, 3, 0);
@@ -237,6 +257,8 @@ class MySqlDatabaseTest {
             assertEquals(4_321 % 4, sample.sourceCount());
             assertEquals(List.of("xvid", 3600 + 4_321), values(sample));
             assertEquals(List.of("some fake.avi"), db.bannedNamesAfter(null, 10), "a name too long for MySQL is left out");
+            assertEquals(List.of(new DatabaseManager.BannedServer("203.0.113.30", "fake", new java.sql.Timestamp(5_000_000))),
+                    db.loadBannedServers());
             assertEquals(1234, db.getStat("kad_node_id_high", 0), "the Kad node keeps its ID");
             assertEquals(-5678, db.getStat("kad_node_id_low", 0));
             assertEquals(1, db.loadMetricsSamples(0).size());

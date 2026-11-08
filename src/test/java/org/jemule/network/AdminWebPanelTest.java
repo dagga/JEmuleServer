@@ -12,6 +12,7 @@ import org.jemule.kad.KadNode;
 import org.jemule.kad.KadRoutingTable;
 import org.jemule.security.FakeFileDetector;
 import org.jemule.security.IPFilter;
+import org.jemule.security.ServerBans;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetAddress;
@@ -279,6 +280,85 @@ class AdminWebPanelTest {
             assertEquals(200, response.statusCode());
             assertTrue(response.body().contains("\"kicked\":1"), response.body());
             verify(server).kickClient("12345");
+        }
+    }
+
+    /** A form POST of {@code origin} (null: no Origin header). */
+    private static HttpResponse<String> post(AdminWebPanel panel, String path, String form, String origin)
+            throws Exception {
+        HttpRequest.Builder request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + panel.port() + path))
+                .header("Content-Type", "application/x-www-form-urlencoded")
+                .POST(HttpRequest.BodyPublishers.ofString(form));
+        if (origin != null) request.header("Origin", origin);
+        return HttpClient.newHttpClient().send(request.build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    private static HttpResponse<String> get(AdminWebPanel panel, String path) throws Exception {
+        return HttpClient.newHttpClient().send(HttpRequest.newBuilder(
+                URI.create("http://127.0.0.1:" + panel.port() + path)).GET().build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    @Test
+    void sameOriginCanBanListAndUnbanAServer() throws Exception {
+        Server server = mock(Server.class);
+        ServerBans bans = new ServerBans();
+        when(server.getServerBans()).thenReturn(bans);
+        when(server.banServer(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+                .thenAnswer(call -> bans.ban(call.getArgument(0), call.getArgument(1), 1_700_000_000_123L));
+        when(server.unbanServer(org.mockito.ArgumentMatchers.any()))
+                .thenAnswer(call -> bans.unban(call.getArgument(0)));
+        ServerGossip.ServerView view = new ServerGossip.ServerView("Listed", "verified",
+                ServerGossip.ServerSource.GOSSIP, new ServerGossip.Endpoint(InetAddress.getByName("198.51.100.9"), 4661),
+                null, null, null, null, null, null, false, null, null, null, 0);
+        when(server.getServerViews()).thenReturn(List.of(view));
+
+        try (AdminWebPanel panel = new AdminWebPanel(server)) {
+            panel.start(0);
+            String origin = "http://127.0.0.1:" + panel.port();
+            assertEquals("[]", get(panel, "/api/servers/bans").body());
+
+            HttpResponse<String> banned = post(panel, "/api/servers/ban", "ip=+192.0.2.10&reason=fake+files", origin);
+            assertEquals(200, banned.statusCode(), banned.body());
+            assertEquals("{\"banned\":\"192.0.2.10\"}", banned.body());
+            verify(server).banServer(ServerBans.parse("192.0.2.10"), "fake files");
+
+            HttpResponse<String> list = get(panel, "/api/servers/bans");
+            assertEquals(200, list.statusCode());
+            assertEquals("[{\"ip\":\"192.0.2.10\",\"reason\":\"fake files\",\"bannedAt\":1700000000123}]",
+                    list.body());
+            assertTrue(get(panel, "/api/servers").body().contains("\"banned\":false"), "the field of each server");
+
+            HttpResponse<String> unbanned = post(panel, "/api/servers/unban", "ip=192.0.2.10", origin);
+            assertEquals(200, unbanned.statusCode());
+            assertEquals("{\"unbanned\":\"192.0.2.10\",\"wasBanned\":true}", unbanned.body());
+            assertTrue(post(panel, "/api/servers/unban", "ip=192.0.2.10", origin).body()
+                    .contains("\"wasBanned\":false"));
+            assertEquals("[]", get(panel, "/api/servers/bans").body());
+        }
+    }
+
+    @Test
+    void aServerBanNeedsAnIpv4AddressAShortReasonAndTheSameOrigin() throws Exception {
+        Server server = mock(Server.class);
+        when(server.getServerBans()).thenReturn(new ServerBans());
+
+        try (AdminWebPanel panel = new AdminWebPanel(server)) {
+            panel.start(0);
+            String origin = "http://127.0.0.1:" + panel.port();
+            for (String form : List.of("", "ip=", "ip=example.org", "ip=192.0.2.300", "ip=192.0.2.1:4661", "ip=::1")) {
+                HttpResponse<String> response = post(panel, "/api/servers/ban", form, origin);
+                assertEquals(400, response.statusCode(), form);
+                assertTrue(response.body().contains("\"error\""), response.body());
+                assertEquals(400, post(panel, "/api/servers/unban", form, origin).statusCode(), form);
+            }
+            assertEquals(400, post(panel, "/api/servers/ban", "ip=192.0.2.1&reason=" + "x".repeat(241), origin)
+                    .statusCode());
+            assertEquals(403, post(panel, "/api/servers/ban", "ip=192.0.2.1", null).statusCode(), "no Origin");
+            assertEquals(403, post(panel, "/api/servers/ban", "ip=192.0.2.1", "https://attacker.example")
+                    .statusCode());
+            assertEquals(403, post(panel, "/api/servers/unban", "ip=192.0.2.1", null).statusCode());
+            verify(server, never()).banServer(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+            verify(server, never()).unbanServer(org.mockito.ArgumentMatchers.any());
         }
     }
 

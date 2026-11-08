@@ -40,6 +40,7 @@ import org.jemule.security.FakeFileDetector;
 import org.jemule.security.FloodProtector;
 import org.jemule.security.IPFilter;
 import org.jemule.security.IPFilterUpdater;
+import org.jemule.security.ServerBans;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -88,6 +89,8 @@ public class Server {
     private final org.jemule.core.OfferFilesV1 offerFilesV1 = new org.jemule.core.OfferFilesV1();
     private final FloodProtector floodProtector;
     private final IPFilter ipFilter;
+    /** eD2K servers banned by the administrator (banned_servers). */
+    private final ServerBans serverBans = new ServerBans();
     private final IPFilterUpdater ipFilterUpdater;
     private final FakeFileDetector fakeFileDetector;
     private final ExecutorService executor;
@@ -264,7 +267,7 @@ public class Server {
         this.floodProtector = new FloodProtector(config.floodMaxRequestsPerSecond());
         this.ipFilter = new IPFilter();
         this.ipFilterUpdater = createIpFilterUpdater(config.ipFilterPath());
-        this.serverGossip = new ServerGossip(config.serverPeers(), this.ipFilter);
+        this.serverGossip = new ServerGossip(config.serverPeers(), this.ipFilter, serverBans);
         this.serverGossip.useSockets(() -> boundUdpSockets.get(config.port() + 4),
                 () -> boundUdpSockets.get(config.port() + 14), this::buildGlobServStatRes);
         this.fakeFileDetector = new FakeFileDetector();
@@ -288,6 +291,9 @@ public class Server {
             banned.forEach(n -> this.fakeFileDetector.addBannedName(n.name()));
             log.info("Loaded {} banned file names from database ({} in all with the child abuse filter's)",
                     banned.size(), dbMgr.countBannedNames());
+            this.serverBans.setDatabaseManager(dbMgr);
+            dbMgr.loadBannedServers().forEach(this.serverBans::addLoaded);
+            if (serverBans.size() > 0) log.info("Loaded {} banned eD2K servers from database", serverBans.size());
         } catch (SQLException e) {
             log.error("Failed to initialize the database ({}): {}. The files are not saved until the next start",
                     config.database(), e.getMessage());
@@ -325,6 +331,13 @@ public class Server {
         this.serverIndexUpdater.setIngestionExecutor(ingestion);
         // Relay mode: the searches and source requests are played on the relay server, and the files found sent there
         this.serverRelay = new ServerRelay(() -> this.config.relayServer(), fileIndex, fakeFileDetector);
+        this.serverRelay.setBanned(serverBans::isBanned);
+        // The bans loaded from the database win over serverPeers and relayServer
+        for (ServerBans.Ban ban : serverBans.list()) {
+            InetAddress address = ServerBans.parse(ban.ip());
+            serverGossip.forget(address);
+            warnIfConfigured(address, config);
+        }
         this.relayFeed = new RelayFeed(() -> serverRelay.endpoint() != null, this::relayFeedTarget,
                 () -> this.config.relayFeed().effectiveToken());
         this.fileIndex.setRelayFeed(relayFeed);
@@ -548,6 +561,65 @@ public class Server {
      */
     public boolean isPeerServer(InetAddress address) {
         return serverGossip.isServer(address) || serverRelay.isRelayServer(address);
+    }
+
+    /** The eD2K servers banned by the administrator. */
+    public ServerBans getServerBans() {
+        return serverBans;
+    }
+
+    /** Whether the administrator banned the eD2K server at {@code address}. */
+    public boolean isServerBanned(InetAddress address) {
+        return serverBans.isBanned(address);
+    }
+
+    /**
+     * Bans an eD2K server, by address (all its ports), for good: it is forgotten at once by the server gossip (no
+     * longer verified, listed, searched, asked for sources or updated from), its UDP server traffic is dropped from
+     * now on, and its client sessions are closed and refused. A configured peer or relay server may be banned too:
+     * the ban wins, with a warning.
+     *
+     * @param reason the administrator's reason, null or blank for none
+     */
+    public ServerBans.Ban banServer(java.net.Inet4Address address, String reason) {
+        ServerBans.Ban ban = serverBans.ban(address, reason, System.currentTimeMillis());
+        int forgotten = serverGossip.forget(address);
+        warnIfConfigured(address, config);
+        if (serverRelay.isConfiguredRelayServer(address)) serverRelay.closeIdleSessions();
+        int kicked = kickIp(address.getHostAddress());
+        if (running) serverIndexUpdater.refreshWorkers();
+        log.info("eD2K server {} banned{}: {} known server(s) at that address forgotten, {} client session(s) closed",
+                ban.ip(), ban.reason().isEmpty() ? "" : " (" + ban.reason() + ")", forgotten, kicked);
+        return ban;
+    }
+
+    /**
+     * Lifts the ban of an eD2K server: it may be discovered and verified again (a configured peer only after a
+     * restart, a relay server at once).
+     *
+     * @return false when it was not banned
+     */
+    public boolean unbanServer(java.net.Inet4Address address) {
+        boolean wasBanned = serverBans.unban(address);
+        if (wasBanned) log.info("eD2K server {} no longer banned", address.getHostAddress());
+        return wasBanned;
+    }
+
+    /** Warns when a banned server is a configured peer (serverPeers) or the relay server (relayServer). */
+    private void warnIfConfigured(InetAddress address, ServerConfig current) {
+        if (address == null) return;
+        try {
+            if (ServerGossip.parseEndpoints(current.serverPeers()).stream().anyMatch(e -> e.address().equals(address))) {
+                log.warn("Banned eD2K server {} is a configured server peer (serverPeers): the ban wins, it is not used",
+                        address.getHostAddress());
+            }
+        } catch (IllegalArgumentException e) {
+            // An invalid serverPeers is reported where it is read
+        }
+        if (serverRelay.isConfiguredRelayServer(address)) {
+            log.warn("Banned eD2K server {} is the relay server (relayServer): the ban wins, relay mode is off while "
+                    + "it is banned", address.getHostAddress());
+        }
     }
 
     /** True when a server announces at least 90% of its maximum users. */
@@ -1008,6 +1080,12 @@ public class Server {
                         c.close();
                         break;
                     }
+                    if (serverBans.isBanned(c.getInetAddress())) {
+                        // A banned server is not taken as a client either (relay and index update sessions)
+                        log.debug("Connection refused from banned server {}", c.getInetAddress().getHostAddress());
+                        c.close();
+                        continue;
+                    }
                     c.setTcpNoDelay(true);
                     clientSockets.add(c);
                     executor.submit(() -> {
@@ -1235,6 +1313,8 @@ public class Server {
 
     private void handleUdp(java.net.DatagramSocket ds, java.net.DatagramPacket p) throws IOException {
         if (p.getLength() < 2) return;
+        // A banned server's status requests, searches, registrations and server lists are dropped silently
+        if (serverBans.isBanned(p.getAddress())) return;
         byte[] recv = java.util.Arrays.copyOfRange(p.getData(), p.getOffset(), p.getOffset() + p.getLength());
         if (log.isDebugEnabled()) {
             log.debug("UDP recv {} bytes from {}:{} - {}", recv.length, p.getAddress(), p.getPort(), hex(recv, recv.length));

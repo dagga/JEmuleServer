@@ -35,6 +35,7 @@ import org.jemule.kad.KadNode;
 import org.jemule.kad.KadSearchBridge;
 import org.jemule.security.FakeFileDetector;
 import org.jemule.security.IPFilter;
+import org.jemule.security.ServerBans;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -405,6 +406,7 @@ final class AdminWebPanel implements AutoCloseable {
                 case "/api/clients" -> clients(exchange);
                 case "/api/peers" -> json(exchange, 200, peers());
                 case "/api/servers" -> json(exchange, 200, servers());
+                case "/api/servers/bans" -> json(exchange, 200, serverBans());
                 case "/api/ingestion" -> json(exchange, 200, ingestion());
                 case "/api/searches" -> json(exchange, 200, searches());
                 case "/api/filters" -> json(exchange, 200, filters());
@@ -443,6 +445,20 @@ final class AdminWebPanel implements AutoCloseable {
                     throw new IllegalArgumentException("Name must hold 1 to " + FakeFileDetector.MAX_NAME_LENGTH + " characters");
                 boolean wasBanned = server.getFakeFileDetector().unban(name);
                 json(exchange, 200, Map.of("unbanned", FakeFileDetector.normalize(name), "wasBanned", wasBanned));
+            }
+            case "/api/servers/ban" -> {
+                java.net.Inet4Address address = serverAddress(form);
+                String reason = form.getOrDefault("reason", "").trim();
+                if (reason.length() > ServerBans.MAX_REASON_LENGTH) throw new IllegalArgumentException("Reason is too long");
+                server.banServer(address, reason);
+                json(exchange, 200, Map.of("banned", address.getHostAddress()));
+            }
+            case "/api/servers/unban" -> {
+                java.net.Inet4Address address = serverAddress(form);
+                Map<String, Object> answer = new java.util.LinkedHashMap<>();
+                answer.put("unbanned", address.getHostAddress());
+                answer.put("wasBanned", server.unbanServer(address));
+                json(exchange, 200, answer);
             }
             case "/api/settings" -> json(exchange, 200, configResult(server.updateConfig(form)));
             case "/api/settings/reload" -> json(exchange, 200, configResult(server.reloadConfig()));
@@ -758,9 +774,31 @@ final class AdminWebPanel implements AutoCloseable {
             row.put("verifiedSecondsAgo", view.verifiedAtMillis() == null ? null
                     : Math.max(0, (now - view.verifiedAtMillis()) / 1000));
             row.put("missedProbes", view.missedStatusProbes());
+            // Always false: a banned server is forgotten at once, and listed by /api/servers/bans instead
+            row.put("banned", server.isServerBanned(view.endpoint().address()));
             result.add(row);
         }
         return result;
+    }
+
+    /** The servers banned by the administrator, the most recent first. */
+    private List<Map<String, Object>> serverBans() {
+        ServerBans bans = server.getServerBans();
+        if (bans == null) return List.of();
+        return bans.list().stream().map(ban -> {
+            Map<String, Object> row = new java.util.LinkedHashMap<>();
+            row.put("ip", ban.ip());
+            row.put("reason", ban.reason());
+            row.put("bannedAt", ban.bannedAt());
+            return row;
+        }).toList();
+    }
+
+    /** The {@code ip} of a server ban form: an IPv4 address in dotted form, never resolved. */
+    private static java.net.Inet4Address serverAddress(Map<String, String> form) {
+        java.net.Inet4Address address = ServerBans.parse(form.getOrDefault("ip", ""));
+        if (address == null) throw new IllegalArgumentException("ip must be an IPv4 address (a.b.c.d)");
+        return address;
     }
 
     private List<Map<String, Object>> ingestion() {
