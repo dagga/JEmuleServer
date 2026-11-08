@@ -685,6 +685,9 @@ public class DatabaseManager implements AutoCloseable {
                 }
             }
             if (t.getMessage() != null && t.getMessage().contains("This store is closed")) return true;
+            // H2's file channel closed under it, by an interrupted thread for example (ClosedByInterruptException):
+            // every later read or write fails until the database is reopened
+            if (t instanceof java.nio.channels.ClosedChannelException) return true;
         }
         return false;
     }
