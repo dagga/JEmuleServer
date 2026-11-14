@@ -341,4 +341,35 @@ class FileIndexTest {
                     "a cached search lives at most one refresh period");
         }
     }
+
+    @Test
+    void aSearchReturnsTheHitsBelowTheLimitAndNoneWithoutMatch() {
+        try (FileIndex index = new FileIndex(null)) {
+            index.addFiles(List.of(file("11111111111111111111111111111111", "linux one.iso", 2),
+                    file("22222222222222222222222222222222", "linux two.iso", 5),
+                    file("33333333333333333333333333333333", "linux three.iso", 5),
+                    file("44444444444444444444444444444444", "windows.iso", 9)));
+            SearchQuery linuxAndWindows = new SearchQuery.AndQuery(LINUX,
+                    new SearchQuery.TermQuery("windows", SearchQuery.ID_FILENAME));
+
+            // Sorted by source count, the ties in index order
+            assertEquals(List.of("22222222222222222222222222222222", "33333333333333333333333333333333",
+                    "11111111111111111111111111111111"), hashes(index.searchComplex(LINUX, 1_000)));
+            assertEquals(List.of(5, 5, 2), index.searchComplex(LINUX, 1_000).stream()
+                    .map(FileMetadata::sourceCount).toList());
+            assertEquals(List.of("22222222222222222222222222222222", "33333333333333333333333333333333"),
+                    hashes(index.searchComplex(LINUX, 2)));
+            assertEquals(List.of(), index.searchComplex(linuxAndWindows, 10), "words of the index, no file with both");
+            assertEquals(List.of(), index.searchComplex(LINUX, 0));
+
+            // Keyword search, in index order
+            assertEquals(List.of("11111111111111111111111111111111", "22222222222222222222222222222222",
+                    "33333333333333333333333333333333"), hashes(index.search("linux", 1_000)));
+            assertEquals(List.of("11111111111111111111111111111111", "22222222222222222222222222222222"),
+                    hashes(index.search("linux", 2)));
+            assertEquals(List.of(), index.search("linux windows", 10));
+            assertEquals(4, index.search("", 1_000).size(), "no keyword: every file");
+            assertEquals(List.of(), index.search("linux", 0));
+        }
+    }
 }
