@@ -1026,13 +1026,23 @@ public class Server {
         log.info("Child abuse keywords reloaded from {}", path == null || path.isBlank() ? "the embedded list" : path);
     }
 
+    private static boolean isConnectionEvent(String type) {
+        return ClientEvent.CONNECTED.equals(type) || ClientEvent.DISCONNECTED.equals(type) || ClientEvent.LOGIN.equals(type);
+    }
+
     private void setupDefaultListeners() {
         eventManager.subscribeAll(eventStatistics);
         eventManager.subscribeAll(event -> {
+            // Connections, disconnections and logins stay at INFO; per-request events (each published file,
+            // each search, each callback relay) only go to DEBUG: they still reach the admin event feed.
             if (event instanceof ClientEvent ce) {
-                log.info("[CLIENT] {} - {} ({})", ce.getType(), ce.getUsername(), ce.getClientIp());
+                if (isConnectionEvent(ce.getType())) {
+                    log.info("[CLIENT] {} - {} ({})", ce.getType(), ce.getUsername(), ce.getClientIp());
+                } else {
+                    log.debug("[CLIENT] {} - {} ({})", ce.getType(), ce.getUsername(), ce.getClientIp());
+                }
             } else if (event instanceof FileEvent fe) {
-                log.info("[FILE] {} - {} ({})", fe.getType(), fe.getFileName(), fe.getFileHash());
+                log.debug("[FILE] {} - {} ({})", fe.getType(), fe.getFileName(), fe.getFileHash());
             } else {
                 log.info("[EVENT] {}: {}", event.getType(), event.getMessage());
             }

@@ -22,11 +22,18 @@ public class PacketProcessor {
         context.getState().lastActivity().set(System.currentTimeMillis());
         OpCode op = OpCode.fromByte(p.protocol(), p.opcode());
         if (op == null) {
-            log.info("Unknown opcode received: 0x" + String.format("%02X", p.opcode()) + " (Proto: 0x" + String.format("%02X", p.protocol()) + "), Data length: " + (p.data() != null ? p.data().length : 0));
+            if (log.isDebugEnabled()) {
+                log.debug("Unknown opcode received: 0x{} (Proto: 0x{}), Data length: {}",
+                        hex(p.opcode()), hex(p.protocol()), p.data() != null ? p.data().length : 0);
+            }
             return;
         }
 
-        log.info("Processing packet: " + op + " (Proto: 0x" + String.format("%02X", p.protocol()) + ", Data length: " + (p.data() != null ? p.data().length : 0) + ")");
+        // Per-packet trace: DEBUG only, a busy server receives thousands of packets per minute
+        if (log.isDebugEnabled()) {
+            log.debug("Processing packet: {} (Proto: 0x{}, Data length: {})",
+                    op, hex(p.protocol()), p.data() != null ? p.data().length : 0);
+        }
 
         switch (op) {
             case SEARCH_REQUEST -> searchHandler.handleSearch(context, p.data(), out);
@@ -40,8 +47,14 @@ public class PacketProcessor {
             case GET_SERVER_LIST -> sendServerList(context, out);
             case SERVER_LIST -> collectClientServerList(context, p.data());
             case DISCONNECT -> handleDisconnect(context);
-            default -> log.debug("Unhandled: {} (Proto: 0x{})", op, String.format("%02X", p.protocol()));
+            default -> {
+                if (log.isDebugEnabled()) log.debug("Unhandled: {} (Proto: 0x{})", op, hex(p.protocol()));
+            }
         }
+    }
+
+    private static String hex(byte b) {
+        return String.format("%02X", b);
     }
 
     private void handleDisconnect(ClientContext context) throws IOException {
@@ -52,7 +65,8 @@ public class PacketProcessor {
     private void handleSourcesResult(ClientContext context, Packet p, OutputStream out) throws IOException {
         byte[] data = p.data();
         int len = data == null ? 0 : data.length;
-        log.info("Received SOURCES_RESULT (Proto: 0x{}), length={}", String.format("%02X", p.protocol()), len);
+        if (!log.isDebugEnabled()) return;
+        log.debug("Received SOURCES_RESULT (Proto: 0x{}), length={}", hex(p.protocol()), len);
         if (len > 0) {
             StringBuilder sb = new StringBuilder();
             for (int i = 0; i < Math.min(64, data.length); i++) {

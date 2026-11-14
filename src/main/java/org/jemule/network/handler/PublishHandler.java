@@ -46,7 +46,7 @@ public class PublishHandler {
         if (count == 0) {
             log.debug("Empty {} from client {} (keep-alive)", op, context.getState().clientId());
         } else {
-            log.info("Received {} with {} files ({} bytes)", op, count, data.length);
+            log.debug("Received {} with {} files ({} bytes)", op, count, data.length);
         }
 
         ClientState state = context.getState();

@@ -160,7 +160,7 @@ public class SourceHandler {
         ClientState target = context.getRegistry().get(targetId);
         long requesterIp = ClientState.ipToLong(requester.address());
         if (target == null || requesterIp == 0 || requester.listenPort() == 0) {
-            log.info("Callback from {} to ID {} failed (target {})", requester.clientId(), targetId, target == null ? "not connected" : "found");
+            log.debug("Callback from {} to ID {} failed (target {})", requester.clientId(), targetId, target == null ? "not connected" : "found");
             new Packet(Packet.PROTOCOL_ED2K, OpCode.CALLBACK_FAIL.value, new byte[0]).write(out, requester.isZlibSupported());
             return;
         }
