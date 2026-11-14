@@ -571,7 +571,7 @@ that brings this content to its clients without exposing them to illicit files:
   seconds (under the 3 requests a minute a node accepts), while its pages come back full, until the search has kept
   60,000 results from all its nodes (files with at least `kadMinSourcesForIngest` sources that pass the filters).
   These files only go to the index; the Searches view counts these background pages.
-- **Word searches for the index**: Kad indexes files by word, so the other words of a search, of at least 5
+- **Word searches for the index**: Kad indexes files by word, so the other words of a search, of at least 4
   characters (5 at most, longest first, never the words of excluded terms nor a word the child abuse filter matches),
   are then searched alone in their own keyword index, in the background. The client neither waits for them nor gets
   their files: their clean files only go to the index, even those not matching the search. These searches wait in a

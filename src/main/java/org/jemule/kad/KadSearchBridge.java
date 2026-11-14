@@ -99,7 +99,7 @@ public class KadSearchBridge implements AutoCloseable {
     /** Other words of one client search searched at most on Kad in the background, for the index. */
     public static final int MAX_WORD_SEARCHES = 5;
     /** Characters a word needs to be searched in the background (shorter words have too large an index). */
-    public static final int MIN_WORD_CHARS = 5;
+    public static final int MIN_WORD_CHARS = 4;
     /** Words waiting for their background search at most; the words of the next client searches are dropped. */
     static final int MAX_QUEUED_WORD_SEARCHES = 100;
     /** Background word searches running at the same time at most. */
