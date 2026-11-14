@@ -417,8 +417,13 @@ final class AdminWebPanel implements AutoCloseable {
         Runtime runtime = Runtime.getRuntime();
         double load = java.lang.management.ManagementFactory.getOperatingSystemMXBean().getSystemLoadAverage();
         DatabaseManager database = server.getDatabaseManager();
+        org.jemule.core.FilePurgeJob purge = server.getFilePurgeJob();
+        org.jemule.core.FilePurgeJob.Status purged = purge == null ? null : purge.status();
         return Map.ofEntries(
                 Map.entry("version", Main.VERSION),
+                // Last complete purge of the files not seen for fileRetentionDays (epoch ms, 0: never)
+                Map.entry("lastFilePurgeAt", purged == null ? 0L : purged.lastRunAt()),
+                Map.entry("lastFilePurgeFiles", purged == null ? 0L : purged.lastRunFiles()),
                 Map.entry("uptimeSeconds", Math.max(0, (System.currentTimeMillis() - startedAt) / 1000)),
                 Map.entry("connectedClients", server.getClientRegistry().size()),
                 Map.entry("lowIdClients", server.getClientRegistry().lowIdCount()),
@@ -518,6 +523,9 @@ final class AdminWebPanel implements AutoCloseable {
         db.put("type", database == null ? null : database.isMySql() ? "MySQL" : "H2");
         db.put("sizeMb", database == null ? null : database.fileSize() / 1024 / 1024);
         db.put("reopens", database == null ? 0L : database.getReopenCount());
+        // Purge of the files not seen for fileRetentionDays: the run under way or the last one
+        org.jemule.core.FilePurgeJob purge = server.getFilePurgeJob();
+        db.put("filePurge", purge == null ? Map.of() : purge.status().toMap());
 
         Map<String, Object> overview = new java.util.LinkedHashMap<>();
         overview.put("version", Main.VERSION);

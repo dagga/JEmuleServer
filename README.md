@@ -546,6 +546,32 @@ The admin web panel API (admin IP filter, and a same-origin `Origin` header for 
 The job object is `{"state":"idle|running|done|stopped|failed","scanned":<files read>,"renamed":<files renamed>,
 "startedAt":<epoch ms>,"finishedAt":<epoch ms>,"lastError":""}`, 0 for a date not reached yet.
 
+## File retention
+
+A file nobody published nor found for `fileRetentionDays` days (180 by default, applied without restart; 0 keeps the
+files for ever) is purged: deleted from the database with its tags and source count, and from the Lucene index, its
+words leaving the dictionary when no other file has them.
+
+- **Last seen.** The `files` table keeps the day each file was last seen (`last_seen`, in days since 1970, UTC): set
+  when the file is saved, and written again the first time it is seen on a later day, whatever the channel (client
+  publishing, OFFERFILES v1, Kad and server searches, index update, relay feed). The files seen today are remembered
+  in a bounded set (16 bytes per file, one 64th of the heap at most, 8 MB with `-Xmx560m`), so that the files a
+  client publishes at every login, or that every search finds, cost one database write a day; beyond the set, the
+  database skips the rows already written today.
+- **Upgrade.** The column is added at the first start of this version (H2 schema 4, MySQL schema 5) without writing
+  the rows: a null `last_seen` stands for the day of the upgrade, kept in the `stats` table
+  (`last_seen_migration_day`), so that nothing is purged before `fileRetentionDays` have passed. MySQL 8 and MariaDB
+  10.3+ add the column instantly (`ALGORITHM=INSTANT`); older servers rebuild the table, and H2 copies it (about 6
+  seconds per million files), once.
+- **Purge.** Checked every hour, the first time an hour after the start, and run once a day on a thread of the
+  maintenance tier: the files table is read 10,000 files at a time in hash order, and the stale files are deleted
+  1,000 per transaction, with a pause of 100 ms after every query, so that the clients and the searches keep the
+  database and the index. A file seen today or shared by a connected client is kept, and the database keeps a file
+  seen while the purge runs. Never while the database is failing (circuit breaker open), nor in relay mode, whose local
+  index is no longer written; the server stop ends the batch under way. Each run logs a summary (files purged, files
+  read, duration); the last complete run is shown by the console `status` command, by `/api/status`
+  (`lastFilePurgeAt`, `lastFilePurgeFiles`) and in the Overview JSON under `database.filePurge`.
+
 ## HighID / LowID
 
 At login, the server connects back to the TCP port announced by the client and sends an `OP_HELLO`. The client gets
@@ -783,7 +809,8 @@ The admin port has no authentication: anyone with a shell on the machine can use
 (`adminPort=0`). In such a session, `exit` and `quit` close the session; `stop` still shuts the server down.
 
 Available commands:
-- `status`: Displays server performance, uptime, and core statistics.
+- `status`: Displays server performance, uptime, core statistics and the last purge of the files not seen for
+  `fileRetentionDays` (see [File retention](#file-retention)).
 - `clients [text]`: Lists connected clients or searches by nickname, IP, or client ID.
 - `files`: Shows file indexing statistics and fake file detection status.
 - `events`: Shows the number of events of each type (connections, logins, publications, searches...) since startup

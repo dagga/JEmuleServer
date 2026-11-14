@@ -392,6 +392,50 @@ class MySqlDatabaseTest {
     }
 
     @Test
+    void aVersion4DatabaseGetsLastSeenAndItsStaleFilesArePurged() throws Exception {
+        try (Connection c = DriverManager.getConnection(URL, USER, PASSWORD); Statement stmt = c.createStatement()) {
+            // The tables of 1.5 and 1.6: no last_seen
+            stmt.execute(DatabaseManager.MYSQL_FILES.formatted("files").replace(",\n    last_seen SMALLINT UNSIGNED", ""));
+            stmt.execute(DatabaseManager.MYSQL_FILE_TAGS.formatted("file_tags", "files"));
+            stmt.execute("CREATE TABLE stats (stat_key VARCHAR(255) NOT NULL PRIMARY KEY, stat_value BIGINT)");
+            stmt.execute("INSERT INTO stats VALUES ('schema_version', 4)");
+            for (int i = 1; i <= 3; i++) {
+                stmt.execute("INSERT INTO files (hash, name, size, type) VALUES (UNHEX('" + hash(i) + "'), 'f" + i
+                        + ".avi', " + i + ", 'Video')");
+                stmt.execute("INSERT INTO file_tags (file_hash, tag_type, tag_name, tag_value_str) VALUES (UNHEX('"
+                        + hash(i) + "'), 2, 'codec', 'xvid')");
+            }
+
+            int today;
+            try (DatabaseManager db = open()) {
+                assertEquals(DatabaseManager.MYSQL_SCHEMA_VERSION, db.getStat(DatabaseManager.SCHEMA_VERSION_KEY, 0));
+                today = db.today();
+                assertEquals(today, db.lastSeenMigrationDay());
+                assertTrue(db.staleFiles("", 10, today).hashes().isEmpty(), "nothing purged after the upgrade");
+                db.saveFile(file(4, "new.avi", 0));
+                db.touchFiles(List.of(hash(1)));
+            }
+            try (ResultSet rs = stmt.executeQuery("SELECT HEX(hash), last_seen FROM files ORDER BY hash")) {
+                List<String> rows = new ArrayList<>();
+                while (rs.next()) rows.add(rs.getString(1).toLowerCase() + "=" + rs.getObject(2));
+                assertEquals(List.of(hash(1) + "=" + today, hash(2) + "=null", hash(3) + "=null", hash(4) + "=" + today),
+                        rows);
+            }
+
+            try (DatabaseManager db = open()) {
+                db.setDayClock(() -> today + 181);
+                int cutoff = today + 1;
+                assertEquals(List.of(hash(2), hash(3)), db.staleFiles("", 10, cutoff).hashes());
+                assertEquals(List.of(hash(2)), db.staleFiles("", 2, cutoff).hashes(), "one window");
+                db.touchFiles(List.of(hash(3)));
+                assertEquals(1, db.deleteStaleFiles(List.of(hash(2), hash(3)), cutoff), "seen meanwhile: kept");
+                assertEquals(3, db.loadFiles().size());
+            }
+            assertEquals(3, count("file_tags"), "the tags of the file deleted go with it");
+        }
+    }
+
+    @Test
     void noImportIntoADatabaseThatHoldsFiles() throws Exception {
         writeH2Database(10);
         try (DatabaseManager db = open(false)) {

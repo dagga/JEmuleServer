@@ -172,7 +172,20 @@ public class AdminInterface implements Runnable {
         out().println("IP Filter Ranges: " + ipFilter.getFilterCount());
         out().println("System Load: " + String.format("%.2f", os.getSystemLoadAverage()));
         out().println("Memory Used: " + (mem.getHeapMemoryUsage().getUsed() / 1024 / 1024) + " MB");
+        org.jemule.core.FilePurgeJob purge = server != null ? server.getFilePurgeJob() : null;
+        if (purge != null) out().println("File Purge: " + filePurgeLine(purge.status()));
         out().println("---------------------");
+    }
+
+    /** The last complete purge of the files not seen for fileRetentionDays, and the run under way. */
+    static String filePurgeLine(org.jemule.core.FilePurgeJob.Status status) {
+        String last = status.lastRunAt() == 0 ? "never run"
+                : "last run " + java.time.Instant.ofEpochMilli(status.lastRunAt()).truncatedTo(java.time.temporal.ChronoUnit.SECONDS)
+                        + ", " + status.lastRunFiles() + " files purged in " + status.lastRunMillis() / 1000 + " s";
+        String retention = status.retentionDays() <= 0 ? "disabled" : "after " + status.retentionDays() + " days";
+        String running = status.state() == org.jemule.core.FilePurgeJob.State.RUNNING
+                ? ", running (" + status.purged() + " purged so far)" : "";
+        return retention + ", " + last + running;
     }
 
     private void showClients(String search) {

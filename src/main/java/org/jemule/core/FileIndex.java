@@ -193,6 +193,11 @@ public class FileIndex implements AutoCloseable {
     private final String checkedWith;
 
     private final DatabaseManager db;
+    /**
+     * The files seen today, whose last_seen day is written once a day at most; checked by the purge, under the
+     * stripe of the file, so that a file seen today is never purged. Null without database.
+     */
+    private final SeenToday seenToday;
     /** Runs the database writes: the caller's thread by default, the ingestion thread on a running server. */
     private volatile java.util.concurrent.Executor persistence = Runnable::run;
     private final EventManager eventManager;
@@ -247,6 +252,8 @@ public class FileIndex implements AutoCloseable {
      */
     public FileIndex(DatabaseManager db, EventManager eventManager, ChildAbuseFilter abuseFilter, Path path) {
         this.db = db;
+        this.seenToday = db == null ? null
+                : new SeenToday(db::today, SeenToday.capacityFor(Runtime.getRuntime().maxMemory()));
         this.eventManager = eventManager;
         this.abuseFilter = abuseFilter;
         for (int i = 0; i < stripes.length; i++) stripes[i] = new Object();
@@ -791,10 +798,13 @@ public class FileIndex implements AutoCloseable {
         return List.copyOf(stored);
     }
 
-    /** Database writes of a call: the files of unknown hashes, and the higher source counts of known ones. */
-    private record Writes(List<FileMetadata> files, List<FileMetadata> sourceCounts) {
+    /**
+     * Database writes of a call: the files of unknown hashes, the higher source counts of known ones, and the hashes
+     * of the known files seen for the first time today (their last_seen day).
+     */
+    private record Writes(List<FileMetadata> files, List<FileMetadata> sourceCounts, List<String> touched) {
         Writes(int expected) {
-            this(new ArrayList<>(expected), new ArrayList<>(0));
+            this(new ArrayList<>(expected), new ArrayList<>(0), new ArrayList<>(0));
         }
     }
 
@@ -806,6 +816,7 @@ public class FileIndex implements AutoCloseable {
         boolean isNew = false;
         boolean isNewHash = false;
         boolean sourceCountChanged = false;
+        boolean firstSeenToday = false;
         FileMetadata replaced = null;
         FileMetadata stored;
         synchronized (stripe(id)) {
@@ -816,6 +827,8 @@ public class FileIndex implements AutoCloseable {
                     refusedFull.increment();
                     return null;
                 }
+                // Under the stripe, where the purge checks it: a file seen today is not purged
+                firstSeenToday = seenToday != null && seenToday.mark(id);
                 ConcurrentHashMap<String, ClientState> live = liveSources.get(id);
                 if (existing == null || (live == null && !incoming.sources().isEmpty())) {
                     // unknown file, or a file without online source (e.g. loaded from the database) published by a
@@ -892,6 +905,8 @@ public class FileIndex implements AutoCloseable {
         } else if (sourceCountChanged) {
             writes.sourceCounts().add(stored); // the hash is already stored: only its count is written
         }
+        // A new hash is saved with today as its last_seen day; a known one gets it once a day
+        if (firstSeenToday && !isNewHash) writes.touched().add(stored.hash());
         return stored;
     }
 
@@ -1007,6 +1022,135 @@ public class FileIndex implements AutoCloseable {
     }
 
     /**
+     * What a batch of {@link #purgeStale} did: the files removed from the index, the words left without any file
+     * forgotten, and the deletion from the database queued (the number of files deleted, -1 if it failed).
+     */
+    public record Purge(int removedFromIndex, int wordsForgotten,
+                        java.util.concurrent.CompletableFuture<Integer> deletedFromDatabase) {}
+
+    /**
+     * Purges files the database found not seen since before {@code cutoffDay} ({@link FilePurgeJob}): each one is
+     * removed from the index, like {@link #removeFile}, unless it was seen today or has online sources; then they are
+     * deleted from the database in one transaction on the persistence executor, after the writes queued before
+     * (a file published again meanwhile is written after the deletion, as a new file), the database keeping those
+     * seen since. The words of their names left without any file leave the dictionary.
+     *
+     * @param hashes the files as the database holds them
+     */
+    public Purge purgeStale(Collection<String> hashes, int cutoffDay) {
+        List<String> deleted = new ArrayList<>(hashes.size());
+        Set<String> words = new HashSet<>();
+        int removed = 0;
+        for (String hash : hashes) {
+            if (hash == null) continue;
+            String id = id(hash);
+            synchronized (stripe(id)) {
+                // Seen today (its day may not be written yet), or shared by a client now: kept
+                if (seenToday != null && seenToday.contains(id) || liveSources.containsKey(id)) continue;
+                long stamp = lock.readLock();
+                try {
+                    FileMetadata existing = stored(id);
+                    if (existing != null) {
+                        writer.deleteDocuments(new Term(ID, id));
+                        pending.put(id, REMOVED);
+                        indexedFiles.decrementAndGet();
+                        if (existing.name() != null) Collections.addAll(words, Keywords.split(existing.name()));
+                        removed++;
+                    }
+                } catch (IOException e) {
+                    throw new UncheckedIOException(e);
+                } finally {
+                    lock.unlockRead(stamp);
+                }
+            }
+            deleted.add(hash); // also a file of the database the index does not hold
+        }
+        int forgotten = 0;
+        if (removed > 0) {
+            refresh(); // the files removed leave the searches, and the counts of their words
+            searchCache.clear();
+            forgotten = forgetUnusedWords(words);
+        }
+        java.util.concurrent.CompletableFuture<Integer> done = new java.util.concurrent.CompletableFuture<>();
+        if (db == null || deleted.isEmpty()) {
+            done.complete(0);
+            return new Purge(removed, forgotten, done);
+        }
+        sealPendingWrites();
+        try {
+            persistence.execute(() -> {
+                try {
+                    done.complete(db.deleteStaleFiles(deleted, cutoffDay));
+                } catch (RuntimeException e) {
+                    done.completeExceptionally(e);
+                }
+            });
+        } catch (RuntimeException e) {
+            done.completeExceptionally(e); // the executor is closed
+        }
+        return new Purge(removed, forgotten, done);
+    }
+
+    /**
+     * Removes from the dictionary the words of {@code candidates} that no indexed file holds anymore. Checked on the
+     * last searcher first, without blocking anything; the few words left are checked again while the writes of the
+     * index wait, against the files written since (not visible to the searches yet), so that a word a new file just
+     * brought back is kept.
+     *
+     * @return the number of words removed
+     */
+    private int forgetUnusedWords(Set<String> candidates) {
+        if (candidates.isEmpty()) return 0;
+        List<String> unused = new ArrayList<>();
+        IndexSearcher searcher = acquire();
+        try {
+            for (String word : candidates) {
+                if (searcher.count(new TermQuery(new Term(WORD, word))) == 0) unused.add(word);
+            }
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        } finally {
+            release(searcher);
+        }
+        if (unused.isEmpty()) return 0;
+        int forgotten = 0;
+        long stamp = lock.writeLock();
+        try {
+            // The files written since the last refresh, then the searcher: one refreshed meanwhile holds them
+            Set<String> written = new HashSet<>();
+            for (Map<String, Object> files : List.of(pending, refreshing)) {
+                for (Object file : files.values()) {
+                    if (file instanceof FileMetadata meta && meta.name() != null) {
+                        Collections.addAll(written, Keywords.split(meta.name()));
+                    }
+                }
+            }
+            IndexSearcher latest = acquire();
+            try {
+                for (String word : unused) {
+                    if (written.contains(word) || latest.count(new TermQuery(new Term(WORD, word))) > 0) continue;
+                    if (words.remove(word)) forgotten++;
+                }
+            } finally {
+                release(latest);
+            }
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        } finally {
+            lock.unlockWrite(stamp);
+        }
+        return forgotten;
+    }
+
+    /**
+     * Rebuilds the dictionary of the words from the words of the index, so that the words forgotten by a purge
+     * ({@link #purgeStale}) leave the heap at once instead of at its next rebuild.
+     */
+    public void compactWordDictionary() {
+        dictionary.rebuildNow(words);
+    }
+
+    /**
      * Runs the database writes on {@code executor}, one at a time and in order, instead of the caller's thread: a
      * client publishing files or a search delivering results then never waits for the database.
      */
@@ -1028,10 +1172,13 @@ public class FileIndex implements AutoCloseable {
     private static final class PendingWrites {
         final Map<String, FileMetadata> files = new LinkedHashMap<>();
         final Map<String, FileMetadata> sourceCounts = new LinkedHashMap<>();
+        /** Known files seen today: their last_seen day (a file saved whole gets it with its row). */
+        final Set<String> touched = new LinkedHashSet<>();
 
         void add(Writes writes) {
             for (FileMetadata file : writes.files()) {
                 sourceCounts.remove(file.hash());
+                touched.remove(file.hash());
                 files.put(file.hash(), file);
             }
             for (FileMetadata file : writes.sourceCounts()) {
@@ -1039,15 +1186,20 @@ public class FileIndex implements AutoCloseable {
                 if (files.containsKey(file.hash())) files.put(file.hash(), file);
                 else sourceCounts.put(file.hash(), file);
             }
+            for (String hash : writes.touched()) {
+                if (!files.containsKey(hash)) touched.add(hash);
+            }
         }
 
         int size() {
-            return files.size() + sourceCounts.size();
+            return files.size() + sourceCounts.size() + touched.size();
         }
     }
 
     private void persist(Writes writes) {
-        if (db == null || writes.files().isEmpty() && writes.sourceCounts().isEmpty()) return;
+        if (db == null || writes.files().isEmpty() && writes.sourceCounts().isEmpty() && writes.touched().isEmpty()) {
+            return;
+        }
         PendingWrites started = null;
         synchronized (pendingLock) {
             if (pendingWrites == null || pendingWrites.size() >= MAX_PENDING_WRITES) {
@@ -1061,6 +1213,7 @@ public class FileIndex implements AutoCloseable {
                 sealPendingWrites(batch);
                 if (!batch.files.isEmpty()) db.saveFiles(batch.files.values());
                 if (!batch.sourceCounts.isEmpty()) db.saveSourceCounts(batch.sourceCounts.values());
+                if (!batch.touched.isEmpty()) db.touchFiles(batch.touched);
             });
         }
     }
