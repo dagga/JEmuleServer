@@ -1190,10 +1190,14 @@ public class FileIndex implements AutoCloseable {
         // every file once more (SearchHandler, Server's UDP global search)
     }
 
+    /**
+     * The {@code limit} files matching {@code query} with the most sources. The query is evaluated once: no count
+     * first, which would evaluate it fully, and its multi-term rewrite, a second time.
+     */
     private List<FileMetadata> topBySources(IndexSearcher searcher, Query query, int limit) throws IOException {
-        int n = Math.min(limit, searcher.count(query));
-        if (n == 0) return List.of();
-        TopFieldDocs top = searcher.search(query, n, BY_SOURCES);
+        if (limit <= 0) return List.of();
+        TopFieldDocs top = searcher.search(query, limit, BY_SOURCES);
+        if (top.scoreDocs.length == 0) return List.of();
         StoredFields stored = searcher.storedFields();
         List<FileMetadata> results = new ArrayList<>(top.scoreDocs.length);
         for (ScoreDoc hit : top.scoreDocs) {
@@ -1467,12 +1471,12 @@ public class FileIndex implements AutoCloseable {
         return res;
     }
 
+    /** The first {@code limit} files matching {@code query} in index order, the query evaluated once. */
     private List<FileMetadata> inIndexOrder(Query query, int limit) {
+        if (limit <= 0) return new ArrayList<>();
         IndexSearcher searcher = acquire();
         try {
-            int n = Math.min(limit, searcher.count(query));
-            if (n == 0) return new ArrayList<>();
-            TopDocs top = searcher.search(query, n, Sort.INDEXORDER);
+            TopDocs top = searcher.search(query, limit, Sort.INDEXORDER);
             StoredFields stored = searcher.storedFields();
             List<FileMetadata> results = new ArrayList<>(top.scoreDocs.length);
             for (ScoreDoc hit : top.scoreDocs) results.add(result(stored.document(hit.doc), sourceCount(searcher, hit.doc)));
