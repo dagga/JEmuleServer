@@ -48,6 +48,8 @@ class GlobalSearchCompatibilityTest {
         var m = Server.class.getDeclaredMethod("handleUdp", java.net.DatagramSocket.class, DatagramPacket.class);
         m.setAccessible(true);
         m.invoke(server, cds, new DatagramPacket(request, request.length, InetAddress.getLoopbackAddress(), 40000));
+        // Evaluated and answered on a search thread
+        assertTrue(server.getSearchExecutor().awaitBestEffortIdle(10_000), "global search still running");
 
         List<SearchResult> results = new ArrayList<>();
         for (DatagramPacket dp : cds.sent) {
@@ -135,6 +137,56 @@ class GlobalSearchCompatibilityTest {
                 "one term is enough, whatever the others");
         org.mockito.Mockito.verifyNoInteractions(kad);
         assertEquals(2, server.getFileIndex().childAbuseQueryCount());
+    }
+
+    @Test
+    void aStatusRequestIsAnsweredWhileAGlobalSearchIsUnderWay() throws Exception {
+        // The answer of the global search is held up, as by a long Lucene search
+        java.util.concurrent.CountDownLatch answering = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.atomic.AtomicReference<Thread> searchThread = new java.util.concurrent.atomic.AtomicReference<>();
+        SourcesCompatibilityTest.CapturingDatagramSocket cds = new SourcesCompatibilityTest.CapturingDatagramSocket() {
+            @Override
+            public void send(DatagramPacket p) {
+                if (p.getData()[p.getOffset() + 1] == (byte) 0x99) { // OP_GLOBSEARCHRES
+                    searchThread.set(Thread.currentThread());
+                    answering.countDown();
+                    try {
+                        release.await(30, java.util.concurrent.TimeUnit.SECONDS);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+                super.send(p);
+            }
+        };
+        var handleUdp = Server.class.getDeclaredMethod("handleUdp", java.net.DatagramSocket.class, DatagramPacket.class);
+        handleUdp.setAccessible(true);
+        byte[] search = withHeader(0x98, new SearchTree().keyword("linux").toBytes());
+        byte[] status = ByteBuffer.allocate(6).order(ByteOrder.LITTLE_ENDIAN).put(Packet.PROTOCOL_ED2K)
+                .put((byte) 0x96).putInt(0x55AA1234).array(); // OP_GLOBSERVSTATREQ
+        try {
+            // The receive loop of the port goes on with the next datagram at once
+            assertTimeoutPreemptively(java.time.Duration.ofSeconds(10), () -> {
+                handleUdp.invoke(server, cds, new DatagramPacket(search, search.length,
+                        InetAddress.getLoopbackAddress(), 40000));
+                assertTrue(answering.await(5, java.util.concurrent.TimeUnit.SECONDS), "global search under way");
+                handleUdp.invoke(server, cds, new DatagramPacket(status, status.length,
+                        InetAddress.getLoopbackAddress(), 40001));
+            }, "the status request waits for the global search");
+            assertEquals(1, cds.sent.size(), "the status answer only: the search still holds its answer");
+            DatagramPacket statusAnswer = cds.sent.getFirst();
+            assertEquals((byte) 0x97, statusAnswer.getData()[1], "OP_GLOBSERVSTATRES");
+            assertEquals(40001, statusAnswer.getPort());
+        } finally {
+            release.countDown();
+        }
+        assertTrue(server.getSearchExecutor().awaitBestEffortIdle(10_000));
+        assertEquals(2, cds.sent.size());
+        assertEquals((byte) 0x99, cds.sent.get(1).getData()[1], "then the search results");
+        assertEquals(40000, cds.sent.get(1).getPort());
+        assertFalse(searchThread.get().isVirtual(), "evaluated off the client carriers");
+        assertEquals(org.jemule.core.ServerThreads.Tier.SEARCH.priority, searchThread.get().getPriority());
     }
 
     @Test

@@ -39,7 +39,7 @@ class SearchExecutorTest {
 
     @Test
     void searchesRunOnPlatformThreadsOfTheSearchTier() throws Exception {
-        try (SearchExecutor searches = new SearchExecutor(2, 4)) {
+        try (SearchExecutor searches = new SearchExecutor(2, 4, 1)) {
             Thread thread = searches.call(Thread::currentThread);
             assertFalse(thread.isVirtual(), "never on the carriers of the client threads");
             assertEquals(Tier.SEARCH.priority, thread.getPriority());
@@ -50,7 +50,7 @@ class SearchExecutorTest {
 
     @Test
     void theSearchExceptionIsThrownToTheCaller() {
-        try (SearchExecutor searches = new SearchExecutor(1, 1)) {
+        try (SearchExecutor searches = new SearchExecutor(1, 1, 1)) {
             IllegalStateException e = assertThrows(IllegalStateException.class,
                     () -> searches.call(() -> { throw new IllegalStateException("broken index"); }));
             assertEquals("broken index", e.getMessage());
@@ -59,7 +59,7 @@ class SearchExecutorTest {
 
     @Test
     void aSaturatedExecutorRefusesAtOnceInsteadOfQueuing() throws Exception {
-        try (SearchExecutor searches = new SearchExecutor(1, 1)) {
+        try (SearchExecutor searches = new SearchExecutor(1, 1, 1)) {
             CountDownLatch running = new CountDownLatch(1);
             CountDownLatch release = new CountDownLatch(1);
             CompletableFuture<String> first = CompletableFuture.supplyAsync(() -> call(searches, () -> {
@@ -84,9 +84,36 @@ class SearchExecutorTest {
 
     @Test
     void aClosedExecutorRefusesTheSearches() {
-        SearchExecutor searches = new SearchExecutor(1, 1);
+        SearchExecutor searches = new SearchExecutor(1, 1, 1);
         searches.close();
         assertThrows(RejectedExecutionException.class, () -> searches.call(() -> "late"));
+    }
+
+    @Test
+    void bestEffortTasksBeyondTheLimitAreDropped() throws Exception {
+        try (SearchExecutor searches = new SearchExecutor(1, 8, 1)) {
+            CountDownLatch release = new CountDownLatch(1);
+            CompletableFuture<Thread> ran = new CompletableFuture<>();
+            assertTrue(searches.offer(() -> {
+                ran.complete(Thread.currentThread());
+                try {
+                    release.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }));
+            assertEquals(Tier.SEARCH.priority, ran.get(5, TimeUnit.SECONDS).getPriority());
+            assertFalse(searches.offer(() -> fail("dropped: never run")), "one best effort task at most");
+            assertEquals(1, searches.dropped());
+            release.countDown();
+            assertTrue(searches.awaitBestEffortIdle(5_000));
+
+            // A failing task gives its slot back
+            assertTrue(searches.offer(() -> { throw new IllegalStateException("broken"); }));
+            assertTrue(searches.awaitBestEffortIdle(5_000));
+            assertTrue(searches.offer(() -> { }));
+            assertEquals(1, searches.dropped());
+        }
     }
 
     private static <T> T call(SearchExecutor searches, java.util.concurrent.Callable<T> search) {

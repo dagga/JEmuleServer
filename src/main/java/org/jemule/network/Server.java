@@ -1406,7 +1406,11 @@ public class Server {
         } else if (serverSourceSearcher.handle(reply.address(), reply.port(), recv)) {
             return;
         } else if (opcode == (byte) 0x98 || opcode == (byte) 0x92 || opcode == (byte) 0x90) {
-            handleGlobalSearch(reply, opcode, recv);
+            // CPU-bound: evaluated and answered on a search thread, so that this port's status, description and
+            // source requests do not wait behind it. Best effort: dropped while the search threads are too busy
+            if (!searchExecutor.offer(() -> globalSearch(reply, opcode, recv))) {
+                log.debug("UDP global search from {} dropped: search threads busy", reply.address().getHostAddress());
+            }
         } else if (opcode == (byte) 0x9A) { // OP_GLOBGETSOURCES: <hash 16>[<hash 16>...] (up to 35 with SRV_UDPFLG_EXT_GETSOURCES)
             int hashCount = (recv.length - 2) / 16;
             if (hashCount < 1) return;
@@ -1501,6 +1505,18 @@ public class Server {
         }
         if (datagram.size() > 0) {
             sendUdp(reply, datagram.toByteArray(), "SEARCH");
+        }
+    }
+
+    /**
+     * A UDP global search, on a search thread. The answer is sent from there: the datagram socket may be shared by
+     * several threads, and the obfuscators of {@link UdpReply} keep no state between packets.
+     */
+    private void globalSearch(UdpReply reply, byte opcode, byte[] recv) {
+        try {
+            handleGlobalSearch(reply, opcode, recv);
+        } catch (IOException e) {
+            log.debug("Could not send the global search results to {}: {}", reply.address(), e.getMessage());
         }
     }
 

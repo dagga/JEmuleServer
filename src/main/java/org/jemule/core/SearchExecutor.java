@@ -26,6 +26,7 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
@@ -36,31 +37,43 @@ import java.util.concurrent.atomic.AtomicLong;
  * A Lucene search is CPU-bound and may last a few hundred milliseconds. Run on a client virtual thread, it would hold
  * a carrier thread for that long (virtual threads are not preempted): on a one-CPU server, every other client (login,
  * keep-alive, source requests) would wait. A client thread hands its search over with {@link #call} and parks
- * meanwhile, which frees its carrier.
+ * meanwhile, which frees its carrier; the UDP receive loops hand their global searches over with {@link #offer} and
+ * go on at once with the next datagram (status requests, by which the clients measure the server's ping).
  * <p>
  * Nothing queues without limit: when {@link #QUEUE_PER_THREAD} searches per thread already wait, a client search is
- * refused at once, and the client gets an empty answer as for a failed search.
+ * refused at once, and the client gets an empty answer as for a failed search. UDP global searches are best effort:
+ * they are dropped once {@link #BEST_EFFORT_PER_THREAD} per thread are queued or running, which always leaves room in
+ * the queue for the clients' searches.
  */
 public final class SearchExecutor implements AutoCloseable {
     private static final Logger log = LoggerFactory.getLogger(SearchExecutor.class);
     /** Searches waiting per search thread before the next one is refused. */
     static final int QUEUE_PER_THREAD = 16;
+    /** UDP global searches queued or running per search thread before the next one is dropped. */
+    static final int BEST_EFFORT_PER_THREAD = 4;
     private static final long CLOSE_TIMEOUT_SECONDS = 5;
 
     private final ThreadPoolExecutor executor;
     private final int threads;
+    private final int bestEffortLimit;
+    private final Semaphore bestEffortSlots;
     private final AtomicLong rejected = new AtomicLong();
+    private final AtomicLong dropped = new AtomicLong();
 
-    SearchExecutor(int threads, int queueCapacity) {
-        if (threads < 1 || queueCapacity < 1) throw new IllegalArgumentException("threads and queue must be positive");
+    SearchExecutor(int threads, int queueCapacity, int bestEffortLimit) {
+        if (threads < 1 || queueCapacity < 1 || bestEffortLimit < 1) {
+            throw new IllegalArgumentException("threads, queue and best effort limit must be positive");
+        }
         this.threads = threads;
         this.executor = ServerThreads.searchPool("search", threads, queueCapacity);
+        this.bestEffortLimit = bestEffortLimit;
+        this.bestEffortSlots = new Semaphore(bestEffortLimit);
     }
 
     /** One search thread per CPU, at least two, so that one long search never holds back all the others. */
     public static SearchExecutor create() {
         int threads = Math.max(2, Runtime.getRuntime().availableProcessors());
-        return new SearchExecutor(threads, QUEUE_PER_THREAD * threads);
+        return new SearchExecutor(threads, QUEUE_PER_THREAD * threads, BEST_EFFORT_PER_THREAD * threads);
     }
 
     /**
@@ -100,6 +113,35 @@ public final class SearchExecutor implements AutoCloseable {
         }
     }
 
+    /**
+     * Queues a best effort task (a UDP global search: its evaluation and its answer) unless too many are already
+     * queued or running.
+     *
+     * @return false if the task was dropped
+     */
+    public boolean offer(Runnable task) {
+        if (!bestEffortSlots.tryAcquire()) {
+            log.debug("Search threads busy: UDP global search dropped ({} so far)", dropped.incrementAndGet());
+            return false;
+        }
+        try {
+            executor.execute(() -> {
+                try {
+                    task.run();
+                } catch (RuntimeException e) {
+                    log.warn("UDP global search failed: {}", e.getMessage());
+                } finally {
+                    bestEffortSlots.release();
+                }
+            });
+            return true;
+        } catch (RejectedExecutionException e) {
+            bestEffortSlots.release();
+            log.debug("Search threads saturated: UDP global search dropped ({} so far)", dropped.incrementAndGet());
+            return false;
+        }
+    }
+
     /** Number of search threads. */
     public int threads() {
         return threads;
@@ -113,6 +155,22 @@ public final class SearchExecutor implements AutoCloseable {
     /** Client searches refused because too many searches were waiting. */
     public long rejected() {
         return rejected.get();
+    }
+
+    /** UDP global searches dropped because too many were queued or running. */
+    public long dropped() {
+        return dropped.get();
+    }
+
+    /**
+     * Waits until no best effort task is queued or running (tests).
+     *
+     * @return false if some still were after {@code timeoutMillis}
+     */
+    public boolean awaitBestEffortIdle(long timeoutMillis) throws InterruptedException {
+        if (!bestEffortSlots.tryAcquire(bestEffortLimit, timeoutMillis, TimeUnit.MILLISECONDS)) return false;
+        bestEffortSlots.release(bestEffortLimit);
+        return true;
     }
 
     /**
