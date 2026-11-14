@@ -41,6 +41,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.EnumMap;
 import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
@@ -51,6 +52,8 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -104,6 +107,16 @@ public class KadSearchBridge implements AutoCloseable {
     /** Background word searches started per minute at most. */
     static final int MAX_WORD_SEARCHES_PER_MINUTE = 20;
     private static final int MAX_RECENT_QUERIES = 5_000;
+    /**
+     * Threads of the search tier looking up the nodes and sending the requests of the searches at most. A lookup
+     * waits for UDP answers (a few rounds of {@link #LOOKUP_ROUND_TIMEOUT_MS}); the wait for the results that
+     * follows holds no thread.
+     */
+    static final int SEARCH_THREADS = 8;
+    /** Searches waiting for a thread of their tier at most: the next ones end at once, without results. */
+    static final int MAX_WAITING_SEARCHES = 256;
+    /** Idle time after which a search thread ends: an idle server keeps none. */
+    private static final long SEARCH_THREAD_KEEP_ALIVE_S = 30;
 
     private final KadRoutingTable routingTable;
     private final KadUdpService udpService;
@@ -147,6 +160,11 @@ public class KadSearchBridge implements AutoCloseable {
     private final AtomicLong backgroundFilesIngested = new AtomicLong(0);
     /** Source requests the Kad flood guard did not send: the node would have dropped them. */
     private final AtomicLong sourceRequestsRefused = new AtomicLong(0);
+
+    /** Runs the searches of each tier, created on first use while the bridge runs; guarded by itself. */
+    private final Map<ServerThreads.Tier, SearchPool> searchPools = new EnumMap<>(ServerThreads.Tier.class);
+    /** Threads of the search tier pool (client keyword searches and source searches). */
+    private volatile int searchThreads = SEARCH_THREADS;
 
     /** Indexes and stores the files found, after the searches and client connections (ingestion tier). */
     private volatile IngestionExecutor ingestion = IngestionExecutor.direct();
@@ -510,35 +528,47 @@ public class KadSearchBridge implements AutoCloseable {
             } else {
                 // Keyword searches must first walk the DHT towards the keyword hash: the nodes responsible for the
                 // keyword index are the K closest to it, which are almost never already in our routing table.
-                ServerThreads.start(tier, "KadSearch-" + keywordHash.toHexString(), () -> {
+                // The lookup is part of the search timeout, which bounds how long the client waits
+                long deadline = System.currentTimeMillis() + searchTimeoutMs;
+                Runnable finish = () -> finishKeywordSearch(key, created);
+                SearchPool pool = searchPool(tier);
+                boolean started = pool != null && pool.execute(() -> {
+                    boolean scheduled = false;
                     try {
-                        // The lookup is part of the search timeout, which bounds how long the client waits
-                        long deadline = System.currentTimeMillis() + searchTimeoutMs;
                         List<KadContact> nodes = closestNodes(created.targetId());
                         if (dispatchSearchRequest(created, nodes) > 0) {
-                            Thread.sleep(Math.max(MIN_RESULT_WAIT_MS, deadline - System.currentTimeMillis()));
+                            // The index holders answer until the deadline: the search ends then, holding no thread
+                            scheduled = pool.schedule(finish,
+                                    Math.max(MIN_RESULT_WAIT_MS, deadline - System.currentTimeMillis()));
                         }
-                    } catch (InterruptedException ignored) {
-                        Thread.currentThread().interrupt();
                     } catch (RuntimeException e) {
                         log.debug("Kad search for '{}' failed: {}", description, e.getMessage());
                     } finally {
-                        // Removed first: whoever sees the results sees the session over, and a new search starts afresh
-                        activeSessions.remove(key, created);
-                        created.complete();
-                        long now = System.currentTimeMillis();
-                        // The results the search kept: at least the sources required, and clean
-                        int kept = created.getResults().size();
-                        if (created.followsPages()) {
-                            created.capped().forEach((node, next) -> pageFollower.follow(created.targetId(),
-                                    created.searchTerms(), node, next, kept, now));
-                        }
+                        if (!scheduled) finish.run();
                     }
                 });
+                if (!started) {
+                    log.debug("Kad search for '{}' not sent: bridge stopped or too many searches waiting", description);
+                    finish.run();
+                }
             }
         }
 
         return session.future();
+    }
+
+    /** Ends a keyword search: its session is closed, its results returned, and its full nodes read on if asked. */
+    private void finishKeywordSearch(SessionKey key, KadSearchSession created) {
+        // Removed first: whoever sees the results sees the session over, and a new search starts afresh
+        activeSessions.remove(key, created);
+        created.complete();
+        long now = System.currentTimeMillis();
+        // The results the search kept: at least the sources required, and clean
+        int kept = created.getResults().size();
+        if (created.followsPages()) {
+            created.capped().forEach((node, next) -> pageFollower.follow(created.targetId(),
+                    created.searchTerms(), node, next, kept, now));
+        }
     }
 
     /**
@@ -563,9 +593,15 @@ public class KadSearchBridge implements AutoCloseable {
             return created.future;
         }
         sourceSearches.incrementAndGet();
-        ServerThreads.start(ServerThreads.Tier.SEARCH, "KadSources-" + target.toHexString(), () -> {
+        long deadline = System.currentTimeMillis() + searchTimeoutMs;
+        Runnable finish = () -> {
+            sourceSessions.remove(target, created);
+            created.future.complete(List.copyOf(created.sources));
+        };
+        SearchPool pool = searchPool(ServerThreads.Tier.SEARCH);
+        boolean started = pool != null && pool.execute(() -> {
+            boolean scheduled = false;
             try {
-                long deadline = System.currentTimeMillis() + searchTimeoutMs;
                 List<KadContact> nodes = closestNodes(target);
                 KadPacket req = KadPacket.createSearchSourceReq(target, fileSize);
                 int sent = 0;
@@ -586,18 +622,47 @@ public class KadSearchBridge implements AutoCloseable {
                 }
                 requestsSent.addAndGet(sent);
                 if (sent > 0) {
-                    Thread.sleep(Math.max(MIN_RESULT_WAIT_MS, deadline - System.currentTimeMillis()));
+                    // The nodes answer until the deadline: the search ends then, holding no thread
+                    scheduled = pool.schedule(finish, Math.max(MIN_RESULT_WAIT_MS, deadline - System.currentTimeMillis()));
                 }
-            } catch (InterruptedException ignored) {
-                Thread.currentThread().interrupt();
             } catch (RuntimeException e) {
                 log.debug("Kad source search for {} failed: {}", target, e.getMessage());
             } finally {
-                sourceSessions.remove(target, created);
-                created.future.complete(List.copyOf(created.sources));
+                if (!scheduled) finish.run();
             }
         });
+        if (!started) {
+            log.debug("Kad source search for {} not sent: bridge stopped or too many searches waiting", target);
+            finish.run();
+        }
         return created.future;
+    }
+
+    /**
+     * Returns the search pool of {@code tier}, created on first use, or null once the bridge is stopped. The search
+     * tier gets {@link #SEARCH_THREADS} threads; the background word searches, at most
+     * {@link #MAX_CONCURRENT_WORD_SEARCHES} at once, one thread each.
+     */
+    private SearchPool searchPool(ServerThreads.Tier tier) {
+        synchronized (searchPools) {
+            if (!running) return null;
+            return searchPools.computeIfAbsent(tier, t -> t == ServerThreads.Tier.SEARCH
+                    ? new SearchPool(t, "KadSearch", searchThreads)
+                    : new SearchPool(t, "KadSearch-" + t.name().toLowerCase(java.util.Locale.ROOT),
+                            MAX_CONCURRENT_WORD_SEARCHES));
+        }
+    }
+
+    /** Sets the threads of the search tier pool, taken into account when the pool is created (tests). */
+    void setSearchThreads(int threads) {
+        this.searchThreads = Math.max(1, threads);
+    }
+
+    /** Live threads of the search pools. */
+    int getSearchThreadCount() {
+        synchronized (searchPools) {
+            return searchPools.values().stream().mapToInt(SearchPool::threads).sum();
+        }
     }
 
     /**
@@ -1065,15 +1130,76 @@ public class KadSearchBridge implements AutoCloseable {
     public synchronized void close() {
         running = false;
         if (pageTicker != null) pageTicker.shutdownNow();
+        synchronized (searchPools) {
+            searchPools.values().forEach(SearchPool::shutdown);
+            searchPools.clear();
+        }
         pageFollower.clear();
         queuedWords.clear();
         activeSessions.values().forEach(KadSearchSession::complete);
         activeSessions.clear();
+        // Their completion was scheduled on the pools just stopped: they end now with the sources received
+        sourceSessions.values().forEach(source -> source.future.complete(List.copyOf(source.sources)));
+        sourceSessions.clear();
         resultCache.clear();
         pendingLookups.values().forEach(lookup -> lookup.done.complete(null));
         pendingLookups.clear();
         closestNodes.clear();
         log.info("KadSearchBridge stopped");
+    }
+
+    /**
+     * Threads of one tier running the searches. A search takes a thread to look up the closest nodes and send its
+     * requests, then gives it back: a task scheduled at its deadline ends it, instead of a thread sleeping until then.
+     * The threads are created on demand and end after {@link #SEARCH_THREAD_KEEP_ALIVE_S} s idle.
+     */
+    private static final class SearchPool {
+        private final ScheduledThreadPoolExecutor executor;
+        /** Searches submitted and not started yet. */
+        private final AtomicInteger waiting = new AtomicInteger();
+
+        SearchPool(ServerThreads.Tier tier, String name, int threads) {
+            executor = new ScheduledThreadPoolExecutor(threads, ServerThreads.factory(tier, name));
+            executor.setKeepAliveTime(SEARCH_THREAD_KEEP_ALIVE_S, TimeUnit.SECONDS);
+            executor.allowCoreThreadTimeOut(true);
+            executor.setRemoveOnCancelPolicy(true);
+        }
+
+        /** Runs {@code task} on a thread of the pool; false when too many searches wait or the pool is stopped. */
+        boolean execute(Runnable task) {
+            if (waiting.incrementAndGet() > MAX_WAITING_SEARCHES) {
+                waiting.decrementAndGet();
+                return false;
+            }
+            try {
+                executor.execute(() -> {
+                    waiting.decrementAndGet();
+                    task.run();
+                });
+                return true;
+            } catch (RejectedExecutionException e) {
+                waiting.decrementAndGet();
+                return false;
+            }
+        }
+
+        /** Runs {@code task} after {@code delayMs}; false when the pool is stopped. */
+        boolean schedule(Runnable task, long delayMs) {
+            try {
+                executor.schedule(task, delayMs, TimeUnit.MILLISECONDS);
+                return true;
+            } catch (RejectedExecutionException e) {
+                return false;
+            }
+        }
+
+        int threads() {
+            return executor.getPoolSize();
+        }
+
+        void shutdown() {
+            executor.shutdownNow();
+        }
     }
 
     /** Entries received from one node for one search, and the last page requested from it. */
