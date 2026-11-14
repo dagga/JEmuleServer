@@ -35,6 +35,8 @@ public enum ConfigParameter {
             "Maximum search results returned per request"),
     REMOTE_SEARCH_CACHE_MINUTES("remoteSearchCacheMinutes", Type.INTEGER, Scope.HOT, 0, 1440,
             "Minutes the results of a Kad or eD2K server search are reused for the same search (0 = disabled)"),
+    INDEX_REFRESH_SECONDS("indexRefreshSeconds", Type.INTEGER, Scope.HOT, 1, ServerConfig.MAX_INDEX_REFRESH_SECONDS,
+            "Seconds between two refreshes of the file index: new files and source counts reach the searches at most that late"),
     FLOOD_MAX_REQUESTS_PER_SECOND("floodMaxRequestsPerSecond", Type.INTEGER, Scope.HOT, 1, 1_000_000,
             "Flood protection: requests per second allowed per IP"),
     MAX_USERS("maxUsers", Type.INTEGER, Scope.HOT, 1, 1_000_000_000, "Maximum concurrent users"),

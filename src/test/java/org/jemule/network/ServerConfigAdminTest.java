@@ -72,6 +72,27 @@ class ServerConfigAdminTest {
     }
 
     @Test
+    void theIndexRefreshPeriodIsAppliedWithoutRestart() throws Exception {
+        Path file = tempDir.resolve("server.properties");
+        Files.writeString(file, "port=4661\n");
+        Server server = server(file);
+        try {
+            assertEquals(10, server.configSnapshot().indexRefreshSeconds());
+            assertEquals(10_000, server.getFileIndex().refreshPeriodMillis());
+            ConfigApplyResult result = server.updateConfig(Map.of("indexRefreshSeconds", "3"));
+
+            assertTrue(result.applied().contains("indexRefreshSeconds"), result.summary());
+            assertEquals(3, server.configSnapshot().indexRefreshSeconds());
+            assertEquals(3_000, server.getFileIndex().refreshPeriodMillis(), "the refresh is re-armed");
+            assertTrue(Files.readString(file).contains("indexRefreshSeconds=3"));
+            assertFalse(server.updateConfig(Map.of("indexRefreshSeconds", "0")).success());
+            assertEquals(3_000, server.getFileIndex().refreshPeriodMillis());
+        } finally {
+            server.stop();
+        }
+    }
+
+    @Test
     void aNewMaxFilesAppliesToTheIndexAtOnce() throws Exception {
         // 1.2.24 kept the maxFiles of the start: raised from 1,200,000 to 3,000,000 with 1,521,140 files indexed,
         // the index still refused every new file

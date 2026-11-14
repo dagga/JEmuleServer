@@ -107,9 +107,9 @@ import java.util.concurrent.locks.StampedLock;
  * extension, media tags and their AND / OR / NOT) is answered by Lucene alone, sorted by source count; any other query
  * (complete sources, a tag given by name) takes Lucene's candidates and tests each with {@link SearchQuery#test}.
  * <p>
- * The writes reach the searches at the next refresh: at the next search by default, every second on a running server
- * ({@link #refreshEvery}). The lookups by hash (publishing, {@link #contains}, {@link #removeFile}) see them at once:
- * the files written since the last refresh are kept in {@link #pending}.
+ * The writes reach the searches at the next refresh: at the next search by default, every {@code indexRefreshSeconds}
+ * on a running server ({@link #refreshEvery}). The lookups by hash (publishing, {@link #contains}, {@link #removeFile})
+ * see them at once: the files written since the last refresh are kept in {@link #pending}.
  */
 public class FileIndex implements AutoCloseable {
     private static final Logger log = LoggerFactory.getLogger(FileIndex.class);
@@ -168,6 +168,8 @@ public class FileIndex implements AutoCloseable {
     private final Set<String> longTags = ConcurrentHashMap.newKeySet();
     /** Refreshes the index on a running server; null when the searches refresh it. */
     private volatile ScheduledExecutorService refresher;
+    /** Period of {@link #refresher} in milliseconds, 0 when the searches refresh the index. */
+    private volatile long refreshMillis;
     private volatile boolean closed;
     /** Whether the index is on disk, to be reopened by the next start. */
     private final boolean onDisk;
@@ -450,9 +452,13 @@ public class FileIndex implements AutoCloseable {
 
     /**
      * Refreshes the index every {@code millis} milliseconds on a thread of the ingestion tier, instead of at the next
-     * search: the searches never wait for a refresh, and see the writes at most that late.
+     * search: the searches never wait for a refresh, and see the writes at most that late. Called again, it replaces
+     * the period (a refresh already running ends first). Each refresh following source count changes rewrites the
+     * source counts of every segment holding a changed file: a longer period writes them less often.
      */
-    public void refreshEvery(long millis) {
+    public synchronized void refreshEvery(long millis) {
+        if (millis <= 0) throw new IllegalArgumentException("The refresh period must be positive, got " + millis);
+        if (closed) return;
         ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(
                 ServerThreads.factory(ServerThreads.Tier.INGESTION, "index-refresh"));
         scheduler.scheduleWithFixedDelay(() -> {
@@ -462,9 +468,17 @@ public class FileIndex implements AutoCloseable {
                 log.error("Refreshing the file index failed: {}", e.toString());
             }
         }, millis, millis, TimeUnit.MILLISECONDS);
+        refreshMillis = millis;
         ScheduledExecutorService previous = refresher;
         refresher = scheduler;
-        if (previous != null) previous.shutdownNow();
+        // Not shutdownNow: an interrupt inside the IndexWriter (a refresh writing doc values) would close it
+        if (previous != null) previous.shutdown();
+        if (closed) scheduler.shutdown(); // closed meanwhile: close() may have stopped the previous one only
+    }
+
+    /** Milliseconds between two refreshes of the index ({@link #refreshEvery}), 0 when the searches refresh it. */
+    public long refreshPeriodMillis() {
+        return refreshMillis;
     }
 
     /** Makes the writes visible to the searches at once. */
