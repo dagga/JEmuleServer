@@ -274,9 +274,11 @@ public class ServerIntegrationTest {
                 Packet publish = new Packet(Packet.PROTOCOL_ED2K, OpCode.PUBLISH_FILES.value, publishPayloadBytes);
                 publish.write(out, false);
 
-                // There is no acknowledgement in the ed2k protocol: wait for the file to be indexed
+                // There is no acknowledgement in the ed2k protocol: wait for the file to be indexed, refreshing the
+                // index instead of waiting for its period (indexRefreshSeconds)
                 boolean indexed = false;
                 for (int i = 0; i < 50 && !indexed; i++) {
+                    server.getFileIndex().refresh();
                     indexed = !server.getFileIndex().search("binary-test", 10).isEmpty();
                     if (!indexed) Thread.sleep(100);
                 }

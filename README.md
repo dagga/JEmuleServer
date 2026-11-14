@@ -129,7 +129,10 @@ stop records the same token in the index and in the database, and the next start
 still hold it. Otherwise (a crash or a `kill -9`, a restored backup, other child abuse keywords) the start rebuilds the
 index from the database, which takes about as long as loading the files did up to 1.3. After changing the database by
 other means than the server, delete the directory while the server is stopped: the next start rebuilds it. A file
-written to the index reaches the searches within a second.
+written to the index reaches the searches at the next refresh of the index, every `indexRefreshSeconds` (10 by default,
+applied without restart). Each refresh following source count changes rewrites the source counts of every index segment
+holding a changed file, which on a large index costs a large share of the CPU: a shorter period shows new files and
+counts sooner for more CPU. Lookups by hash (publishing, source requests) see the writes at once.
 
 The heap only keeps what changes all the time or is searched by substring: the online sources of the files, the
 dictionary of the name words and of the media tag values, and the writes not yet visible to the searches. On the

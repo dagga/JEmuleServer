@@ -204,8 +204,6 @@ public class Server {
      * per file in the heap (110 MB for 2,398,695 files).
      */
     static final long HEAP_BYTES_PER_FILE = 80;
-    /** Most time a write of the file index takes to reach the searches. */
-    static final long INDEX_REFRESH_MILLIS = 1_000;
 
     /**
      * Warns when the old generation is too small for the indexed files: the heap guard then refuses new files soon,
@@ -319,7 +317,8 @@ public class Server {
         java.nio.file.Path indexPath = fileIndexPath(config);
         this.fileIndex = new FileIndex(db, eventManager, abuseFilter, indexPath);
         this.fileIndex.setPersistenceExecutor(ingestion);
-        this.fileIndex.refreshEvery(INDEX_REFRESH_MILLIS);
+        // Most time a write of the file index takes to reach the searches (indexRefreshSeconds, hot)
+        this.fileIndex.refreshEvery(config.indexRefreshSeconds() * 1000L);
         this.nameCleaner = org.jemule.core.NameCleaner.load(db);
         this.fileIndex.setNameCleaner(nameCleaner);
         this.nameCleaningJob = new org.jemule.core.NameCleaningJob(db, fileIndex, nameCleaner);
@@ -851,6 +850,9 @@ public class Server {
         }
         if (changed.contains("childAbuseKeywordsPath")) {
             reloadChildAbuseKeywords(updated.childAbuseKeywordsPath());
+        }
+        if (changed.contains("indexRefreshSeconds")) {
+            fileIndex.refreshEvery(updated.indexRefreshSeconds() * 1000L);
         }
         if (changed.stream().anyMatch(key -> ConfigParameter.byKey(key).scope() == ConfigParameter.Scope.ADMIN)) {
             rebuildAdminAccess(previous, updated);

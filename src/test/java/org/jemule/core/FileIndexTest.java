@@ -277,4 +277,68 @@ class FileIndexTest {
             assertFalse(index.searchComplex(LINUX, 10).isEmpty(), "refreshed without waiting for the period");
         }
     }
+
+    @Test
+    void theSearchCacheOutlivesARefreshOfSourceCountsOnly() {
+        FileIndex index = new FileIndex(null);
+        index.refreshEvery(3_600_000);
+        try (index) {
+            index.addFile(file("11111111111111111111111111111111", "linux one.iso", 3));
+            index.refresh();
+            List<FileMetadata> first = index.search("linux", 10);
+            assertEquals(3, first.getFirst().sourceCount());
+
+            index.addFile(file("11111111111111111111111111111111", "linux one.iso", 7));
+            index.refresh();
+            assertSame(first, index.search("linux", 10), "kept: only a source count changed");
+            assertEquals(7, index.searchComplex(LINUX, 10).getFirst().sourceCount(), "the index has the new count");
+
+            index.addFile(file("22222222222222222222222222222222", "linux two.iso", 1));
+            index.refresh();
+            List<FileMetadata> afterNewFile = index.search("linux", 10);
+            assertEquals(2, afterNewFile.size(), "a new file empties the cache once visible");
+            assertEquals(7, afterNewFile.stream().mapToInt(FileMetadata::sourceCount).max().orElseThrow());
+
+            assertTrue(index.removeFile("22222222222222222222222222222222"));
+            index.search("linux", 10); // read before the refresh: still sees the removed file
+            index.refresh();
+            assertEquals(List.of("11111111111111111111111111111111"), hashes(index.search("linux", 10)),
+                    "a removal empties the cache once visible");
+        }
+    }
+
+    @Test
+    void withoutRefreshPeriodEveryWriteEmptiesTheSearchCache() {
+        try (FileIndex index = new FileIndex(null)) {
+            index.addFile(file("11111111111111111111111111111111", "linux.iso", 3));
+            assertEquals(3, index.search("linux", 10).getFirst().sourceCount());
+            index.addFile(file("11111111111111111111111111111111", "linux.iso", 7));
+            assertEquals(7, index.search("linux", 10).getFirst().sourceCount());
+            assertEquals(0, index.refreshPeriodMillis());
+        }
+    }
+
+    @Test
+    void aNewRefreshPeriodReplacesThePreviousOne() throws InterruptedException {
+        FileIndex index = new FileIndex(null);
+        index.refreshEvery(3_600_000);
+        try (index) {
+            index.addFile(file("11111111111111111111111111111111", "linux.iso", 3));
+            index.refresh();
+            assertEquals(3, index.search("linux", 10).getFirst().sourceCount());
+
+            index.refreshEvery(50);
+            assertEquals(50, index.refreshPeriodMillis());
+            index.addFile(file("11111111111111111111111111111111", "linux.iso", 7));
+            index.addFile(file("22222222222222222222222222222222", "linux two.iso", 1));
+            long deadline = System.nanoTime() + 10_000_000_000L;
+            while (index.searchComplex(LINUX, 10).size() < 2 && System.nanoTime() < deadline) Thread.sleep(20);
+            assertEquals(2, index.searchComplex(LINUX, 10).size(), "refreshed by the new period");
+            while (index.search("linux", 10).getFirst().sourceCount() != 7 && System.nanoTime() < deadline) {
+                Thread.sleep(20);
+            }
+            assertEquals(7, index.search("linux", 10).getFirst().sourceCount(),
+                    "a cached search lives at most one refresh period");
+        }
+    }
 }
