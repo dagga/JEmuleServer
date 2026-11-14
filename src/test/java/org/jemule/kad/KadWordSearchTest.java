@@ -174,30 +174,30 @@ class KadWordSearchTest {
     }
 
     @Test
-    void wordsNeedFiveCharactersToBeSearchedInTheBackground() throws Exception {
+    void wordsNeedFourCharactersToBeSearchedInTheBackground() throws Exception {
         addContact();
-        start("documentary", "rover", "dune", "élan", "école");
+        start("documentary", "rover", "dune", "élan", "été");
 
-        bridge.forkSearch(new SearchQuery.TermQuery("documentary rover dune élan école", SearchQuery.ID_FILENAME))
+        bridge.forkSearch(new SearchQuery.TermQuery("documentary rover dune élan été", SearchQuery.ID_FILENAME))
                 .get(5, TimeUnit.SECONDS);
-        runWordSearchesUntil(() -> bridge.getWordSearches() == 2 && ingested.size() == 4);
+        runWordSearchesUntil(() -> bridge.getWordSearches() == 3 && ingested.size() == 5);
 
-        // "dune" and "élan" have 4 characters ("élan" 5 bytes): never searched alone; "école" has 5
-        assertEquals(hashes("documentary", "rover", "école"), requests.keySet());
-        assertTrue(ingested.containsAll(Set.of(onlyHash("rover"), onlyHash("école"))));
+        // "été" has 3 characters (5 bytes): never searched alone; "dune" and "élan" (5 bytes) have 4
+        assertEquals(hashes("documentary", "rover", "dune", "élan"), requests.keySet());
+        assertTrue(ingested.containsAll(Set.of(onlyHash("rover"), onlyHash("dune"), onlyHash("élan"))));
     }
 
     @Test
     void theQueryKeywordIsSearchedForTheClientEvenWhenShort() throws Exception {
         addContact();
-        start("dune", "mars");
+        start("dune", "sky");
 
-        List<FileMetadata> results = bridge.forkSearch(new SearchQuery.TermQuery("dune mars", SearchQuery.ID_FILENAME))
+        List<FileMetadata> results = bridge.forkSearch(new SearchQuery.TermQuery("dune sky", SearchQuery.ID_FILENAME))
                 .get(5, TimeUnit.SECONDS);
         bridge.startQueuedWordSearches(System.currentTimeMillis());
 
         assertEquals(2, results.size(), "as before");
-        assertEquals(hashes("dune"), requests.keySet(), "no other word of 5 characters");
+        assertEquals(hashes("dune"), requests.keySet(), "no other word of 4 characters");
         assertEquals(0, bridge.getWordSearches());
     }
 
