@@ -54,6 +54,14 @@ public interface ClientContext {
         return server != null ? server.announcedFileCount() : getFileIndex().fileCount();
     }
 
+    /**
+     * Search threads evaluating the local index for the client, which waits without holding its carrier thread;
+     * null without a server: the search then runs in the caller's thread.
+     */
+    default org.jemule.core.SearchExecutor getSearchExecutor() {
+        return getServer() != null ? getServer().getSearchExecutor() : null;
+    }
+
     /** Kad source searches for OP_GETSOURCES, null without a server or a Kad node. */
     default org.jemule.network.KadSourceService getKadSourceService() {
         return getServer() != null ? getServer().getKadSourceService() : null;

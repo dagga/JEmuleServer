@@ -143,6 +143,8 @@ public class Server {
     private final GlobalSearchForwarder globalSearchForwarder;
     /** Indexing and database writes, below the clients and the searches (ingestion tier). */
     private final IngestionExecutor ingestion = IngestionExecutor.create();
+    /** Evaluation of the local index searches, off the client virtual threads (search tier). */
+    private final org.jemule.core.SearchExecutor searchExecutor = org.jemule.core.SearchExecutor.create();
     /** Regular operations of the maintenance tier (server gossip polling). */
     private final java.util.concurrent.ScheduledExecutorService maintenance = ServerThreads.maintenanceScheduler("maintenance");
     private volatile boolean running = true;
@@ -157,6 +159,11 @@ public class Server {
 
     public KadSearchBridge getKadSearchBridge() {
         return kadSearchBridge;
+    }
+
+    /** Search threads evaluating the local index searches of the clients. */
+    public org.jemule.core.SearchExecutor getSearchExecutor() {
+        return searchExecutor;
     }
 
     /** Kad source searches for the clients' OP_GETSOURCES; finds nothing while no Kad node runs. */
@@ -1743,6 +1750,8 @@ public class Server {
             executor.shutdownNow();
             Thread.currentThread().interrupt();
         }
+        // The searches end before the index closes
+        searchExecutor.close();
         // A renaming under way ends its window before the index and the database close
         nameCleaningJob.close();
         // The files still waiting for ingestion are written before the database closes

@@ -2,6 +2,7 @@ package org.jemule.network.handler;
 
 import org.jemule.core.FileMetadata;
 import org.jemule.core.ClientState;
+import org.jemule.core.SearchExecutor;
 import org.jemule.core.SearchQuery;
 import org.jemule.kad.KadSearchBridge;
 import org.jemule.network.ServerSearchBridge;
@@ -23,6 +24,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
@@ -91,8 +93,13 @@ public class SearchHandler {
         List<FileMetadata> localResults = List.of();
         if (query != null && !answeredByRelay) {
             try {
-                localResults = context.getFileIndex().searchComplex(query, context.getConfig().maxSearchResults());
+                localResults = searchLocalIndex(context, query);
                 log.debug("Search {} -> {} local results", query, localResults.size());
+            } catch (RejectedExecutionException e) {
+                log.debug("Local search refused for {}: search threads saturated", query);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                log.debug("Interrupted while searching {}", query);
             } catch (RuntimeException e) {
                 log.warn("Local search failed for {}: {}", query, HandlerUtils.sanitize(String.valueOf(e.getMessage())));
             }
@@ -149,6 +156,18 @@ public class SearchHandler {
             });
         }
         sendSearchResults(context, batch, combined.size() > BATCH_SIZE || deferRemoteResults, out);
+    }
+
+    /**
+     * The local index's answer, evaluated on a search thread when the server has some: the Lucene search is CPU-bound,
+     * and a virtual thread running it would hold its carrier, and on a one-CPU server every other client, meanwhile.
+     */
+    private static List<FileMetadata> searchLocalIndex(ClientContext context, SearchQuery query)
+            throws InterruptedException {
+        int limit = context.getConfig().maxSearchResults();
+        SearchExecutor searches = context.getSearchExecutor();
+        if (searches == null) return context.getFileIndex().searchComplex(query, limit);
+        return searches.call(() -> context.getFileIndex().searchComplex(query, limit));
     }
 
     private static long remoteTimeoutMs(ClientContext context) {
