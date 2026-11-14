@@ -339,6 +339,91 @@ class KadSearchBridgeTest {
         }
     }
 
+    /** A peer that answers every KADEMLIA2_REQ at once with no closer contact, so that lookups end quickly. */
+    private static void answerLookupsWithNoContact(KadUdpService peer) {
+        peer.registerListener(KadOpCode.REQ, (packet, addr, port) -> {
+            try {
+                KadId target = KadId.fromWire(java.util.Arrays.copyOfRange(packet.data(), 1, 17));
+                peer.send(KadPacket.createFindNodeRes(target, List.of()), addr, port);
+            } catch (Exception e) {
+                fail(e);
+            }
+        });
+    }
+
+    @Test
+    void searchesWaitingForTheirDeadlineHoldNoThread() throws Exception {
+        KadRoutingTable table = new KadRoutingTable(KadId.random());
+
+        try (KadUdpService serverUdp = new KadUdpService(0);
+             KadUdpService peerUdp = new KadUdpService(0);
+             KadSearchBridge bridge = new KadSearchBridge(table, serverUdp, 3, 1_000)) {
+            serverUdp.start();
+            peerUdp.start();
+            bridge.setSearchThreads(1);
+            bridge.start();
+            table.addOrUpdate(new KadContact(table.generateRandomIdForBucket(1), InetAddress.getLoopbackAddress(), peerUdp.getPort()));
+
+            // The peer receives the requests and never answers them: every search lasts until its deadline
+            answerLookupsWithNoContact(peerUdp);
+            CountDownLatch requests = new CountDownLatch(6);
+            peerUdp.registerListener(KadOpCode.SEARCH_KEY_REQ, (packet, addr, port) -> requests.countDown());
+            peerUdp.registerListener(KadOpCode.SEARCH_SOURCE_REQ, (packet, addr, port) -> requests.countDown());
+
+            long start = System.nanoTime();
+            List<CompletableFuture<Long>> ends = new ArrayList<>();
+            for (String keyword : List.of("matrix", "ubuntu", "debian")) {
+                ends.add(bridge.forkSearch(keyword).thenApply(files -> System.nanoTime()));
+            }
+            for (String hash : List.of("0123456789abcdef0123456789abcdef", "11111111111111111111111111111111",
+                    "22222222222222222222222222222222")) {
+                byte[] file = org.jemule.network.handler.HandlerUtils.hashToBytes(hash);
+                ends.add(bridge.searchSources(file, 700_000_000L).thenApply(sources -> System.nanoTime()));
+            }
+
+            // A single search thread sends the six searches at once: none keeps it while waiting for its deadline
+            assertTrue(requests.await(3, TimeUnit.SECONDS), "a search waiting for its answers must not hold the thread");
+            assertTrue(bridge.getSearchThreadCount() <= 1);
+            assertTrue(ends.stream().noneMatch(CompletableFuture::isDone), "the searches last until their deadline");
+
+            for (CompletableFuture<Long> end : ends) {
+                long elapsedMs = TimeUnit.NANOSECONDS.toMillis(end.get(3, TimeUnit.SECONDS) - start);
+                assertTrue(elapsedMs >= 900, "a search ended before its deadline: " + elapsedMs + " ms");
+            }
+            assertEquals(0, bridge.getActiveSessionCount());
+        }
+    }
+
+    @Test
+    void closingTheBridgeEndsTheSearchesWaitingForTheirDeadline() throws Exception {
+        KadRoutingTable table = new KadRoutingTable(KadId.random());
+
+        try (KadUdpService serverUdp = new KadUdpService(0);
+             KadUdpService peerUdp = new KadUdpService(0)) {
+            serverUdp.start();
+            peerUdp.start();
+            KadSearchBridge bridge = new KadSearchBridge(table, serverUdp, 3, 10_000);
+            bridge.start();
+            table.addOrUpdate(new KadContact(table.generateRandomIdForBucket(1), InetAddress.getLoopbackAddress(), peerUdp.getPort()));
+            answerLookupsWithNoContact(peerUdp);
+            CountDownLatch requests = new CountDownLatch(2);
+            peerUdp.registerListener(KadOpCode.SEARCH_KEY_REQ, (packet, addr, port) -> requests.countDown());
+            peerUdp.registerListener(KadOpCode.SEARCH_SOURCE_REQ, (packet, addr, port) -> requests.countDown());
+
+            CompletableFuture<List<FileMetadata>> files = bridge.forkSearch("matrix");
+            CompletableFuture<List<KadPacket.KadSource>> sources = bridge.searchSources(
+                    org.jemule.network.handler.HandlerUtils.hashToBytes("0123456789abcdef0123456789abcdef"), 700_000_000L);
+            assertTrue(requests.await(3, TimeUnit.SECONDS));
+            assertFalse(files.isDone());
+            assertFalse(sources.isDone());
+
+            bridge.close();
+            assertTrue(files.get(1, TimeUnit.SECONDS).isEmpty(), "a stopped bridge must not leave a search pending");
+            assertTrue(sources.get(1, TimeUnit.SECONDS).isEmpty(), "a stopped bridge must not leave a search pending");
+            assertEquals(0, bridge.getSearchThreadCount());
+        }
+    }
+
     // ===============================================================
     // Point 3.2 — Mandatory Protective Filtering
     // ===============================================================
