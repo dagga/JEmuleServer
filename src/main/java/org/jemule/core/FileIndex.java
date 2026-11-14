@@ -88,6 +88,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.concurrent.locks.StampedLock;
 
@@ -149,6 +150,11 @@ public class FileIndex implements AutoCloseable {
     private final StampedLock lock = new StampedLock();
     /** Files written since the last refresh, by {@link #id}: their last state (without sources), or {@link #REMOVED}. */
     private volatile Map<String, Object> pending = new ConcurrentHashMap<>();
+    /**
+     * Whether a write of {@link #pending} added, replaced or deleted a document, not only changed a source count: the
+     * refresh making it visible then empties the search cache. Set under the read lock, swapped under the write lock.
+     */
+    private volatile boolean pendingDocuments;
     /** The writes of {@link #pending} a running refresh makes visible, looked up until it ends. */
     private volatile Map<String, Object> refreshing = Map.of();
     private final Object refreshLock = new Object();
@@ -168,7 +174,10 @@ public class FileIndex implements AutoCloseable {
     private final Set<String> longTags = ConcurrentHashMap.newKeySet();
     /** Refreshes the index on a running server; null when the searches refresh it. */
     private volatile ScheduledExecutorService refresher;
-    /** Period of {@link #refresher} in milliseconds, 0 when the searches refresh the index. */
+    /**
+     * Period of {@link #refresher} in milliseconds, also the most age of a cached search. 0 when the searches refresh
+     * the index: the search cache is then emptied by every refresh that makes a write visible.
+     */
     private volatile long refreshMillis;
     private volatile boolean closed;
     /** Whether the index is on disk, to be reopened by the next start. */
@@ -210,13 +219,22 @@ public class FileIndex implements AutoCloseable {
     /** Cleans the names of the files given to the index and of the results sent to the clients: no rule by default. */
     private volatile NameCleaner nameCleaner = new NameCleaner();
 
-    // LRU Cache for searches (Thread-safe via Collections.synchronizedMap)
-    private final Map<String, List<FileMetadata>> searchCache = Collections.synchronizedMap(new LinkedHashMap<>(128, 0.75f, true) {
+    /** The results of a keyword search ({@link #search}) and when they were read from the index. */
+    private record CachedSearch(List<FileMetadata> results, long readAtNanos) {}
+
+    /**
+     * LRU cache of the keyword searches (thread-safe via Collections.synchronizedMap, whose monitor is the map). It is
+     * emptied when a refresh makes added, renamed or removed files visible, and on every removal. A refresh that only
+     * changes source counts keeps it: its entries then live at most one refresh period ({@link #refreshMillis}).
+     */
+    private final Map<String, CachedSearch> searchCache = Collections.synchronizedMap(new LinkedHashMap<>(128, 0.75f, true) {
         @Override
-        protected boolean removeEldestEntry(Map.Entry<String, List<FileMetadata>> eldest) {
+        protected boolean removeEldestEntry(Map.Entry<String, CachedSearch> eldest) {
             return size() > 100; // Limit to 100 entries
         }
     });
+    /** Incremented with each emptying of {@link #searchCache}: a search read before it is not cached. */
+    private final AtomicLong searchCacheGeneration = new AtomicLong();
 
     /**
      * Constructs a FileIndex, loading the files of the database into a new Lucene index. Files of the database that
@@ -483,6 +501,7 @@ public class FileIndex implements AutoCloseable {
 
     /** Makes the writes visible to the searches at once. */
     public void refresh() {
+        boolean documents;
         synchronized (refreshLock) {
             if (closed) return;
             Map<String, Object> swapped;
@@ -492,6 +511,8 @@ public class FileIndex implements AutoCloseable {
                 if (swapped.isEmpty()) return;
                 refreshing = swapped;
                 pending = new ConcurrentHashMap<>();
+                documents = pendingDocuments;
+                pendingDocuments = false;
             } finally {
                 lock.unlockWrite(stamp);
             }
@@ -502,6 +523,7 @@ public class FileIndex implements AutoCloseable {
                 stamp = lock.writeLock();
                 try {
                     swapped.forEach(pending::putIfAbsent);
+                    if (documents) pendingDocuments = true;
                 } finally {
                     lock.unlockWrite(stamp);
                 }
@@ -510,7 +532,17 @@ public class FileIndex implements AutoCloseable {
                 refreshing = Map.of();
             }
         }
-        searchCache.clear();
+        // Only source counts changed: the cached searches still hold the right files, their counts at most one refresh
+        // period late (refreshMillis). Without a refresh period, every write empties the cache.
+        if (documents || refreshMillis == 0) invalidateSearchCache();
+    }
+
+    /** Empties the search cache; a search read from the index before is not cached afterwards. */
+    private void invalidateSearchCache() {
+        synchronized (searchCache) {
+            searchCacheGeneration.incrementAndGet();
+            searchCache.clear();
+        }
     }
 
     /** Before a search: the writes made since the last refresh, unless a thread refreshes the index regularly. */
@@ -685,6 +717,7 @@ public class FileIndex implements AutoCloseable {
                 int count = existing.sourceCount();
                 writer.updateDocument(new Term(ID, id), document(stored, count));
                 pending.put(id, withoutSources(stored, count));
+                pendingDocuments = true;
             } catch (IOException e) {
                 throw new UncheckedIOException(e);
             } finally {
@@ -692,7 +725,7 @@ public class FileIndex implements AutoCloseable {
             }
         }
         if (pending.size() > MAX_UNREFRESHED) refresh();
-        searchCache.clear();
+        invalidateSearchCache();
         return renamed;
     }
 
@@ -802,6 +835,7 @@ public class FileIndex implements AutoCloseable {
                     if (existing == null) {
                         writer.addDocument(document(stored, count));
                         indexedFiles.incrementAndGet();
+                        pendingDocuments = true;
                     } else if (sameContent(existing, stored)) {
                         // Published again as it is indexed: only its count may change
                         if (count != existing.sourceCount()) {
@@ -809,6 +843,7 @@ public class FileIndex implements AutoCloseable {
                         }
                     } else {
                         writer.updateDocument(new Term(ID, id), document(stored, count));
+                        pendingDocuments = true;
                     }
                     pending.put(id, withoutSources(stored, count));
                 } else {
@@ -842,7 +877,8 @@ public class FileIndex implements AutoCloseable {
             if (isNewHash) {
                 newFilesBySource.computeIfAbsent(source, k -> new LongAdder()).increment();
             }
-            searchCache.clear(); // Invalidate cache when adding a new file
+            // No search cache emptying here: the refresh making the new document visible does it, the searches until
+            // then read the index without it anyway.
             // The index holds every hash of the database: an unknown hash is written whole, a known one only when
             // its source count rose
             if (isNewHash) {
@@ -854,7 +890,6 @@ public class FileIndex implements AutoCloseable {
                 eventManager.broadcast(new FileEvent(FileEvent.PUBLISHED, stored.name(), stored.hash(), "File published: " + stored.name()));
             }
         } else if (sourceCountChanged) {
-            searchCache.clear();
             writes.sourceCounts().add(stored); // the hash is already stored: only its count is written
         }
         return stored;
@@ -916,6 +951,7 @@ public class FileIndex implements AutoCloseable {
                 hashToDelete = existing.hash();
                 writer.deleteDocuments(new Term(ID, id));
                 pending.put(id, REMOVED);
+                pendingDocuments = true;
                 liveSources.remove(id);
                 indexedFiles.decrementAndGet();
             } catch (IOException e) {
@@ -925,7 +961,7 @@ public class FileIndex implements AutoCloseable {
             }
         }
         if (pending.size() > MAX_UNREFRESHED) refresh();
-        searchCache.clear();
+        invalidateSearchCache();
         if (db != null) {
             sealPendingWrites();
             persistence.execute(() -> db.deleteFile(hashToDelete)); // after any queued write of this file
@@ -1409,10 +1445,13 @@ public class FileIndex implements AutoCloseable {
 
         // Cache check
         String cacheKey = queryLower + "|" + limit;
-        List<FileMetadata> cached = searchCache.get(cacheKey);
-        if (cached != null) {
-            return cached;
+        CachedSearch cached = searchCache.get(cacheKey);
+        long now = System.nanoTime();
+        long ttl = TimeUnit.MILLISECONDS.toNanos(refreshMillis);
+        if (cached != null && (ttl == 0 || now - cached.readAtNanos() < ttl)) {
+            return cached.results();
         }
+        long generation = searchCacheGeneration.get();
 
         String[] tokens = Keywords.split(queryLower);
         if (tokens.length == 0) return Collections.emptyList();
@@ -1420,8 +1459,10 @@ public class FileIndex implements AutoCloseable {
         for (String t : tokens) all.add(new PrefixQuery(new Term(WORD, t)), Occur.FILTER);
         List<FileMetadata> res = inIndexOrder(all.build(), limit);
 
-        // Cache the result
-        searchCache.put(cacheKey, res);
+        // Cache the result, unless the cache was emptied meanwhile: it may have been read before a removal
+        synchronized (searchCache) {
+            if (searchCacheGeneration.get() == generation) searchCache.put(cacheKey, new CachedSearch(res, now));
+        }
 
         return res;
     }
