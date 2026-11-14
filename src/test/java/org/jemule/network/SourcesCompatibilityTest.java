@@ -36,7 +36,8 @@ class SourcesCompatibilityTest {
             null, null, false, 50f, 10, 60, 1800, 0, "127.0.0.1");
 
     static class CapturingDatagramSocket extends java.net.DatagramSocket {
-        final List<DatagramPacket> sent = new ArrayList<>();
+        // The UDP global searches are answered from the search threads
+        final List<DatagramPacket> sent = new java.util.concurrent.CopyOnWriteArrayList<>();
         CapturingDatagramSocket() throws Exception { super(); }
         @Override public void send(DatagramPacket p) {
             sent.add(new DatagramPacket(java.util.Arrays.copyOf(p.getData(), p.getLength()), p.getLength(), p.getAddress(), p.getPort()));

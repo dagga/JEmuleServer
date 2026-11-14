@@ -20,10 +20,13 @@ package org.jemule.core;
 
 import java.lang.management.ManagementFactory;
 import java.util.Locale;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -31,7 +34,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * <ol>
  *     <li>{@link Tier#ADMIN}: admin console, admin port and web panel, which must stay usable under load;</li>
  *     <li>{@link Tier#CLIENT}: TCP and UDP access of the eD2K clients (virtual threads, normal priority);</li>
- *     <li>{@link Tier#SEARCH}: searches forked to Kad and to the eD2K servers;</li>
+ *     <li>{@link Tier#SEARCH}: local index searches, and searches forked to Kad and to the eD2K servers;</li>
  *     <li>{@link Tier#INGESTION}: indexing and persisting files, which must never hold a search or a client back;</li>
  *     <li>{@link Tier#MAINTENANCE}: regular operations (Kad maintenance, gossip polling, list updates, loading).</li>
  * </ol>
@@ -84,6 +87,16 @@ public final class ServerThreads {
     /** Executor of the admin tier, for the web panel and admin port requests. */
     public static ExecutorService adminExecutor(String prefix) {
         return Executors.newCachedThreadPool(factory(Tier.ADMIN, prefix));
+    }
+
+    /**
+     * Fixed pool of {@code threads} platform threads of the search tier, with at most {@code queueCapacity} tasks
+     * waiting: beyond, {@code execute} and {@code submit} throw {@link java.util.concurrent.RejectedExecutionException}
+     * instead of queuing without limit.
+     */
+    public static ThreadPoolExecutor searchPool(String prefix, int threads, int queueCapacity) {
+        return new ThreadPoolExecutor(threads, threads, 0, TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(queueCapacity), factory(Tier.SEARCH, prefix), new ThreadPoolExecutor.AbortPolicy());
     }
 
     /** Single-threaded scheduler of the maintenance tier. */

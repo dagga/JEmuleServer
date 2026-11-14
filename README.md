@@ -111,6 +111,7 @@ JVM options used by the server:
 | `-XX:MinHeapFreeRatio=10 -XX:MaxHeapFreeRatio=30` | After a full collection, the JVM gives back to the system the heap beyond 30% above what is in use, and grows it again when needed. | Small server whose RAM is short. |
 | `-XX:+UseCompactObjectHeaders` | Object headers of 8 bytes instead of 12 (Java 25). | Any server: about 4% less live heap for the index. |
 | `-XX:MarkSweepDeadRatio=0` | A full collection of the serial collector compacts every dead object instead of leaving up to 5% of the old generation as dead space. | One CPU (serial collector), so that the heap guard measures the live heap only. |
+| `-Djdk.virtualThreadScheduler.parallelism=2` | Two carrier threads for the client virtual threads instead of one per CPU, time-sliced by the system: a long client request (large file offer, source list) no longer holds back the others. Searches run on their own threads anyway. | Optional, one CPU. |
 | `-Djava.net.preferIPv4Stack=true` | Do not use: it disables the IPv6 listener. | Never. |
 
 - Note: The server binds to the IPv6 wildcard when available, so IPv6 clients can connect. Avoid forcing the JVM to

@@ -105,6 +105,11 @@ public final class EmuleTestSupport {
         public void setFromServer(boolean fromServer) { this.fromServer = fromServer; }
         @Override public boolean isFromServer() { return fromServer; }
 
+        private org.jemule.core.SearchExecutor searchExecutor;
+        /** Search threads of the client's searches, as a server would give them; none by default. */
+        public void setSearchExecutor(org.jemule.core.SearchExecutor executor) { this.searchExecutor = executor; }
+        @Override public org.jemule.core.SearchExecutor getSearchExecutor() { return searchExecutor; }
+
         @Override public org.jemule.core.OfferFilesV1 getOfferFilesV1() { return offerFilesV1; }
         public void setOfferFilesV1(org.jemule.core.OfferFilesV1 offerFilesV1) { this.offerFilesV1 = offerFilesV1; }
     }
