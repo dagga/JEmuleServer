@@ -30,7 +30,7 @@ public class LoginHandler {
     public void handleLogin(ClientContext context, Packet initialPacket, OutputStream out) throws IOException {
         if (context.getWrappedOut() != null) out = context.getWrappedOut();
         byte[] data = initialPacket.data();
-        log.info("Handling login request, data size: {} bytes", data.length);
+        log.debug("Handling login request, data size: {} bytes", data.length);
 
         InetAddress clientIp = context.getSocket().getInetAddress();
         ClientState state = context.getClientFactory().createClient(clientIp, context.getSocket().getPort(), 0);
