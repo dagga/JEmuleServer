@@ -128,7 +128,11 @@ class PersistenceTest {
             java.util.List<Runnable> queued = new java.util.ArrayList<>();
             index.setPersistenceExecutor(queued::add);
 
+            // The first sighting of the day queues its last_seen day (issue #103), once
             index.addFile(new FileMetadata(hash, "known file.avi", 4096, "Video", tags), FileSource.KAD_SEARCH);
+            assertEquals(1, queued.size(), "the day the file was seen, once a day");
+            queued.getFirst().run();
+            queued.clear();
             index.addFile(new FileMetadata(hash, "other name.avi", 4096, "Video",
                     List.of(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, 3))), FileSource.SERVER_SEARCH);
             assertTrue(queued.isEmpty(), "a known hash found again by searches, without more sources, is not written");

@@ -80,6 +80,11 @@ final class WordDictionary {
 
     private synchronized void rebuild(Collection<String> allWords) {
         if (pending.size() <= REBUILD_THRESHOLD) return; // rebuilt by another thread meanwhile
+        rebuildNow(allWords);
+    }
+
+    /** Rebuilds the snapshot now, without the words removed from {@code allWords} since the last one. */
+    synchronized void rebuildNow(Collection<String> allWords) {
         // The words added from now on go to the new pending set; those added before are already in allWords
         pending = ConcurrentHashMap.newKeySet();
         List<String> words = new ArrayList<>(allWords);

@@ -205,15 +205,15 @@ final class H2ToMySqlImport {
         long files = 0, tags = 0, sources = 0, notHashes = 0;
         int lastReported = -1;
         try (PreparedStatement selectFiles = h2.prepareStatement("""
-                     SELECT f.hash, f.name, f.size, f.type, s.source_count FROM files f
+                     SELECT f.hash, f.name, f.size, f.type, s.source_count, f.last_seen FROM files f
                      LEFT JOIN file_sources s ON s.hash = f.hash WHERE f.hash > ? ORDER BY f.hash LIMIT ?""");
              PreparedStatement selectTags = h2.prepareStatement("""
                      SELECT file_hash, tag_type, tag_name, tag_value_str, tag_value_blob FROM file_tags
                      WHERE file_hash > ? AND file_hash <= ? ORDER BY file_hash, _ROWID_""");
              PreparedStatement mergeFile = mysql.prepareStatement("""
-                     INSERT INTO files (hash, name, size, type, source_count) VALUES (?, ?, ?, ?, ?)
+                     INSERT INTO files (hash, name, size, type, source_count, last_seen) VALUES (?, ?, ?, ?, ?, ?)
                      ON DUPLICATE KEY UPDATE name = VALUES(name), size = VALUES(size), type = VALUES(type),
-                     source_count = VALUES(source_count)""");
+                     source_count = VALUES(source_count), last_seen = VALUES(last_seen)""");
              PreparedStatement deleteTags = mysql.prepareStatement("DELETE FROM file_tags WHERE file_hash = ?");
              PreparedStatement insertTag = mysql.prepareStatement(
                      "INSERT INTO file_tags (file_hash, tag_type, tag_name, tag_value_str, tag_value_blob) VALUES (?, ?, ?, ?, ?)")) {
@@ -242,6 +242,10 @@ final class H2ToMySqlImport {
                             mergeFile.setInt(5, count);
                             sources++;
                         }
+                        // Null stays null: not seen since the H2 migration, whose day the stats copied above keep
+                        int lastSeen = rs.getInt(6);
+                        if (rs.wasNull()) mergeFile.setNull(6, Types.SMALLINT);
+                        else mergeFile.setInt(6, lastSeen);
                         mergeFile.addBatch();
                         if (again) {
                             target.setHash(deleteTags, 1, last);

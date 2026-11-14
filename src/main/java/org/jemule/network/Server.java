@@ -101,6 +101,8 @@ public class Server {
     private final org.jemule.core.NameCleaner nameCleaner;
     /** Applies the name cleaning rules to the files indexed before them, on demand of the administrator. */
     private final org.jemule.core.NameCleaningJob nameCleaningJob;
+    /** Purges the files not seen for fileRetentionDays, once a day (maintenance tier). */
+    private final org.jemule.core.FilePurgeJob filePurgeJob;
     private final byte[] serverHash = new byte[16];
 
     // Map of UDP sockets bound by startUdpResponder so other components can send via the same source port
@@ -336,6 +338,8 @@ public class Server {
         // this.config: the field, which a settings change replaces, not the constructor parameter
         this.fileIndex.setCapacity(() -> this.config.maxFiles(), () -> heapGuard.full() || diskGuard.full());
         this.metricsHistory = new org.jemule.core.MetricsHistory(db);
+        // this.config: the field, which a settings change replaces (fileRetentionDays is hot)
+        this.filePurgeJob = new org.jemule.core.FilePurgeJob(db, fileIndex, () -> this.config.fileRetentionDays());
         String heapWarning = heapWarning(Runtime.getRuntime().maxMemory(), heapGuard.maxBytes(), fileIndex.fileCount());
         if (heapWarning != null) {
             log.warn(heapWarning);
@@ -513,6 +517,11 @@ public class Server {
 
     org.jemule.core.NameCleaningJob getNameCleaningJob() {
         return nameCleaningJob;
+    }
+
+    /** The purge of the files not seen for fileRetentionDays. */
+    org.jemule.core.FilePurgeJob getFilePurgeJob() {
+        return filePurgeJob;
     }
 
     ServerConfig getConfig() {
@@ -1114,6 +1123,15 @@ public class Server {
             // compacted while the server runs, or the writes make it grow by about a gigabyte a day (maintenance tier)
             if (db != null) {
                 maintenance.scheduleWithFixedDelay(db::compactOnline, 10, 10, TimeUnit.MINUTES);
+                // Files not seen for fileRetentionDays: checked every hour, the first time an hour after the start
+                // (clients reconnect and publish then), purged once a day by a thread of the maintenance tier
+                maintenance.scheduleWithFixedDelay(() -> {
+                    try {
+                        if (running) filePurgeJob.runIfDue();
+                    } catch (RuntimeException e) {
+                        log.warn("File purge check failed: {}", e.getMessage());
+                    }
+                }, 1, 1, TimeUnit.HOURS);
             }
             startUdpResponder();
             startKadNode();
@@ -1782,6 +1800,8 @@ public class Server {
         searchExecutor.close();
         // A renaming under way ends its window before the index and the database close
         nameCleaningJob.close();
+        // A purge under way ends its batch, whose deletion the ingestion thread runs, before it closes
+        filePurgeJob.close();
         // The files still waiting for ingestion are written before the database closes
         ingestion.close();
         // In relay mode they went to the feed, which posts what it can before stopping

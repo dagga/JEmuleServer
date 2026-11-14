@@ -32,6 +32,7 @@ class DatabaseMigrationTest {
         try (Connection c = DriverManager.getConnection("jdbc:h2:" + dbPath, "sa", "");
              Statement stmt = c.createStatement()) {
             stmt.execute("DELETE FROM stats");
+            stmt.execute("ALTER TABLE files DROP COLUMN last_seen");
             stmt.execute("INSERT INTO files VALUES ('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', 'movie.avi', 100, 'Video')");
             stmt.execute("INSERT INTO files VALUES ('BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB', 'song.mp3', 200, 'Audio')");
             stmt.execute("INSERT INTO files VALUES ('CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC', 'other.iso', 300, 'Iso')");
@@ -84,6 +85,8 @@ class DatabaseMigrationTest {
         try (Connection c = DriverManager.getConnection("jdbc:h2:" + dbPath, "sa", "");
              Statement stmt = c.createStatement()) {
             stmt.execute("UPDATE stats SET stat_value = 2 WHERE stat_key = '" + DatabaseManager.SCHEMA_VERSION_KEY + "'");
+            stmt.execute("DELETE FROM stats WHERE stat_key = '" + DatabaseManager.LAST_SEEN_MIGRATION_DAY_KEY + "'");
+            stmt.execute("ALTER TABLE files DROP COLUMN last_seen");
             stmt.execute("CREATE TABLE banned_hashes (hash VARCHAR(32) PRIMARY KEY, reason VARCHAR(255), "
                     + "added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
             stmt.execute("INSERT INTO banned_hashes (hash, reason) VALUES ('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', 'Child abuse material: x')");
@@ -93,7 +96,7 @@ class DatabaseMigrationTest {
         }
 
         try (DatabaseManager db = new DatabaseManager(dbPath)) {
-            assertEquals(3L, db.getStat(DatabaseManager.SCHEMA_VERSION_KEY, 0));
+            assertEquals(DatabaseManager.SCHEMA_VERSION, db.getStat(DatabaseManager.SCHEMA_VERSION_KEY, 0));
             assertEquals(1, db.loadFiles().size());
             assertTrue(db.loadBannedNames().isEmpty());
         }
@@ -119,6 +122,49 @@ class DatabaseMigrationTest {
             ps.setString(3, name);
             ps.setString(4, value);
             ps.executeUpdate();
+        }
+    }
+
+    @Test
+    void aVersionThreeDatabaseGetsLastSeenWithoutPurgingAnythingBeforeTheRetention() throws Exception {
+        String dbPath = tempDir.resolve("v3db").toString();
+        new DatabaseManager(dbPath).close();
+
+        // As written by version 3 (1.6): no last_seen
+        try (Connection c = DriverManager.getConnection("jdbc:h2:" + dbPath, "sa", "");
+             Statement stmt = c.createStatement()) {
+            stmt.execute("UPDATE stats SET stat_value = 3 WHERE stat_key = '" + DatabaseManager.SCHEMA_VERSION_KEY + "'");
+            stmt.execute("DELETE FROM stats WHERE stat_key = '" + DatabaseManager.LAST_SEEN_MIGRATION_DAY_KEY + "'");
+            stmt.execute("ALTER TABLE files DROP COLUMN last_seen");
+            stmt.execute("INSERT INTO files VALUES ('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', 'movie.avi', 100, 'Video')");
+            stmt.execute("INSERT INTO files VALUES ('BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB', 'song.mp3', 200, 'Audio')");
+            insertTag(c, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", Tag.TYPE_STRING, Tag.idName(SearchQuery.ID_MEDIA_CODEC), "xvid");
+        }
+
+        int upgradeDay = 20_000;
+        try (DatabaseManager db = new DatabaseManager(dbPath)) {
+            assertEquals(DatabaseManager.SCHEMA_VERSION, db.getStat(DatabaseManager.SCHEMA_VERSION_KEY, 0));
+            assertEquals(DatabaseManager.currentDay(), db.lastSeenMigrationDay(), "the files count as seen today");
+            assertEquals(2, db.loadFiles().size(), "no file is lost");
+        }
+        // Pretend the upgrade happened on upgradeDay, to move the clock around it
+        try (Connection c = DriverManager.getConnection("jdbc:h2:" + dbPath, "sa", "");
+             Statement stmt = c.createStatement()) {
+            stmt.execute("UPDATE stats SET stat_value = " + upgradeDay + " WHERE stat_key = '"
+                    + DatabaseManager.LAST_SEEN_MIGRATION_DAY_KEY + "'");
+            try (ResultSet rs = stmt.executeQuery("SELECT COUNT(*) FROM files WHERE last_seen IS NULL")) {
+                rs.next();
+                assertEquals(2, rs.getInt(1), "the rows are not written: null stands for the migration day");
+            }
+        }
+        try (DatabaseManager db = new DatabaseManager(dbPath)) {
+            assertEquals(upgradeDay, db.lastSeenMigrationDay(), "already migrated: the day stays");
+            // 180 days after the upgrade, the cutoff of a 180 day retention is the upgrade day: nothing is stale yet
+            assertTrue(db.staleFiles("", 100, upgradeDay).hashes().isEmpty());
+            assertTrue(db.staleFiles("", 100, upgradeDay - 30).hashes().isEmpty());
+            // One day later, the files never seen since the upgrade are
+            assertEquals(List.of("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"),
+                    db.staleFiles("", 100, upgradeDay + 1).hashes());
         }
     }
 

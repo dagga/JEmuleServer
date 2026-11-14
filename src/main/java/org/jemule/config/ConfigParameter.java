@@ -45,6 +45,8 @@ public enum ConfigParameter {
             "Files a single user can publish"),
     MAX_SOURCES_PER_FILE("maxSourcesPerFile", Type.INTEGER, Scope.HOT, 1, 10_000,
             "Sources returned per file request"),
+    FILE_RETENTION_DAYS("fileRetentionDays", Type.INTEGER, Scope.HOT, 0, ServerConfig.MAX_FILE_RETENTION_DAYS,
+            "Days a file nobody published nor found is kept before the daily purge removes it (0 = never purged)"),
     DATABASE_PATH("databasePath", Type.STRING, Scope.RESTART, 0, 0,
             "H2 database path (with MySQL: the H2 database imported at the first start)"),
     DATABASE_TYPE("databaseType", Type.STRING, Scope.RESTART, 0, 0, "Database: h2 (file at databasePath) or mysql"),

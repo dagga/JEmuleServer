@@ -48,13 +48,41 @@ public class DatabaseManager implements AutoCloseable {
     static final int ONLINE_MIN_FILL_RATE = 50;
     /** Smaller files are not compacted while the server runs: little to gain, and their fill rate is not reliable. */
     static final long ONLINE_MIN_FILE_BYTES = 64L * 1024 * 1024;
-    /** Version of the H2 schema written by this code, kept in the stats table. Databases without it are version 1. */
-    static final long SCHEMA_VERSION = 3;
+    /**
+     * Version of the H2 schema written by this code, kept in the stats table. Databases without it are version 1.
+     * Version 4: the day each file was last seen ({@code files.last_seen}).
+     */
+    static final long SCHEMA_VERSION = 4;
     /**
      * Version of the MySQL schema written by this code. Version 4: the hashes on 16 bytes (BINARY) instead of 32
-     * hexadecimal characters, and the source count of a file in files instead of a table of its own.
+     * hexadecimal characters, and the source count of a file in files instead of a table of its own. Version 5: the
+     * day each file was last seen ({@code files.last_seen}).
      */
-    static final long MYSQL_SCHEMA_VERSION = 4;
+    static final long MYSQL_SCHEMA_VERSION = 5;
+    /**
+     * Stat holding the day (days since 1970-01-01, UTC) the last_seen column was added: a file whose last_seen is
+     * null was not seen since, and counts as seen that day, so that no file is purged before the retention period
+     * has elapsed after the upgrade. Filling the column of every row instead would rewrite the whole table (18
+     * million rows on the largest server) at startup.
+     */
+    static final String LAST_SEEN_MIGRATION_DAY_KEY = "last_seen_migration_day";
+    /**
+     * MySQL: last_seen added to the files table of an older schema. Nullable without default, at the end of the row,
+     * so that MySQL 8 and MariaDB 10.3+ add it instantly, from the table's metadata, without rewriting its rows. Two
+     * bytes: days since 1970, until 2149.
+     */
+    static final String MYSQL_ADD_LAST_SEEN_INSTANT =
+            "ALTER TABLE files ADD COLUMN last_seen SMALLINT UNSIGNED NULL, ALGORITHM=INSTANT";
+    /** The same for a server that cannot add a column instantly: the table is rebuilt, which can take a while. */
+    static final String MYSQL_ADD_LAST_SEEN = "ALTER TABLE files ADD COLUMN last_seen SMALLINT UNSIGNED NULL";
+    /** H2: last_seen added to the files table of an older schema (H2 copies the table, about 6 s per million rows). */
+    static final String H2_ADD_LAST_SEEN = "ALTER TABLE files ADD COLUMN IF NOT EXISTS last_seen INT";
+    /**
+     * Writes the day a known file was seen, only when the stored day is older: a file seen again the same day costs
+     * a read of its row, never a write. The same for H2 and MySQL.
+     */
+    static final String TOUCH_FILE =
+            "UPDATE files SET last_seen = ? WHERE hash = ? AND (last_seen IS NULL OR last_seen < ?)";
     /** Files copied per statement by the migration of a MySQL database to version 4. */
     private static final int MYSQL_MIGRATION_PAGE_FILES = 50_000;
     static final String SCHEMA_VERSION_KEY = "schema_version";
@@ -77,7 +105,7 @@ public class DatabaseManager implements AutoCloseable {
     }
 
     static final Sql H2_SQL = new Sql(
-            "MERGE INTO files (hash, name, size, type) KEY (hash) VALUES (?, ?, ?, ?)",
+            "MERGE INTO files (hash, name, size, type, last_seen) KEY (hash) VALUES (?, ?, ?, ?, ?)",
             "MERGE INTO file_sources (hash, source_count) KEY (hash) VALUES (?, ?)",
             """
             MERGE INTO file_sources (hash, source_count) KEY (hash)
@@ -90,8 +118,9 @@ public class DatabaseManager implements AutoCloseable {
             "MERGE INTO banned_servers (ip, reason, banned_at) KEY (ip) VALUES (?, ?, ?)");
 
     static final Sql MYSQL_SQL = new Sql(
-            "INSERT INTO files (hash, name, size, type) VALUES (?, ?, ?, ?) "
-                    + "ON DUPLICATE KEY UPDATE name = VALUES(name), size = VALUES(size), type = VALUES(type)",
+            "INSERT INTO files (hash, name, size, type, last_seen) VALUES (?, ?, ?, ?, ?) "
+                    + "ON DUPLICATE KEY UPDATE name = VALUES(name), size = VALUES(size), type = VALUES(type), "
+                    + "last_seen = VALUES(last_seen)",
             // In files: a file not saved yet has no row to update, as wanted
             "UPDATE files SET source_count = ? WHERE hash = ?",
             "UPDATE files SET source_count = ? WHERE hash = ?",
@@ -109,21 +138,23 @@ public class DatabaseManager implements AutoCloseable {
                     + "ON DUPLICATE KEY UPDATE reason = VALUES(reason), banned_at = VALUES(banned_at)");
 
     /**
-     * MySQL files table (schema version 4), named {@code %1$s}: the MD4 hash on its 16 bytes, which every random
-     * insert and every tag repeats (32 characters until version 3), and the source count of the file, null when
-     * unknown (a table of its own until version 3: one more key and row header per file).
+     * MySQL files table (schema version 5), named {@code %1$s}: the MD4 hash on its 16 bytes, which every random
+     * insert and every tag repeats (32 characters until version 3), the source count of the file, null when
+     * unknown (a table of its own until version 3: one more key and row header per file), and the day the file was
+     * last seen, in days since 1970 on two bytes (null: the day of {@link #LAST_SEEN_MIGRATION_DAY_KEY}).
      */
-    private static final String MYSQL_FILES = """
+    static final String MYSQL_FILES = """
             CREATE TABLE IF NOT EXISTS %1$s (
                 hash BINARY(16) NOT NULL PRIMARY KEY,
                 name VARCHAR(1024) NOT NULL,
                 size BIGINT NOT NULL,
                 type VARCHAR(255),
-                source_count INT
+                source_count INT,
+                last_seen SMALLINT UNSIGNED
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin""";
 
     /** MySQL tags table (schema version 4), named {@code %1$s}, of the files table {@code %2$s}. */
-    private static final String MYSQL_FILE_TAGS = """
+    static final String MYSQL_FILE_TAGS = """
             CREATE TABLE IF NOT EXISTS %1$s (
                 file_hash BINARY(16) NOT NULL,
                 id BIGINT NOT NULL AUTO_INCREMENT,
@@ -210,6 +241,10 @@ public class DatabaseManager implements AutoCloseable {
      * which would pin the carrier thread of the calling virtual thread during the I/O.
      */
     private final ReentrantLock lock = new ReentrantLock();
+    /** The current day (days since 1970-01-01, UTC), written as the last_seen of the files; replaced by the tests. */
+    private volatile java.util.function.IntSupplier dayClock = DatabaseManager::currentDay;
+    /** The day a file whose last_seen is null counts as seen ({@link #LAST_SEEN_MIGRATION_DAY_KEY}). */
+    private volatile int lastSeenMigrationDay;
 
     public DatabaseManager(String dbPath) throws SQLException {
         this(dbPath, 50.0f, 10, 60);
@@ -268,6 +303,42 @@ public class DatabaseManager implements AutoCloseable {
         } else {
             compactIfSparse();
         }
+        // Read after the import of an H2 database, whose stat is copied: its files not seen since its own migration
+        // keep that day
+        lastSeenMigrationDay = (int) getStat(LAST_SEEN_MIGRATION_DAY_KEY, today());
+    }
+
+    /** Today, in days since 1970-01-01 (UTC). */
+    static int currentDay() {
+        return (int) Math.floorDiv(System.currentTimeMillis(), 86_400_000L);
+    }
+
+    /** The current day of this database's clock, in days since 1970-01-01 (UTC). */
+    public int today() {
+        return dayClock.getAsInt();
+    }
+
+    /** Replaces the clock of the days (tests). */
+    void setDayClock(java.util.function.IntSupplier clock) {
+        this.dayClock = clock;
+    }
+
+    /** The day a file whose last_seen is null counts as seen: the day the column was added. */
+    public int lastSeenMigrationDay() {
+        return lastSeenMigrationDay;
+    }
+
+    /**
+     * Whether the database works normally: open, and its circuit breaker closed. The background jobs that can wait,
+     * such as the purge of the files not seen for long ({@link FilePurgeJob}), only run then.
+     */
+    public boolean isAvailable() {
+        return !closed && circuitBreaker.getState() == CircuitBreaker.State.CLOSED;
+    }
+
+    /** The circuit breaker, for the tests. */
+    CircuitBreaker circuitBreaker() {
+        return circuitBreaker;
     }
 
     private Connection connect() throws SQLException {
@@ -326,6 +397,7 @@ public class DatabaseManager implements AutoCloseable {
             // MySQL tables are created at the current version, and version 3 was the first MySQL one
             try {
                 if (version == 3) migrateMySqlToV4();
+                addLastSeen();
                 setStatInternal(SCHEMA_VERSION_KEY, MYSQL_SCHEMA_VERSION);
             } catch (SQLException e) {
                 logger.error("Database migration to schema version {} failed (retried at the next start): {}",
@@ -339,6 +411,7 @@ public class DatabaseManager implements AutoCloseable {
             boolean changed = false;
             if (version < 2) changed = migrateTagsToV2();
             if (version < 3) changed |= dropBannedHashes();
+            if (version < 4) changed |= addLastSeen();
             setStatInternal(SCHEMA_VERSION_KEY, SCHEMA_VERSION);
             logger.info("Database migration to schema version {} done in {} s", SCHEMA_VERSION,
                     (System.currentTimeMillis() - start) / 1000);
@@ -428,6 +501,54 @@ public class DatabaseManager implements AutoCloseable {
             logger.info("Database migration to schema version 4 done in {} s: {} files, {} tags",
                     (System.currentTimeMillis() - start) / 1000, String.format("%,d", copied),
                     String.format("%,d", countRows("file_tags")));
+        }
+    }
+
+    /**
+     * H2 version 4, MySQL version 5: the day each file was last seen, in a new last_seen column. The rows keep it
+     * null, which stands for the day of this migration, recorded once in stats ({@link #LAST_SEEN_MIGRATION_DAY_KEY}):
+     * no file is purged before the retention period has elapsed after the upgrade, and no row is written. MySQL adds
+     * the column instantly when it can ({@link #MYSQL_ADD_LAST_SEEN_INSTANT}); H2 copies the table.
+     *
+     * @return true if the column was added
+     */
+    private boolean addLastSeen() throws SQLException {
+        boolean added = false;
+        if (!hasLastSeenColumn()) {
+            long start = System.currentTimeMillis();
+            logger.info("Database migration: adding the day each file was last seen (files.last_seen){}",
+                    mysql ? "" : ", the files table is copied");
+            try (Statement stmt = connection.createStatement()) {
+                if (mysql) {
+                    try {
+                        stmt.execute(MYSQL_ADD_LAST_SEEN_INSTANT);
+                    } catch (SQLException e) {
+                        // MySQL 5.7, MariaDB before 10.3: the table is rebuilt, at the server's pace
+                        logger.warn("The column cannot be added instantly ({}): the files table is rebuilt, this can "
+                                + "take a while", e.getMessage());
+                        stmt.execute(MYSQL_ADD_LAST_SEEN);
+                    }
+                } else {
+                    stmt.execute(H2_ADD_LAST_SEEN);
+                }
+            }
+            added = true;
+            logger.info("Database migration: files.last_seen added in {} s", (System.currentTimeMillis() - start) / 1000);
+        }
+        // A later day than the real one (a migration stopped before this line) only keeps the files longer
+        if (getStatInternal(LAST_SEEN_MIGRATION_DAY_KEY, -1) < 0) setStatInternal(LAST_SEEN_MIGRATION_DAY_KEY, today());
+        return added;
+    }
+
+    /** Whether the files table has its last_seen column. */
+    private boolean hasLastSeenColumn() throws SQLException {
+        try (Statement stmt = connection.createStatement();
+             ResultSet rs = stmt.executeQuery(mysql
+                     ? "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() "
+                             + "AND TABLE_NAME = 'files' AND COLUMN_NAME = 'last_seen'"
+                     : "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = SCHEMA() "
+                             + "AND TABLE_NAME = 'FILES' AND COLUMN_NAME = 'LAST_SEEN'")) {
+            return rs.next() && rs.getLong(1) > 0;
         }
     }
 
@@ -777,13 +898,15 @@ public class DatabaseManager implements AutoCloseable {
             return;
         }
         try (Statement stmt = connection.createStatement()) {
-            // Table for files
+            // Table for files. last_seen: the day the file was last published or found, in days since 1970 (UTC);
+            // null for a file not seen since the column was added (LAST_SEEN_MIGRATION_DAY_KEY)
             stmt.execute("""
                 CREATE TABLE IF NOT EXISTS files (
                     hash VARCHAR(32) PRIMARY KEY,
                     name VARCHAR(1024) NOT NULL,
                     size BIGINT NOT NULL,
-                    type VARCHAR(255)
+                    type VARCHAR(255),
+                    last_seen INT
                 )
                 """);
 
@@ -1274,6 +1397,7 @@ public class DatabaseManager implements AutoCloseable {
         if (notHashes > 0) logger.debug("{} file(s) not saved: their hash is not 32 hexadecimal digits", notHashes);
         if (uniqueFiles.isEmpty()) return;
 
+        int today = today();
         try {
             connection.setAutoCommit(false);
             try (PreparedStatement mergeFile = connection.prepareStatement(sql.mergeFile());
@@ -1286,6 +1410,7 @@ public class DatabaseManager implements AutoCloseable {
                     mergeFile.setString(2, meta.name());
                     mergeFile.setLong(3, meta.size());
                     mergeFile.setString(4, meta.type());
+                    mergeFile.setInt(5, today); // saved: seen today
                     mergeFile.addBatch();
 
                     setHash(deleteTags, 1, meta.hash());
@@ -1359,6 +1484,139 @@ public class DatabaseManager implements AutoCloseable {
         } catch (Throwable e) {
             logger.error("Circuit breaker prevented or caught error during saveSourceCounts ({} files): {}",
                     files.size(), e.getMessage());
+        }
+    }
+
+    /**
+     * Records that files already saved were seen today (published, or found by a search), in one transaction. Only
+     * the rows whose stored day is older are written ({@link #TOUCH_FILE}); a file not saved is skipped.
+     */
+    public void touchFiles(Collection<String> hashes) {
+        if (hashes == null || hashes.isEmpty()) return;
+        int today = today();
+        try {
+            locked(() -> {
+                try {
+                    connection.setAutoCommit(false);
+                    try (PreparedStatement touch = connection.prepareStatement(TOUCH_FILE)) {
+                        for (String hash : hashes) {
+                            if (mysql && hashBytes(hash) == null) continue;
+                            touch.setInt(1, today);
+                            setHash(touch, 2, hash);
+                            touch.setInt(3, today);
+                            touch.addBatch();
+                        }
+                        touch.executeBatch();
+                    }
+                    connection.commit();
+                } catch (SQLException e) {
+                    try { connection.rollback(); } catch (SQLException ex) { /* ignore */ }
+                    throw e;
+                } finally {
+                    try { connection.setAutoCommit(true); } catch (SQLException e) { /* ignore */ }
+                }
+                return null;
+            });
+        } catch (Throwable e) {
+            logger.error("Circuit breaker prevented or caught error during touchFiles ({} files): {}",
+                    hashes.size(), e.getMessage());
+        }
+    }
+
+    /**
+     * The condition on last_seen of a file not seen since before {@code cutoffDay}, a null last_seen standing for
+     * {@code migrationDay} ({@link #lastSeenMigrationDay}). One parameter, the cutoff day. The same for H2 and MySQL.
+     */
+    static String staleCondition(int migrationDay, int cutoffDay) {
+        return migrationDay < cutoffDay ? "(last_seen < ? OR last_seen IS NULL)" : "last_seen < ?";
+    }
+
+    /** SQL of the files of a window not seen since before a day ({@link #staleFiles}): after, last, cutoff day. */
+    static String staleFilesSql(int migrationDay, int cutoffDay) {
+        return "SELECT hash FROM files WHERE hash > ? AND hash <= ? AND " + staleCondition(migrationDay, cutoffDay)
+                + " ORDER BY hash";
+    }
+
+    /**
+     * SQL deleting {@code count} files by hash unless they were seen since a day ({@link #deleteStaleFiles}): the
+     * hashes, then the cutoff day.
+     */
+    static String deleteStaleFilesSql(int count, int migrationDay, int cutoffDay) {
+        return "DELETE FROM files WHERE hash IN (" + String.join(", ", java.util.Collections.nCopies(count, "?"))
+                + ") AND " + staleCondition(migrationDay, cutoffDay);
+    }
+
+    /** A window of the files table read by {@link #staleFiles}: the stale files of the window, as {@link NameWindow}. */
+    public record StaleWindow(List<String> hashes, String last, int scanned) {}
+
+    /**
+     * The files not seen since before {@code cutoffDay} among the {@code window} files following {@code after} in
+     * hash order ("": from the first). The table is read window after window by its primary key, as
+     * {@link #filesNamedLike} does: no index on last_seen to keep up to date on every write, and each query holds the
+     * database for a bounded time.
+     *
+     * @return null if the read failed
+     */
+    public StaleWindow staleFiles(String after, int window, int cutoffDay) {
+        try {
+            return locked(() -> {
+                int scanned;
+                String last;
+                try (PreparedStatement bounds = connection.prepareStatement("SELECT COUNT(*), MAX(hash) FROM "
+                        + "(SELECT hash FROM files WHERE hash > ? ORDER BY hash LIMIT ?) w")) {
+                    bindAfter(bounds, 1, after);
+                    bounds.setInt(2, window);
+                    try (ResultSet rs = bounds.executeQuery()) {
+                        rs.next();
+                        scanned = rs.getInt(1);
+                        last = scanned == 0 ? null : hash(rs, 2);
+                    }
+                }
+                if (last == null) return new StaleWindow(List.of(), null, 0);
+                List<String> stale = new ArrayList<>();
+                try (PreparedStatement select = connection.prepareStatement(
+                        staleFilesSql(lastSeenMigrationDay, cutoffDay))) {
+                    bindAfter(select, 1, after);
+                    setHash(select, 2, last);
+                    select.setInt(3, cutoffDay);
+                    try (ResultSet rs = select.executeQuery()) {
+                        while (rs.next()) stale.add(hash(rs, 1));
+                    }
+                }
+                return new StaleWindow(stale, last, scanned);
+            });
+        } catch (Throwable e) {
+            logger.error("Circuit breaker prevented or caught error during staleFiles: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Deletes files with their tags and source count (ON DELETE CASCADE), in one transaction, unless they were seen
+     * since {@code cutoffDay}: a file seen while the purge runs is kept.
+     *
+     * @return the number of files deleted, -1 if the delete failed
+     */
+    public int deleteStaleFiles(Collection<String> hashes, int cutoffDay) {
+        List<String> kept = new ArrayList<>(hashes.size());
+        for (String hash : hashes) {
+            if (hash != null && (!mysql || hashBytes(hash) != null)) kept.add(hash);
+        }
+        if (kept.isEmpty()) return 0;
+        try {
+            return locked(() -> {
+                try (PreparedStatement delete = connection.prepareStatement(
+                        deleteStaleFilesSql(kept.size(), lastSeenMigrationDay, cutoffDay))) {
+                    int i = 1;
+                    for (String hash : kept) setHash(delete, i++, hash);
+                    delete.setInt(i, cutoffDay);
+                    return delete.executeUpdate();
+                }
+            });
+        } catch (Throwable e) {
+            logger.error("Circuit breaker prevented or caught error during deleteStaleFiles ({} files): {}",
+                    kept.size(), e.getMessage());
+            return -1;
         }
     }
 

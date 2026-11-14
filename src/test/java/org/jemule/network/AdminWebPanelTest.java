@@ -554,6 +554,34 @@ class AdminWebPanelTest {
     }
 
     @Test
+    void statusAndOverviewShowTheLastFilePurge() throws Exception {
+        Server server = mock(Server.class);
+        when(server.getClientRegistry()).thenReturn(mock(ClientRegistry.class));
+        when(server.getFileIndex()).thenReturn(mock(FileIndex.class));
+        when(server.getIPFilter()).thenReturn(mock(IPFilter.class));
+        org.jemule.core.FilePurgeJob purge = new org.jemule.core.FilePurgeJob(null, null, () -> 90);
+        when(server.getFilePurgeJob()).thenReturn(purge);
+
+        try (AdminWebPanel panel = new AdminWebPanel(server)) {
+            panel.start(0);
+            HttpResponse<String> status = HttpClient.newHttpClient().send(HttpRequest.newBuilder(
+                    URI.create("http://127.0.0.1:" + panel.port() + "/api/status")).GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, status.statusCode(), status.body());
+            assertTrue(status.body().contains("\"lastFilePurgeAt\":0"), "never run: " + status.body());
+            assertTrue(status.body().contains("\"lastFilePurgeFiles\":0"), status.body());
+
+            HttpResponse<String> overview = HttpClient.newHttpClient().send(HttpRequest.newBuilder(
+                    URI.create("http://127.0.0.1:" + panel.port() + "/api/overview")).GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, overview.statusCode(), overview.body());
+            assertTrue(overview.body().contains("\"filePurge\":{\"state\":\"idle\",\"retentionDays\":90,"),
+                    overview.body());
+        }
+        assertEquals("after 90 days, never run", AdminInterface.filePurgeLine(purge.status()));
+    }
+
+    @Test
     void overviewAndHistoryGiveTheHeadlineFiguresAndTheSamples() throws Exception {
         Server server = mock(Server.class);
         ClientRegistry registry = mock(ClientRegistry.class);
