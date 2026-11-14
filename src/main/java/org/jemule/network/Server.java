@@ -58,8 +58,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Arrays;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Main server class that coordinates networking, security, and data management.
@@ -144,6 +146,10 @@ public class Server {
     /** Regular operations of the maintenance tier (server gossip polling). */
     private final java.util.concurrent.ScheduledExecutorService maintenance = ServerThreads.maintenanceScheduler("maintenance");
     private volatile boolean running = true;
+    /** Set by the first {@link #stop()}: the console 'stop' and the JVM shutdown hook both call it. */
+    private final AtomicBoolean stopping = new AtomicBoolean();
+    /** Released once the first {@link #stop()} has closed everything. */
+    private final CountDownLatch halted = new CountDownLatch(1);
 
     public byte[] getServerHash() {
         return serverHash;
@@ -1664,9 +1670,37 @@ public class Server {
     }
 
     /**
-     * Stops the server, shuts down executors, and closes the database.
+     * Stops the server, shuts down executors, and closes the database. Only the first call does it: a later or
+     * concurrent call (the JVM shutdown hook after the console 'stop') waits until that first call has finished.
      */
     public void stop() {
+        if (!stopping.compareAndSet(false, true)) {
+            // A second call (the shutdown hook after a console 'stop', whose end of the accept loop lets the JVM exit)
+            // waits for the first one: the JVM must not halt before the index and the database are closed
+            awaitHalted();
+            return;
+        }
+        try {
+            halt();
+        } finally {
+            halted.countDown();
+        }
+    }
+
+    private void awaitHalted() {
+        boolean interrupted = false;
+        while (true) {
+            try {
+                halted.await();
+                break;
+            } catch (InterruptedException e) {
+                interrupted = true;
+            }
+        }
+        if (interrupted) Thread.currentThread().interrupt();
+    }
+
+    private void halt() {
         running = false;
         stopAdminWeb = true;
         ServerSocket consoleSocket = adminSocket;
