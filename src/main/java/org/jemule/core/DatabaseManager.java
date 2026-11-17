@@ -773,6 +773,12 @@ public class DatabaseManager implements AutoCloseable {
             logger.warn("Database compaction failed: {}", e.getMessage());
         }
         try {
+            // SHUTDOWN COMPACT ended its session, but H2 reports a connection that is never closed as leaked
+            connection.close();
+        } catch (SQLException ignored) {
+            // already unusable
+        }
+        try {
             connection = connect();
             logger.info("Database compacted in {} s: {} MB", (System.currentTimeMillis() - start) / 1000,
                     file.length() / 1_048_576);

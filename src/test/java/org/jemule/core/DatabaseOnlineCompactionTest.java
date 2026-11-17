@@ -3,7 +3,10 @@ package org.jemule.core;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.Connection;
+import java.sql.DriverManager;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -40,6 +43,20 @@ class DatabaseOnlineCompactionTest {
             long compacted = db.fileSize();
             assertTrue(compacted < sparse * 0.3, "file " + sparse / 1024 + " KB -> " + compacted / 1024 + " KB");
             assertFalse(db.compactOnline(), "nothing left to compact");
+
+            // The connection that SHUTDOWN COMPACT ended is closed: once it is collected, the next connection to the
+            // database does not report it as leaked (error 90018) in the trace file
+            for (int i = 0; i < 5; i++) {
+                System.gc();
+                Thread.sleep(20);
+            }
+            try (Connection ignored = DriverManager.getConnection(
+                    "jdbc:h2:" + tempDir.resolve("db") + ";DB_CLOSE_ON_EXIT=FALSE", "sa", "")) {
+                // opening it is enough: H2 checks the collected connections there
+            }
+            Path trace = tempDir.resolve("db.trace.db");
+            assertFalse(Files.exists(trace) && Files.readString(trace).contains("90018"),
+                    "a connection was left open by the compaction");
 
             // Reopened, complete and writable
             db.saveFile(new FileMetadata(String.format("%032x", FILES), "after the compaction.avi", 1000, "Video", List.of()));

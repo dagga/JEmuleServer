@@ -48,6 +48,8 @@ public class Main {
     public static final int ESERVER_VERSION_INT = (17 << 16) | 16;
 
     public static void main(String[] args) {
+        // An error that ends a thread goes to the log file, not only to the console that may be gone
+        Thread.setDefaultUncaughtExceptionHandler(Main::logUncaught);
         String configPath = null;
         if (args.length > 0 && !args[0].chars().allMatch(Character::isDigit)) {
             configPath = args[0];
@@ -87,10 +89,43 @@ public class Main {
         }
         Runtime.getRuntime().addShutdownHook(new Thread(server::stop));
 
+        int status = serve(server::start);
+        // Exit with an error status (the shutdown hook still closes the database), so that a supervisor restarts it
+        if (status != 0) System.exit(status);
+    }
+
+    /** What {@link #serve} runs: {@link Server#start()}, which returns once the server stops. */
+    @FunctionalInterface
+    interface Startable {
+        void start() throws IOException;
+    }
+
+    /**
+     * Runs the server until it stops. An error that ends it, an OutOfMemoryError in the accept loop for example, is
+     * logged instead of only killing the main thread.
+     *
+     * @return the exit status: 0 when the server was stopped, 1 when it could not start or ended on an error
+     */
+    static int serve(Startable server) {
         try {
             server.start();
+            return 0;
         } catch (IOException e) {
             log.error("Startup failed: {}", e.getMessage(), e);
+            return 1;
+        } catch (Throwable e) {
+            log.error("The server stopped on a fatal error", e);
+            return 1;
+        }
+    }
+
+    /** Logs an error that ended a thread; printed on the console if even the logging fails. */
+    static void logUncaught(Thread thread, Throwable e) {
+        try {
+            log.error("Uncaught error in thread {}", thread.getName(), e);
+        } catch (Throwable logging) {
+            System.err.println("Uncaught error in thread " + thread.getName());
+            e.printStackTrace();
         }
     }
 
