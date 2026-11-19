@@ -62,6 +62,11 @@ public interface ClientContext {
         return getServer() != null ? getServer().getSearchExecutor() : null;
     }
 
+    /** Lugdunum NAT callback between LowID clients, null without a server. */
+    default org.jemule.network.natt.NatCallbackService getNatCallbackService() {
+        return getServer() != null ? getServer().getNatCallbackService() : null;
+    }
+
     /** Kad source searches for OP_GETSOURCES, null without a server or a Kad node. */
     default org.jemule.network.KadSourceService getKadSourceService() {
         return getServer() != null ? getServer().getKadSourceService() : null;

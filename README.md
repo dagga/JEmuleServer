@@ -582,6 +582,15 @@ client, which must not obtain the HighID in its place.
 
 The server therefore needs to open outgoing TCP connections to the clients.
 
+Two LowID clients cannot call each other back. With `natCallback=true` (off by default), the server runs Lugdunum
+eserver's NAT callback between two LowID clients of this server (aMule master, `docs/NAT_T_Protocol.md`, "Lugdunum
+NAT callback"): a client that sets `0x1000` in `CT_SERVER_FLAGS` at login gets an odd LowID and a 24-byte
+`OP_IDCHANGE`, other clients get even LowIDs. Such a client may send the server its UDP endpoint (`0x9F`, believed
+only from its login IP) and ask, with a server-key obfuscated UDP `0xA6`, to be called back by another such client:
+the target gets the requester's UDP endpoint by TCP `0x37`, or by UDP `0xA7` when it sent its own `0xA6` less than
+20 s before, and punches it. A requester gets 10 requests at once then one a second, a target 20 notices then one a
+second. The server sends nothing else, and no file data.
+
 ## Kademlia Search Bridge
 
 The Kad network holds far more files than a single server, but nothing moderates it. JEmuleServer embeds a Kad node

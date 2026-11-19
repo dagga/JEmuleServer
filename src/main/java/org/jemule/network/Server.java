@@ -26,6 +26,9 @@ import org.jemule.config.ConfigParameter;
 import org.jemule.config.ServerConfig;
 import org.jemule.core.*;
 import org.jemule.core.ServerThreads.Tier;
+import org.jemule.network.natt.NatCallbackService;
+import org.jemule.network.natt.NatOpcodes;
+import org.jemule.network.natt.UdpEndpoint;
 import org.jemule.protocol.Tag;
 import org.jemule.core.event.ClientEvent;
 import org.jemule.core.event.EventManager;
@@ -87,6 +90,9 @@ public class Server {
     private final FileIndex fileIndex;
     private final org.jemule.core.MetricsHistory metricsHistory;
     private volatile KadSourceService kadSourceService;
+    /** Lugdunum NAT callback between LowID clients (natCallback, hot): keepalives, requests and notices. */
+    private final NatCallbackService natCallbackService = new NatCallbackService(
+            () -> config.natTraversal().natCallback(), System::currentTimeMillis, new NatCallbackTransport());
     /** OFFERFILES v1 ceiling shared by all v1 connections, and its counters. */
     private final org.jemule.core.OfferFilesV1 offerFilesV1 = new org.jemule.core.OfferFilesV1();
     private final FloodProtector floodProtector;
@@ -166,6 +172,32 @@ public class Server {
     /** Search threads evaluating the local index searches of the clients. */
     public org.jemule.core.SearchExecutor getSearchExecutor() {
         return searchExecutor;
+    }
+
+    /** Lugdunum NAT callback between the LowID clients of this server. */
+    public NatCallbackService getNatCallbackService() {
+        return natCallbackService;
+    }
+
+    /** Notices of the NAT callback: TCP on the target's server connection, UDP obfuscated with its server key. */
+    private final class NatCallbackTransport implements NatCallbackService.Transport {
+        @Override
+        public void sendTcp(long clientId, Packet packet) {
+            registry.sendTo(clientId, packet);
+        }
+
+        @Override
+        public void sendUdp(java.net.DatagramSocket socket, UdpEndpoint to, byte[] datagram) {
+            int key = org.jemule.security.UdpObfuscation.serverKeyFor(to.address());
+            UdpReply reply = new UdpReply(socket, to.address(), to.port(),
+                    plain -> org.jemule.security.UdpObfuscation.encryptForClient(plain, key));
+            try {
+                Server.this.sendUdp(reply, datagram, "NAT callback");
+            } catch (IOException e) {
+                log.debug("NAT callback notice to {}:{} failed: {}", to.address().getHostAddress(), to.port(),
+                        e.getMessage());
+            }
+        }
     }
 
     /** Kad source searches for the clients' OP_GETSOURCES; finds nothing while no Kad node runs. */
@@ -1428,6 +1460,12 @@ public class Server {
         } else if (opcode == (byte) 0xA2) { // OP_SERVER_DESC_REQ [<challenge 4>]
             int challenge = recv.length >= 6 ? ByteBuffer.wrap(recv, 2, 4).order(ByteOrder.LITTLE_ENDIAN).getInt() : 0;
             sendUdp(reply, buildServerDescPacket(challenge, reply.address()), "DESC");
+        } else if (opcode == NatOpcodes.OP_NATT_KEEPALIVE) { // <user hash 16>, plain to port+4 or obfuscated
+            natCallbackService.handleKeepalive(java.util.Arrays.copyOfRange(recv, 2, recv.length), reply.address(),
+                    reply.port(), reply.obfuscator() != null);
+        } else if (opcode == NatOpcodes.OP_NAT_CALLBACKREQUEST) { // <target ID 4><requester ID 4>, obfuscated
+            natCallbackService.handleCallbackRequest(java.util.Arrays.copyOfRange(recv, 2, recv.length),
+                    reply.address(), reply.port(), reply.obfuscator() != null, reply.socket());
         } else if (serverGossip.handle(reply.socket(), reply.address(), reply.port(), recv,
                 reply.obfuscator(), publicIp, config.port(), System.currentTimeMillis())) {
             return;
