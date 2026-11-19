@@ -28,9 +28,18 @@ import java.util.List;
  * eD2K order for a HighID, a LowID of this server otherwise), the TCP port, and for _OBFU the connect options and the
  * user hash.
  *
+ * An IPv6 source record (doc/ipv6.md) has the ID {@code 0xFFFFFFFF} and its 16-byte address, written after every other
+ * field; only {@link org.jemule.network.ipv6.Ipv6SourceService} makes one, for a client that reads them.
+ *
  * @param userHash null when unknown: then it is not sent, even to a client asking with _OBFU
+ * @param ipv6     the IPv6 address of an IPv6 source record, null for an eD2K ID
  */
-public record FoundSource(long id, int port, int cryptOptions, byte[] userHash) {
+public record FoundSource(long id, int port, int cryptOptions, byte[] userHash, byte[] ipv6) {
+
+    /** A source with an eD2K ID. */
+    public FoundSource(long id, int port, int cryptOptions, byte[] userHash) {
+        this(id, port, cryptOptions, userHash, null);
+    }
 
     /** A client of this server. */
     public static FoundSource of(ClientState s) {
@@ -41,8 +50,8 @@ public record FoundSource(long id, int port, int cryptOptions, byte[] userHash) 
         return clients.stream().map(FoundSource::of).toList();
     }
 
-    /** Same ID and port: the same source for the client. */
+    /** Same ID (or IPv6 address) and port: the same source for the client. */
     public boolean sameEndpoint(FoundSource other) {
-        return id == other.id && port == other.port;
+        return id == other.id && port == other.port && java.util.Arrays.equals(ipv6, other.ipv6);
     }
 }

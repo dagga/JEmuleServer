@@ -67,6 +67,11 @@ public interface ClientContext {
         return getServer() != null ? getServer().getKadSourceService() : null;
     }
 
+    /** IPv6 source records: login tag, OP_IPV6_UPDATE, dial-back and records (doc/ipv6.md). */
+    default org.jemule.network.ipv6.Ipv6SourceService getIpv6SourceService() {
+        return org.jemule.network.ipv6.Ipv6SourceService.DEFAULT;
+    }
+
     /** Server-wide OFFERFILES v1 ceiling and counters. */
     default org.jemule.core.OfferFilesV1 getOfferFilesV1() {
         return getServer() != null ? getServer().getOfferFilesV1() : DETACHED_OFFER_FILES;

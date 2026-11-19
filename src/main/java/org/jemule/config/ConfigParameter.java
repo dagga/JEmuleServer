@@ -73,6 +73,8 @@ public enum ConfigParameter {
     PUBLIC_IP("publicIp", Type.STRING, Scope.RESTART, 0, 0, "Public IPv4 address (empty = auto-detect)"),
     LOW_ID_CHECK_TIMEOUT_SECONDS("lowIdCheckTimeoutSeconds", Type.INTEGER, Scope.HOT, 0, 300,
             "HighID test timeout in seconds (0 = every client gets LowID)"),
+    IPV6_SOURCES("ipv6Sources", Type.BOOLEAN, Scope.HOT, 0, 0,
+            "Publish the IPv6 address a LowID client proved reachable as a source, to clients reading IPv6 sources (new logins; off without IPv6 in the JVM)"),
     CHILD_ABUSE_KEYWORDS_PATH("childAbuseKeywordsPath", Type.STRING, Scope.HOT, 0, 0,
             "Child abuse keyword file (empty = embedded list)"),
     ADMIN_PORT("adminPort", Type.INTEGER, Scope.ADMIN, 0, 65535, "Admin console TCP port (0 = disabled)"),

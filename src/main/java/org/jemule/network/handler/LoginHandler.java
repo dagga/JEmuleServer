@@ -70,12 +70,13 @@ public class LoginHandler {
         sendServerMessage(context, out, "server version " + Main.ESERVER_VERSION);
 
         negotiateOfferFiles(context, state);
+        context.getIpv6SourceService().onLogin(context);
         sendServerIdent(context, out);
         
         // --- Corrected ID_CHANGE packet construction matching eMule's expectations ---
         // eMule's ServerSocket.cpp expects: <NEW_ID 4>[<server_flags 4>][<pad 4>][<reported_ip 4>][<obf_tcp_port 4>]
         // Flags: 0x01=COMPRESSION, 0x08=NEWTAGS, 0x10=UNICODE, 0x80=TYPETAGINTEGER, 0x100=LARGEFILES, 0x200=UDPOBFUSCATION, 0x400=TCPOBFUSCATION
-        int serverFlags = Tag.SERVER_TCP_FLAGS;
+        int serverFlags = Tag.SERVER_TCP_FLAGS | org.jemule.network.ipv6.Ipv6SourceService.tcpFlags(context.getConfig());
 
         ByteBuffer idChange = ByteBuffer.allocate(20).order(ByteOrder.LITTLE_ENDIAN);
         idChange.putInt((int) clientId);
@@ -98,6 +99,7 @@ public class LoginHandler {
         if (context.getServer() != null) {
             context.getServer().onClientLoggedIn(state);
         }
+        context.getIpv6SourceService().afterLogin(context);
     }
 
     /**
@@ -145,7 +147,7 @@ public class LoginHandler {
      * Parses OP_LOGINREQUEST as sent by CServerConnect::ConnectionEstablished:
      * <pre>&lt;userhash 16&gt;&lt;clientID 4&gt;&lt;listen port 2&gt;&lt;tagcount 4&gt;
      *   CT_NAME (string), CT_VERSION (uint32), CT_SERVER_FLAGS (uint32 SRVCAP_*), CT_EMULE_VERSION (uint32)
-     *   [offerfiles_v (string-named uint32, OFFERFILES v1 request)]</pre>
+     *   [offerfiles_v (string-named uint32, OFFERFILES v1 request)] [CT_MOD_IP_V6 0xAE (hash: IPv6 16, doc/ipv6.md)]</pre>
      * A malformed or short packet is tolerated: the corresponding fields keep their defaults.
      */
     public static void parseLoginRequest(ClientState state, byte[] data) {
@@ -168,6 +170,7 @@ public class LoginHandler {
                 case Tag.NAME_EMULE_VERSION -> { if (tag.isInt()) state.setEmuleVersion(tag.unsignedValue()); }
                 // Highest OFFERFILES version the client implements; any other type than uint32 means a legacy client
                 case Tag.NAME_OFFERFILES_VERSION -> { if (tag.type() == Tag.TYPE_INTEGER) state.setOfferFilesRequested(tag.unsignedValue()); }
+                case Tag.NAME_IPV6 -> { if (tag.type() == Tag.TYPE_HASH) state.ipv6().setLoginTag((byte[]) tag.value()); }
                 default -> log.debug("Ignoring unknown login tag 0x{}", tag.name().length() == 1 ? Integer.toHexString(tag.name().charAt(0)) : tag.name());
             }
         }
@@ -193,7 +196,12 @@ public class LoginHandler {
         new Packet(Packet.PROTOCOL_ED2K, OpCode.SERVER_MESSAGE.value, buf.array()).write(out, context.getState() != null && context.getState().isZlibSupported());
     }
 
-    private void sendServerIdent(ClientContext context, OutputStream out) throws IOException {
+    private static void sendServerIdent(ClientContext context, OutputStream out) throws IOException {
+        serverIdent(context).write(out, context.getState() != null && context.getState().isZlibSupported());
+    }
+
+    /** OP_SERVERIDENT for the client of the context: at login, and again with each IPv6 verdict (doc/ipv6.md). */
+    public static Packet serverIdent(ClientContext context) {
         byte[] hash = new byte[16];
         if (context.getServer() != null) {
             System.arraycopy(context.getServer().getServerHash(), 0, hash, 0, 16);
@@ -251,6 +259,8 @@ public class LoginHandler {
             tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_OFFERFILES_BATCH_MAX, offerFiles.batchMax()));
             tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_OFFERFILES_MIN_INTERVAL_MS, offerFiles.minIntervalMs()));
         }
+        Tag ipv6Status = context.getIpv6SourceService().statusTag(context);
+        if (ipv6Status != null) tags.add(ipv6Status);
 
         ByteBuffer buf = ByteBuffer.allocate(4096).order(ByteOrder.LITTLE_ENDIAN);
         buf.put(hash);
@@ -271,8 +281,7 @@ public class LoginHandler {
         buf.flip();
         byte[] response = new byte[buf.remaining()];
         buf.get(response);
-
-        new Packet(Packet.PROTOCOL_ED2K, OpCode.SERVER_IDENT.value, response).write(out, context.getState() != null && context.getState().isZlibSupported());
+        return new Packet(Packet.PROTOCOL_ED2K, OpCode.SERVER_IDENT.value, response);
     }
 
     public static void sendServerStatus(ClientContext context, OutputStream out) throws IOException {

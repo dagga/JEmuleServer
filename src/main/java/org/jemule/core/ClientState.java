@@ -116,6 +116,11 @@ public final class ClientState {
 
     public java.util.concurrent.atomic.AtomicBoolean softLimitReported() { return softLimitReported; }
 
+    /** IPv6 address the client announced (CT_MOD_IP_V6, OP_IPV6_UPDATE) and the server's verdict on it. */
+    private final org.jemule.network.ipv6.Ipv6Session ipv6 = new org.jemule.network.ipv6.Ipv6Session();
+
+    public org.jemule.network.ipv6.Ipv6Session ipv6() { return ipv6; }
+
     /** Kad source searches started for this client: file hash to time, the 64 most recent. */
     private final java.util.Map<String, Long> kadSourceSearches = new java.util.LinkedHashMap<>() {
         @Override

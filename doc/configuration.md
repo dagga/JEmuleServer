@@ -9,6 +9,7 @@ Options not set in that file use the defaults built into the server. Keep runtim
 | Area | Options | Purpose |
 |---|---|---|
 | Network | `port`, `publicIp`, `maxPacketSize`, `tcpKeepAliveTimeoutInSeconds`, `heartbeatIntervalSeconds`, `lowIdCheckTimeoutSeconds` | Listener, advertised address, packet size and connection/liveness behavior. |
+| IPv6 sources | `ipv6Sources` | Off by default, hot (new logins). Publishes the IPv6 address a LowID client proved reachable (dialled back, user hash checked) as a source to the clients that read IPv6 source records; see [IPv6](ipv6.md). Off when the JVM has no IPv6 (`java.net.preferIPv4Stack`). |
 | Capacity | `maxUsers`, `maxFiles`, `maxFilesPerUser`, `maxSourcesPerFile`, `maxSearchResults` | Limits for clients, indexed files, published files, source replies and search results. |
 | Index | `indexRefreshSeconds` | Seconds between two refreshes of the file index (default `10`, 1 to 600, applied without restart): new files, removals and source counts reach the searches at most that late. Each refresh following source count changes rewrites the source counts of every index segment holding a changed file, so a shorter period costs more CPU on a large index. Lookups by hash see the writes at once. |
 | Retention | `fileRetentionDays` | Days a file nobody published nor found is kept (default 180, hot; `0` = never purged). Once a day, the files whose last-seen day is older are deleted from the database and the index, in small batches; see [File retention](../README.md#file-retention). |
