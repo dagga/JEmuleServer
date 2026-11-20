@@ -591,6 +591,14 @@ the target gets the requester's UDP endpoint by TCP `0x37`, or by UDP `0xA7` whe
 20 s before, and punches it. A requester gets 10 requests at once then one a second, a target 20 notices then one a
 second. The server sends nothing else, and no file data.
 
+With `natCallbackToken=true` as well (off by default), a client whose UDP leaves from another public IP than its TCP
+(carrier NAT, VPN) can still give its UDP endpoint (ed2k-server 0.9.88; aMule master, "Split TCP and UDP exit"). A
+client that may send `0x9F` (`0x1000` or `0x100000` in `CT_SERVER_FLAGS`, or a UDP port in `CT_EMULE_UDPPORTS`) gets
+16 random bytes in `OP_SERVERIDENT` (`0xAC`, with `0xA9` = 1), over TCP only and new at every login. Its 36-byte
+`0x9F` `<user hash 16><counter 4><mac 16>`, the mac being the first 16 bytes of HMAC-SHA256 keyed with the token over
+the hash and counter, is then believed from any address when the counter rises; a bad mac or a replayed counter moves
+nothing. The token itself is never taken over UDP.
+
 ## Kademlia Search Bridge
 
 The Kad network holds far more files than a single server, but nothing moderates it. JEmuleServer embeds a Kad node

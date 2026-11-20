@@ -28,8 +28,11 @@ import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.LongAdder;
 import java.util.function.BooleanSupplier;
 import java.util.function.LongSupplier;
 
@@ -42,7 +45,9 @@ import java.util.function.LongSupplier;
  *   and the 24-byte OP_IDCHANGE, and is {@link #register registered} here: only registered clients may ask for a
  *   callback or be called back.</li>
  *   <li>Keepalive: UDP {@code 0x9F <user hash 16>} from the client UDP socket. Believed only from the client's login
- *   IP; its source is the client's public UDP endpoint, kept {@link #KEEPALIVE_TTL_MS} ({@link #endpointOf}).</li>
+ *   IP; its source is the client's public UDP endpoint, kept {@link #KEEPALIVE_TTL_MS} ({@link #endpointOf}). With
+ *   natCallbackToken, the proof of the session token ({@link KeepaliveToken}) is believed from any address
+ *   ({@link #acceptKeepalive}).</li>
  *   <li>Request: UDP {@code 0xA6 <target ID 4><requester ID 4>}, server-key obfuscated, sent from the client UDP
  *   socket to the server's obfuscation UDP port: its source is the requester's UDP endpoint.</li>
  *   <li>Notice to the target: {@code <requester IP 4><requester UDP port 2><requester ID 4><crypt 1>[<user hash 16>]},
@@ -78,6 +83,8 @@ public final class NatCallbackService {
     private static final int NOTICE_WITH_HASH = 0x80;
     /** {@code <IP 4><UDP port 2><ID 4><crypt 1><user hash 16>}. */
     private static final int NOTICE_UDP_LENGTH = 27;
+    /** Size of ed2k-server 0.9.87's retired 0x9F token form, {@code <user hash 16><token 16>}. */
+    static final int TOKEN_FORM_SIZE = HASH_LENGTH + KeepaliveToken.TOKEN_SIZE;
 
     /** Where notices go. */
     public interface Transport {
@@ -115,6 +122,8 @@ public final class NatCallbackService {
         volatile Seen keepalive;
         /** Last 0xA6 sent by this client from its login address. */
         volatile Seen request;
+        /** Whether an obfuscated 0x9F was believed: from then on a plain user hash alone is not. */
+        volatile boolean obfuscatedKeepalive;
 
         Session(ClientState client, long now) {
             this.client = client;
@@ -133,8 +142,18 @@ public final class NatCallbackService {
     }
 
     private final BooleanSupplier enabled;
+    private final BooleanSupplier tokenEnabled;
     private final LongSupplier clock;
     private final Transport transport;
+    /** Session tokens of the 0x9F proofs, by connection. */
+    private final KeepaliveToken tokens;
+
+    // 0x9F counters of ed2k-server 0.9.88 (natt_9f_*)
+    private final LongAdder proofs = new LongAdder();
+    private final LongAdder proofsOtherIp = new LongAdder();
+    private final LongAdder proofsBad = new LongAdder();
+    private final LongAdder proofsReplayed = new LongAdder();
+    private final LongAdder tokenFormsIgnored = new LongAdder();
     private final ConcurrentHashMap<Long, Session> sessions = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<HashKey, Session> byHash = new ConcurrentHashMap<>();
 
@@ -144,9 +163,23 @@ public final class NatCallbackService {
      * @param transport where notices go
      */
     public NatCallbackService(BooleanSupplier enabled, LongSupplier clock, Transport transport) {
+        this(enabled, () -> false, clock, transport, new KeepaliveToken());
+    }
+
+    /**
+     * @param enabled      whether the callback is on (natCallback), read at each datagram
+     * @param tokenEnabled whether the 0x9F session token is on (natCallbackToken), read at each login and datagram
+     * @param clock        current time in milliseconds
+     * @param transport    where notices go
+     * @param tokens       the session tokens
+     */
+    public NatCallbackService(BooleanSupplier enabled, BooleanSupplier tokenEnabled, LongSupplier clock,
+                              Transport transport, KeepaliveToken tokens) {
         this.enabled = enabled;
+        this.tokenEnabled = tokenEnabled;
         this.clock = clock;
         this.transport = transport;
+        this.tokens = tokens;
     }
 
     public boolean isEnabled() {
@@ -169,9 +202,32 @@ public final class NatCallbackService {
         byHash.put(HashKey.of(client.userHash(), 0), session);
     }
 
-    /** Forgets a client that disconnected; nothing if it never opted in. */
+    /**
+     * Whether {@code client} may send 0x9F, so that it gets the session token: SRVCAP_NATTRAVERSAL (0x1000) or
+     * SRVCAP_HOLEPUNCH_EXTENSION (0x100000) in CT_SERVER_FLAGS, or a UDP port in CT_EMULE_UDPPORTS (0xF9), as
+     * ed2k-server 0.9.88. Never any other client: an unsolicited tag in OP_SERVERIDENT makes some eMule mods drop the
+     * connection.
+     */
+    public static boolean mayKeepalive(ClientState client) {
+        if (client == null) return false;
+        return (client.serverCaps() & (ClientState.SRVCAP_NATTRAVERSAL | ClientState.SRVCAP_HOLEPUNCH_EXTENSION)) != 0
+                || client.emuleUdpPorts() != 0;
+    }
+
+    /**
+     * Draws the session token of this login (ST_NATT_TOKEN), new at every login, for a client that
+     * {@link #mayKeepalive may send 0x9F} while natCallback and natCallbackToken are on; null otherwise. Only a client
+     * {@link #register registered} for the callback can then prove it: the endpoint of any other has no use here.
+     */
+    public byte[] issueToken(ClientState client) {
+        if (!enabled.getAsBoolean() || !tokenEnabled.getAsBoolean() || !mayKeepalive(client)) return null;
+        return tokens.issue(client.connectionId());
+    }
+
+    /** Forgets a client that disconnected, and its session token; nothing else if it never opted in. */
     public void unregister(ClientState client) {
         if (client == null) return;
+        tokens.forget(client.connectionId());
         sessions.computeIfPresent(client.clientId(), (id, s) -> s.client == client ? null : s);
         byHash.computeIfPresent(HashKey.of(client.userHash(), 0), (k, s) -> s.client == client ? null : s);
     }
@@ -205,7 +261,8 @@ public final class NatCallbackService {
     }
 
     /**
-     * UDP 0x9F (OP_NATT_KEEPALIVE) {@code <user hash 16>} from {@code ip:port}, payload after the opcode. The
+     * UDP 0x9F (OP_NATT_KEEPALIVE) {@code <user hash 16>[<counter 4><mac 16>]} from {@code ip:port}, payload after
+     * the opcode. The
      * session is found by its user hash; {@link #acceptKeepalive} decides whether it is believed.
      *
      * @return whether it was accepted
@@ -224,13 +281,61 @@ public final class NatCallbackService {
     }
 
     /**
-     * Whether a 0x9F of {@code session} is believed. A user hash is no secret, so the hash form (16 bytes; longer
-     * payloads count as the hash alone) is believed only from the IPv4 the client logged in from (ed2k-server
-     * README, "Implementing a compatible client", step 2).
+     * Whether a 0x9F of {@code session} is believed (ed2k-server 0.9.88, issue 40 of andrey23127/ed2k-server; aMule
+     * master a6d6290be0, docs/NAT_T_Protocol.md, "Split TCP and UDP exit"):
+     * <ul>
+     *   <li>the proof of the session token, {@code <user hash 16><counter 4 LE><mac 16>} ({@link KeepaliveToken}),
+     *   from a session holding one while natCallbackToken is on: believed from any IPv4, plain or obfuscated, when the
+     *   mac is right and the counter above the last accepted; a bad mac or a replayed counter is no keepalive at all,
+     *   even from the login IP;</li>
+     *   <li>anything else is the user hash alone (16 bytes; longer payloads, ed2k-server 0.9.87's
+     *   {@code <user hash 16><token 16>} included, count as the hash alone: the token is never taken over UDP). A user
+     *   hash is no secret, so it is believed only from the IPv4 the client logged in from (ed2k-server README,
+     *   "Implementing a compatible client", step 2), and once an obfuscated one was believed, only obfuscated: only
+     *   the server UDP key makes one.</li>
+     * </ul>
      */
     boolean acceptKeepalive(Session session, byte[] payload, InetAddress ip, boolean obfuscated) {
         long source = ClientState.ipToLong(ip);
-        return source != 0 && source == ClientState.ipToLong(session.client.address());
+        boolean loginIp = source != 0 && source == ClientState.ipToLong(session.client.address());
+        int connectionId = session.client.connectionId();
+        if (payload.length == KeepaliveToken.PROOF_SIZE && tokenEnabled.getAsBoolean() && tokens.holds(connectionId)) {
+            KeepaliveToken.Verdict verdict = tokens.verify(connectionId, payload);
+            switch (verdict) {
+                case ACCEPTED -> {
+                    proofs.increment();
+                    if (!loginIp) proofsOtherIp.increment();
+                }
+                case REPLAY -> proofsReplayed.increment();
+                default -> proofsBad.increment();
+            }
+            if (verdict != KeepaliveToken.Verdict.ACCEPTED) {
+                log.debug("NAT keepalive proof of LowID {} from {}: {}", session.lowId, ip.getHostAddress(), verdict);
+            }
+            // Only IPv4 endpoints are handed out
+            return verdict == KeepaliveToken.Verdict.ACCEPTED && source != 0;
+        }
+        if (payload.length == TOKEN_FORM_SIZE) tokenFormsIgnored.increment();
+        if (!loginIp) return false;
+        if (obfuscated) {
+            session.obfuscatedKeepalive = true;
+            return true;
+        }
+        return !session.obfuscatedKeepalive;
+    }
+
+    /**
+     * The 0x9F counters of ed2k-server 0.9.88: proofs believed, believed from another IP than the login's, bad ones,
+     * replayed ones, and 0.9.87 token forms read as the user hash alone.
+     */
+    public Map<String, Long> keepaliveCounters() {
+        Map<String, Long> counters = new LinkedHashMap<>();
+        counters.put("proof", proofs.sum());
+        counters.put("proof_other_ip", proofsOtherIp.sum());
+        counters.put("proof_bad", proofsBad.sum());
+        counters.put("proof_replay", proofsReplayed.sum());
+        counters.put("token_form_ignored", tokenFormsIgnored.sum());
+        return counters;
     }
 
     /**
