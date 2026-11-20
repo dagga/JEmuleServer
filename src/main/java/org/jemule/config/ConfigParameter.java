@@ -130,7 +130,9 @@ public enum ConfigParameter {
     RELAY_CLIENTS("relayClients", Type.STRING, Scope.HOT, 0, 0,
             "Relay servers (host names, IPs / CIDR blocks) allowed to feed this index through /api/relay/files (relayToken)"),
     NAT_CALLBACK("natCallback", Type.BOOLEAN, Scope.HOT, 0, 0,
-            "Lugdunum NAT callback between two LowID clients of this server (opt-in clients, new logins)");
+            "Lugdunum NAT callback between two LowID clients of this server (opt-in clients, new logins)"),
+    NAT_CALLBACK_CROSS_SERVER("natCallbackCrossServer", Type.BOOLEAN, Scope.HOT, 0, 0,
+            "NAT callback for clients of other servers (0xA6 with requester ID 0, UDP flag 0x100000); needs natCallback");
 
     /** Value type of a parameter, with its parsing and formatting rules. */
     public enum Type {

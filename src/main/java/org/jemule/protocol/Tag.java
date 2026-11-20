@@ -117,6 +117,13 @@ public record Tag(byte type, String name, Object value) {
     public static final int UDPFLG_TCPOBFUSCATION = 0x400;
     public static final int UDPFLG_EXT_GETSOURCES2 = 0x20; // Added for reference
     public static final int UDPFLG_EXT_GETFILES = 0x02;    // OP_GLOBSEARCHREQ2 / OP_GLOBSEARCHREQ3 supported
+    /**
+     * SRV_UDPFLG_FOREIGN_NAT_CALLBACK: the server takes a cross-server NAT callback, an OP_NAT_CALLBACKREQUEST (0xA6)
+     * with requester ID 0 from a client logged in to another server (ed2k-server 0.9.86; aMule master a6d6290be0,
+     * docs/NAT_T_Protocol.md "Wire values"). Not to be confused with SRVCAP_HOLEPUNCH_EXTENSION in CT_SERVER_FLAGS nor
+     * SRV_TCPFLG_HOLEPUNCH_EXTENSION in OP_IDCHANGE, which have the same value. Set only with natCallbackCrossServer.
+     */
+    public static final int UDPFLG_FOREIGN_CALLBACK = 0x100000;
 
     /** TCP capabilities announced in OP_IDCHANGE (SRV_TCPFLG_* in eMule server.h). */
     public static final int SERVER_TCP_FLAGS = TCPFLG_COMPRESSION | TCPFLG_NEWTAGS | TCPFLG_UNICODE | TCPFLG_TYPETAGINTEGER
@@ -124,6 +131,11 @@ public record Tag(byte type, String name, Object value) {
     /** UDP capabilities announced in ST_UDPFLAGS / OP_GLOBSERVSTATRES (SRV_UDPFLG_* in eMule server.h). */
     public static final int SERVER_UDP_FLAGS = UDPFLG_EXT_GETSOURCES | UDPFLG_EXT_GETFILES | UDPFLG_NEWTAGS | UDPFLG_UNICODE
             | UDPFLG_LARGEFILES | UDPFLG_UDPOBFUSCATION | UDPFLG_TCPOBFUSCATION;
+
+    /** UDP capabilities announced in ST_UDPFLAGS / OP_GLOBSERVSTATRES, with the cross-server NAT callback when taken. */
+    public static int serverUdpFlags(boolean foreignCallback) {
+        return foreignCallback ? SERVER_UDP_FLAGS | UDPFLG_FOREIGN_CALLBACK : SERVER_UDP_FLAGS;
+    }
 
 
     /** True if this tag holds an integer value (UINT8/16/32/64). */

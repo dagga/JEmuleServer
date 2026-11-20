@@ -92,7 +92,8 @@ public class Server {
     private volatile KadSourceService kadSourceService;
     /** Lugdunum NAT callback between LowID clients (natCallback, hot): keepalives, requests and notices. */
     private final NatCallbackService natCallbackService = new NatCallbackService(
-            () -> config.natTraversal().natCallback(), System::currentTimeMillis, new NatCallbackTransport());
+            () -> config.natTraversal().natCallback(), () -> config.natTraversal().natCallbackCrossServer(),
+            this::isIpBlocked, System::currentTimeMillis, new NatCallbackTransport());
     /** OFFERFILES v1 ceiling shared by all v1 connections, and its counters. */
     private final org.jemule.core.OfferFilesV1 offerFilesV1 = new org.jemule.core.OfferFilesV1();
     private final FloodProtector floodProtector;
@@ -174,9 +175,22 @@ public class Server {
         return searchExecutor;
     }
 
+    /** Whether the IP filter refuses {@code address}. */
+    private boolean isIpBlocked(InetAddress address) {
+        return ipFilter.isBlocked(address);
+    }
+
     /** Lugdunum NAT callback between the LowID clients of this server. */
     public NatCallbackService getNatCallbackService() {
         return natCallbackService;
+    }
+
+    /**
+     * UDP capabilities announced in ST_UDPFLAGS, OP_GLOBSERVSTATRES and OP_SERVER_DESC_RES: SRV_UDPFLG_* of eMule
+     * server.h, and SRV_UDPFLG_FOREIGN_NAT_CALLBACK while the cross-server NAT callback is taken.
+     */
+    public int udpFlags() {
+        return natCallbackService.udpFlags();
     }
 
     /** Notices of the NAT callback: TCP on the target's server connection, UDP obfuscated with its server key. */
@@ -1251,6 +1265,14 @@ public class Server {
                 log.warn("Server gossip polling failed: {}", e.getMessage());
             }
         }, 1, 1, TimeUnit.SECONDS);
+        // Cross-server NAT callback: the requests that waited for their target's 0x9F, and the answer resends
+        maintenance.scheduleWithFixedDelay(() -> {
+            try {
+                if (running) natCallbackService.tick();
+            } catch (RuntimeException e) {
+                log.warn("NAT callback timer failed: {}", e.getMessage());
+            }
+        }, 250, 250, TimeUnit.MILLISECONDS);
         // One index update worker per verified server, started and stopped as the servers are verified or dropped
         maintenance.scheduleWithFixedDelay(() -> {
             try {
@@ -1528,7 +1550,7 @@ public class Server {
         resp.putInt(config.maxUsers());
         resp.putInt(config.maxFilesPerUser()); // SoftFiles: distinct files indexed per client
         resp.putInt(org.jemule.network.handler.PublishHandler.HARD_FILES); // HardFiles: an OP_OFFERFILES must declare fewer
-        resp.putInt(Tag.SERVER_UDP_FLAGS);
+        resp.putInt(udpFlags());
         resp.putInt(registry.lowIdCount());
         resp.putShort((short) udpObfuscationPort()); // CServer::SetObfuscationPortUDP
         resp.putShort((short) config.port());        // CServer::SetObfuscationPortTCP
@@ -1692,7 +1714,7 @@ public class Server {
         int maxUsers = config.maxUsers();
 
         int tcpFlags = Tag.SERVER_TCP_FLAGS;
-        int udpFlags = Tag.SERVER_UDP_FLAGS;
+        int udpFlags = udpFlags();
 
         java.util.List<org.jemule.protocol.Tag> tags = new java.util.ArrayList<>();
         tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_HASH, "\u0011", getServerHash())); // ST_SERVERHASH (mapped to version tag ID in some contexts, but usually hash is first)

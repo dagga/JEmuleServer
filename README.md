@@ -591,6 +591,12 @@ the target gets the requester's UDP endpoint by TCP `0x37`, or by UDP `0xA7` whe
 20 s before, and punches it. A requester gets 10 requests at once then one a second, a target 20 notices then one a
 second. The server sends nothing else, and no file data.
 
+With `natCallbackCrossServer=true` as well (off by default), a client logged in to another server may ask this
+server to wake one of these LowIDs (`0xA6` with requester ID 0, ed2k-server's cross-server NAT callback), announced
+with `0x100000` in the UDP flags. The requester gets the target's UDP endpoint only when the target announced the
+hole-punch extension; requests are limited per source IP and per target. See
+[doc/nat-callback-cross-server.md](doc/nat-callback-cross-server.md).
+
 ## Kademlia Search Bridge
 
 The Kad network holds far more files than a single server, but nothing moderates it. JEmuleServer embeds a Kad node
