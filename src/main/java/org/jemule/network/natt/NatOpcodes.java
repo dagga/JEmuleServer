@@ -32,6 +32,22 @@ public final class NatOpcodes {
     public static final byte OP_NAT_CALLBACKREQUESTED = (byte) 0x37;
 
     /**
+     * OP_LOWID_HOLEPUNCH_REQUEST, server TCP, client to server: {@code <target ID 4><requester UDP port 2>}
+     * (ed2k-server README, "Implementing a compatible client").
+     */
+    public static final byte OP_LOWID_HOLEPUNCH_REQUEST = (byte) 0x60;
+
+    /**
+     * OP_LOWID_HOLEPUNCH_INFO, server TCP, server to both sides:
+     * {@code <peer IP 4><peer TCP port 2><peer UDP port 2><peer user hash 16><role 1><peer ID 4><peer crypt 1>}
+     * (30 bytes), then {@code <own IP 4><own UDP port 2>} (36 bytes) when the recipient's 0x9F endpoint is known.
+     */
+    public static final byte OP_LOWID_HOLEPUNCH_INFO = (byte) 0x61;
+
+    /** OP_LOWID_HOLEPUNCH_FAIL, server TCP, server to the requester: {@code <target ID 4><reason 1>}. */
+    public static final byte OP_LOWID_HOLEPUNCH_FAIL = (byte) 0x62;
+
+    /**
      * OP_NATT_KEEPALIVE, server UDP, client UDP socket to the server: {@code <user hash 16>}, or the proof form
      * {@code <user hash 16><counter 4><mac 16>}. Its source is the client's public UDP endpoint.
      */

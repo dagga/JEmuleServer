@@ -34,6 +34,7 @@ import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.function.BooleanSupplier;
+import java.util.function.LongFunction;
 import java.util.function.LongSupplier;
 
 /**
@@ -60,6 +61,11 @@ import java.util.function.LongSupplier;
  * since LowIDs start at 1. Only IPv4 endpoints are handed out: a client logged in over IPv6 can neither ask (its
  * datagrams never match its login IPv4) nor be answered by UDP.
  * Every refusal is silent, as on eserver: a requester cannot tell an unknown target from a lost datagram.
+ * <p>
+ * With natHolePunch, the same sessions and keepalives also serve ed2k-server's LowID hole punch (TCP 0x60 / 0x61 /
+ * 0x62) and its extension ({@link LowIdHolePunch}). A LowID that announced a client UDP port in CT_EMULE_UDPPORTS
+ * (0xF9) without opting in to the callback is then registered too, as a hole-punch session only: it may send 0x9F and
+ * be a hole-punch target, but it neither asks for nor receives the callback.
  */
 public final class NatCallbackService {
     private static final Logger log = LoggerFactory.getLogger(NatCallbackService.class);
@@ -91,11 +97,22 @@ public final class NatCallbackService {
         /** Sends {@code packet} on the server TCP connection of the client holding {@code clientId}. */
         void sendTcp(long clientId, Packet packet);
 
+        /** Sends {@code packet} on {@code client}'s own server TCP connection, if it is still open. */
+        default void sendTcp(ClientState client, Packet packet) {
+            sendTcp(client.clientId(), packet);
+        }
+
         /**
          * Sends {@code datagram} ({@code <0xE3><opcode><payload>}) to {@code to} from {@code socket}, obfuscated
          * with the server UDP key of {@code to}'s address (CEncryptedDatagramSocket::EncryptSendServer, server side).
          */
         void sendUdp(DatagramSocket socket, UdpEndpoint to, byte[] datagram);
+    }
+
+    /** Runs the hole punch's timers: the extension's wait for a 0x9F and the 0x61 resends. */
+    public interface Scheduler {
+        /** Runs {@code task} once, {@code delayMs} from now. */
+        void schedule(Runnable task, long delayMs);
     }
 
     /** What became of a 0xA6. Only the two FORWARDED values sent anything. */
@@ -116,8 +133,18 @@ public final class NatCallbackService {
     static final class Session {
         final ClientState client;
         final long lowId;
+        /** Opted in to Lugdunum's callback (0x1000): it may ask for it and be called back. */
+        final boolean lugdunum;
+        /** Announced the hole-punch extension: 0x100000 with 0x1000 in CT_SERVER_FLAGS. */
+        final boolean extension;
+        /** Callback requests and 0x60 as requester, notices and wakes as target: one allowance for both paths. */
         final TokenBucket asRequester;
         final TokenBucket asTarget;
+        /**
+         * The client UDP port it announced, given to hole-punch peers without a fresh 0x9F: the one of CT_EMULE_UDPPORTS
+         * (0xF9), replaced by the one of its own 0x60, else the source port of its first accepted 0x9F; 0 if unknown.
+         */
+        volatile int udpPort;
         /** Last accepted 0x9F. */
         volatile Seen keepalive;
         /** Last 0xA6 sent by this client from its login address. */
@@ -125,9 +152,13 @@ public final class NatCallbackService {
         /** Whether an obfuscated 0x9F was believed: from then on a plain user hash alone is not. */
         volatile boolean obfuscatedKeepalive;
 
-        Session(ClientState client, long now) {
+        Session(ClientState client, boolean lugdunum, long now) {
             this.client = client;
             this.lowId = client.clientId();
+            this.lugdunum = lugdunum;
+            int both = ClientState.SRVCAP_NATTRAVERSAL | ClientState.SRVCAP_HOLEPUNCH_EXTENSION;
+            this.extension = lugdunum && (client.serverCaps() & both) == both;
+            this.udpPort = clientUdpPort(client);
             this.asRequester = new TokenBucket(REQUESTER_BURST, REQUESTER_INTERVAL_MS, now);
             this.asTarget = new TokenBucket(TARGET_BURST, TARGET_INTERVAL_MS, now);
         }
@@ -147,6 +178,8 @@ public final class NatCallbackService {
     private final Transport transport;
     /** Session tokens of the 0x9F proofs, by connection. */
     private final KeepaliveToken tokens;
+    /** ed2k-server's LowID hole punch, over the same sessions. */
+    private final LowIdHolePunch holePunch;
 
     // 0x9F counters of ed2k-server 0.9.88 (natt_9f_*)
     private final LongAdder proofs = new LongAdder();
@@ -175,11 +208,29 @@ public final class NatCallbackService {
      */
     public NatCallbackService(BooleanSupplier enabled, BooleanSupplier tokenEnabled, LongSupplier clock,
                               Transport transport, KeepaliveToken tokens) {
+        this(enabled, tokenEnabled, () -> false, clock, transport, tokens, id -> null, (task, delayMs) -> { });
+    }
+
+    /**
+     * @param enabled          whether the callback is on (natCallback), read at each datagram
+     * @param tokenEnabled     whether the 0x9F session token is on (natCallbackToken), read at each login and datagram
+     * @param holePunchEnabled whether the LowID hole punch is on (natCallback and natHolePunch), read at each 0x60
+     * @param clock            current time in milliseconds
+     * @param transport        where notices and hole-punch answers go
+     * @param tokens           the session tokens
+     * @param clients          the client logged in under a server ID, or null: a hole-punch target need not be
+     *                         registered here to get its 0x62 reason
+     * @param scheduler        runs the hole punch's timers
+     */
+    public NatCallbackService(BooleanSupplier enabled, BooleanSupplier tokenEnabled, BooleanSupplier holePunchEnabled,
+                              LongSupplier clock, Transport transport, KeepaliveToken tokens,
+                              LongFunction<ClientState> clients, Scheduler scheduler) {
         this.enabled = enabled;
         this.tokenEnabled = tokenEnabled;
         this.clock = clock;
         this.transport = transport;
         this.tokens = tokens;
+        this.holePunch = new LowIdHolePunch(this, holePunchEnabled, clients, clock, transport, scheduler);
     }
 
     public boolean isEnabled() {
@@ -196,10 +247,35 @@ public final class NatCallbackService {
      * not recorded. A client logged in again under the same user hash replaces the older one.
      */
     public void register(ClientState client) {
+        register(client, true);
+    }
+
+    /**
+     * Records a LowID client: {@code lugdunum} when it opted in to the callback (0x1000), else as a hole-punch session
+     * only, for a client that announced a UDP port in CT_EMULE_UDPPORTS (0xF9) while the hole punch was on. Both may
+     * send 0x9F and be hole-punch targets; only the first may ask for or receive the callback.
+     */
+    public void register(ClientState client, boolean lugdunum) {
         if (client.isHighId() || client.clientId() == 0) return;
-        Session session = new Session(client, clock.getAsLong());
+        Session session = new Session(client, lugdunum, clock.getAsLong());
         sessions.put(session.lowId, session);
         byHash.put(HashKey.of(client.userHash(), 0), session);
+    }
+
+    /** The client UDP port of CT_EMULE_UDPPORTS (0xF9), {@code (Kad UDP port << 16) | client UDP port}; 0 if none. */
+    public static int clientUdpPort(ClientState client) {
+        return client.emuleUdpPorts() & 0xFFFF;
+    }
+
+    /** The session of {@code client}, if it is the one registered under its LowID. */
+    Session sessionOf(ClientState client) {
+        Session session = sessions.get(client.clientId());
+        return session != null && session.client == client ? session : null;
+    }
+
+    /** Whether {@code session} is still the one registered under its LowID. */
+    boolean isRegistered(Session session) {
+        return sessions.get(session.lowId) == session;
     }
 
     /**
@@ -217,7 +293,8 @@ public final class NatCallbackService {
     /**
      * Draws the session token of this login (ST_NATT_TOKEN), new at every login, for a client that
      * {@link #mayKeepalive may send 0x9F} while natCallback and natCallbackToken are on; null otherwise. Only a client
-     * {@link #register registered} for the callback can then prove it: the endpoint of any other has no use here.
+     * {@link #register registered} for the callback, or with natHolePunch for the hole punch (a LowID with a 0xF9 UDP
+     * port), can then prove it: the endpoint of any other has no use here.
      */
     public byte[] issueToken(ClientState client) {
         if (!enabled.getAsBoolean() || !tokenEnabled.getAsBoolean() || !mayKeepalive(client)) return null;
@@ -234,10 +311,11 @@ public final class NatCallbackService {
 
     /** Whether {@code lowId} is a client of this server that opted in to the callback. */
     public boolean isOptedIn(long lowId) {
-        return sessions.containsKey(lowId);
+        Session session = sessions.get(lowId);
+        return session != null && session.lugdunum;
     }
 
-    /** Clients registered for the callback. */
+    /** Clients registered for the callback or, with natHolePunch, for the hole punch only. */
     public int sessionCount() {
         return sessions.size();
     }
@@ -245,19 +323,26 @@ public final class NatCallbackService {
     /** The UDP endpoint of {@code lowId}'s last accepted 0x9F, if it is younger than {@link #KEEPALIVE_TTL_MS}. */
     public Optional<UdpEndpoint> endpointOf(long lowId) {
         Session session = sessions.get(lowId);
-        Seen seen = session == null ? null : session.keepalive;
-        if (seen == null || clock.getAsLong() - seen.at() > KEEPALIVE_TTL_MS) return Optional.empty();
-        return Optional.of(seen.endpoint());
+        return Optional.ofNullable(session == null ? null : freshKeepalive(session));
+    }
+
+    /** The UDP endpoint of {@code session}'s last accepted 0x9F, if younger than {@link #KEEPALIVE_TTL_MS}; else null. */
+    UdpEndpoint freshKeepalive(Session session) {
+        Seen seen = session.keepalive;
+        if (seen == null || clock.getAsLong() - seen.at() > KEEPALIVE_TTL_MS) return null;
+        return seen.endpoint();
     }
 
     /**
      * Records an accepted keepalive of {@code lowId} from {@code ip:port}, without any check: {@link #handleKeepalive}
-     * decides what is believed. Nothing for a client that did not opt in.
+     * decides what is believed. Nothing for a client that is not registered. A session that announced no UDP port
+     * takes this one (ed2k-server), which makes it a hole-punch target.
      */
     public void onKeepalive(long lowId, InetAddress ip, int port) {
         Session session = sessions.get(lowId);
         if (session == null || port < 1 || port > 0xFFFF) return;
         session.keepalive = new Seen(new UdpEndpoint(ip, port), clock.getAsLong(), null);
+        if (session.udpPort == 0) session.udpPort = port;
     }
 
     /**
@@ -277,6 +362,8 @@ public final class NatCallbackService {
             return false;
         }
         onKeepalive(session.lowId, ip, port);
+        // An extension coordination waiting for this client's fresh port goes ahead
+        holePunch.keepaliveAccepted(session);
         return true;
     }
 
@@ -373,7 +460,7 @@ public final class NatCallbackService {
         if (requesterId == 0) return handleForeignRequest(targetId, payload, ip, port, socket);
 
         Session requester = sessions.get(requesterId);
-        if (requester == null) return Outcome.UNKNOWN_REQUESTER;
+        if (requester == null || !requester.lugdunum) return Outcome.UNKNOWN_REQUESTER;
         long source = ClientState.ipToLong(ip);
         if (source == 0 || !fromRequester(requester, source)) return Outcome.WRONG_ADDRESS;
         long now = clock.getAsLong();
@@ -384,7 +471,7 @@ public final class NatCallbackService {
         if (targetId == requesterId) return Outcome.SAME_CLIENT;
 
         Session target = sessions.get(targetId);
-        if (target == null) return Outcome.TARGET_NOT_CAPABLE;
+        if (target == null || !target.lugdunum) return Outcome.TARGET_NOT_CAPABLE;
         byte[] body = notice(source, port, requesterId, requester.client.cryptOptions(), requester.client.userHash(),
                 target.client.cryptOptions());
         if (body == null) return Outcome.CRYPT_MISMATCH;
@@ -431,6 +518,32 @@ public final class NatCallbackService {
         }
         transport.sendTcp(target.lowId, new Packet(Packet.PROTOCOL_ED2K, NatOpcodes.OP_NAT_CALLBACKREQUESTED, body));
         return Outcome.FORWARDED_TCP;
+    }
+
+    /** Whether the LowID hole punch is on (natCallback and natHolePunch). */
+    public boolean isHolePunchEnabled() {
+        return holePunch.isEnabled();
+    }
+
+    /**
+     * TCP 0x60 (OP_LOWID_HOLEPUNCH_REQUEST) {@code <target ID 4><requester UDP port 2>} from {@code client}, payload
+     * after the opcode: ed2k-server's LowID hole punch ({@link LowIdHolePunch}). Answered by 0x61 to both sides or
+     * 0x62 to the requester, after a 0x37 wake and the target's 0x9F between two extension clients.
+     */
+    public void handleHolePunchRequest(ClientState client, byte[] payload) {
+        LowIdHolePunch.Outcome outcome = holePunch.handleRequest(client, payload);
+        if (log.isDebugEnabled() && client != null) {
+            log.debug("LowID hole punch request from {}: {}", client.clientId(), outcome);
+        }
+    }
+
+    /** The hole punch's counters ({@link LowIdHolePunch#counters}). */
+    public Map<String, Long> holePunchCounters() {
+        return holePunch.counters();
+    }
+
+    LowIdHolePunch holePunch() {
+        return holePunch;
     }
 
     /**

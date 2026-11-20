@@ -114,6 +114,18 @@ public record Tag(byte type, String name, Object value) {
      * OP_IDCHANGE only while the callback is enabled (natCallback); not part of {@link #SERVER_TCP_FLAGS}.
      */
     public static final int TCPFLG_NATT = 0x1000;
+    /**
+     * SRV_TCPFLG_LOWID_HOLEPUNCH: ed2k-server's LowID hole punch, TCP 0x60 / 0x61 / 0x62 (aMule master a6d6290be0,
+     * docs/NAT_T_Protocol.md, "ed2k-server LowID hole punch"). Set in OP_IDCHANGE only while it is enabled
+     * (natHolePunch); aMule sends 0x60 and its 0x9F keepalives only to a server that sets it.
+     */
+    public static final int TCPFLG_LOWID_HOLEPUNCH = 0x20000;
+    /**
+     * SRV_TCPFLG_HOLEPUNCH_EXTENSION: ed2k-server 0.9.85's hole-punch extension (andrey23127/ed2k-server#39): between
+     * two clients that set 0x100000 with 0x1000 in CT_SERVER_FLAGS, a 0x60 wakes the target with 0x37 and the 0x61
+     * carries the port of its fresh 0x9F. Set with {@link #TCPFLG_LOWID_HOLEPUNCH}.
+     */
+    public static final int TCPFLG_HOLEPUNCH_EXTENSION = 0x100000;
 
     public static final int UDPFLG_EXT_GETSOURCES = 0x01;
     public static final int UDPFLG_NEWTAGS = 0x08;

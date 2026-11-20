@@ -37,6 +37,7 @@ public enum OpCode {
     PUBLISH_FILES(0xE3, 0x20),        // legacy JEmuleServer variant of OFFER_FILES without <ID><port>
     QUERY_MORE_RESULT(0xE3, 0x21),    // OP_QUERY_MORE_RESULT
     GET_SOURCES_OBFU(0xE3, 0x23),     // OP_GETSOURCES_OBFU <hash 16><size 4>[<size 8>]
+    LOWID_HOLEPUNCH_REQUEST(0xE3, 0x60), // OP_LOWID_HOLEPUNCH_REQUEST <target ID 4><requester UDP port 2> (ed2k-server)
 
     // ---- 0xE3, server -> client
     SERVER_LIST(0xE3, 0x32),          // OP_SERVERLIST <count 1>(<IP 4><port 2>)*

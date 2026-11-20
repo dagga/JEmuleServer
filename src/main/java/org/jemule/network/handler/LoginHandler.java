@@ -56,6 +56,8 @@ public class LoginHandler {
         // Lugdunum NAT callback: decided once at login, a later change of natCallback applies to the next logins
         boolean natCallback = context.getConfig().natTraversal().natCallback();
         boolean natOptIn = natCallback && NatCallbackService.optsIn(state.serverCaps());
+        // ed2k-server's LowID hole punch (natHolePunch, needs natCallback): also decided once at login
+        boolean natHolePunch = context.getConfig().natTraversal().holePunch();
         long clientId = assignClientId(context, state, !natCallback ? ClientRegistry.LowIdParity.ANY
                 : natOptIn ? ClientRegistry.LowIdParity.ODD : ClientRegistry.LowIdParity.EVEN);
         state.setClientId(clientId);
@@ -73,7 +75,14 @@ public class LoginHandler {
             }
         });
         NatCallbackService natCallbackService = context.getNatCallbackService();
-        if (natOptIn && natCallbackService != null) natCallbackService.register(state);
+        if (natCallbackService != null) {
+            if (natOptIn) {
+                natCallbackService.register(state);
+            } else if (natHolePunch && NatCallbackService.clientUdpPort(state) != 0) {
+                // A hole-punch target only: its 0xF9 UDP port and its 0x9F keepalives are where peers punch to
+                natCallbackService.register(state, false);
+            }
+        }
 
         // Send server version FIRST on its own line for eMule auto-detection
         sendServerMessage(context, out, "server version " + Main.ESERVER_VERSION);
@@ -85,7 +94,9 @@ public class LoginHandler {
         // eMule's ServerSocket.cpp expects: <NEW_ID 4>[<server_flags 4>][<server_tcp_port 4>][<reported_ip 4>][<obf_tcp_port 4>]
         // Flags: 0x01=COMPRESSION, 0x08=NEWTAGS, 0x10=UNICODE, 0x80=TYPETAGINTEGER, 0x100=LARGEFILES, 0x200=UDPOBFUSCATION, 0x400=TCPOBFUSCATION
         // 0x1000 (SRV_TCPFLG_NATTRAVERSAL): the Lugdunum NAT callback, for every client while it is enabled
-        int serverFlags = Tag.SERVER_TCP_FLAGS | (natCallback ? Tag.TCPFLG_NATT : 0);
+        // 0x20000 (SRV_TCPFLG_LOWID_HOLEPUNCH) and 0x100000 (SRV_TCPFLG_HOLEPUNCH_EXTENSION): ed2k-server's hole punch
+        int serverFlags = Tag.SERVER_TCP_FLAGS | (natCallback ? Tag.TCPFLG_NATT : 0)
+                | (natHolePunch ? Tag.TCPFLG_LOWID_HOLEPUNCH | Tag.TCPFLG_HOLEPUNCH_EXTENSION : 0);
         new Packet(Packet.PROTOCOL_ED2K, OpCode.ID_CHANGE.value,
                 idChange(state, serverFlags, clientIp, context.getConfig().port(), natOptIn, context.getSocket().getPort()))
                 .write(out, state.isZlibSupported());
