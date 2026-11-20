@@ -122,14 +122,22 @@ public class Ipv6SourceService {
         startDial(context);
     }
 
-    /** OP_IPV6_UPDATE {@code <IPv6 16>}: no reply; a new address is dialled back as at login. */
+    /**
+     * OP_IPV6_UPDATE {@code <IPv6 16>}: no reply of its own; a new address is dialled back as at login. aMule reads
+     * ST_IPV6_STATUS from every OP_SERVERIDENT, so one goes out with {@code 0x01} as the dial starts, then one with
+     * the verdict: a client that only announces its address here (aMule's default, to a server that probes) learns
+     * that the dial runs, and a client changing a reached address does not keep reading the old {@code 0x07}.
+     */
     public void onUpdate(ClientContext context, byte[] data) {
         if (!enabled(context.getConfig())) return;
         ClientState state = context.getState();
         Ipv6Session.Action action = state.ipv6().announce(data, usable);
         log.debug("OP_IPV6_UPDATE from client {}: {}", state.clientId(), action);
         switch (action) {
-            case DIAL -> startDial(context);
+            case DIAL -> {
+                report(context);
+                startDial(context);
+            }
             case REPORT -> report(context);
             case NONE -> { }
         }

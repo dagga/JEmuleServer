@@ -318,17 +318,21 @@ class Ipv6SourceServiceTest {
 
         PacketProcessor processor = new PacketProcessor();
         processor.processPacket(ctx, new Packet(Packet.PROTOCOL_ED2K, OpCode.IPV6_UPDATE.value, ADDRESS), out);
-        assertTrue(ctx.getState().ipv6().readsRecords());
-        assertEquals(0x05, status(awaitServerIdents(out, 2).get(1)), "dialled, not reached");
+        assertTrue(ctx.getState().ipv6().readsRecords(), "a non-zero OP_IPV6_UPDATE makes the client a reader");
+        List<Packet> idents = awaitServerIdents(out, 3);
+        assertEquals(0x01, status(idents.get(1)), "held, the dial runs");
+        assertEquals(0x05, status(idents.get(2)), "dialled, not reached");
         assertNull(ctx.getState().ipv6().publishedAddress());
 
         dialer.answer = true;
         processor.processPacket(ctx, new Packet(Packet.PROTOCOL_ED2K, OpCode.IPV6_UPDATE.value, ADDRESS), out);
-        assertEquals(0x07, status(awaitServerIdents(out, 3).get(2)), "the same address dialled again after a failure");
+        idents = awaitServerIdents(out, 5);
+        assertEquals(0x01, status(idents.get(3)), "dialled again: back to held");
+        assertEquals(0x07, status(idents.get(4)), "the same address dialled again after a failure");
         assertEquals(2, dialer.dialled.size());
 
         processor.processPacket(ctx, new Packet(Packet.PROTOCOL_ED2K, OpCode.IPV6_UPDATE.value, new byte[16]), out);
-        assertEquals(-1, status(awaitServerIdents(out, 4).get(3)), "withdrawn: no status");
+        assertEquals(-1, status(awaitServerIdents(out, 6).get(5)), "withdrawn: no status");
         assertFalse(ctx.getState().ipv6().readsRecords());
         assertNull(ctx.getState().ipv6().publishedAddress());
         assertEquals(2, dialer.dialled.size());

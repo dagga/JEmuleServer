@@ -63,16 +63,19 @@ address only once it has reached the client on it:
 2. Once the login answers are sent (or at once for an update), the server connects to `[address]:login TCP port` on a
    thread of its own and runs the HighID test there: it sends `OP_HELLO` and expects an `OP_HELLOANSWER` carrying the
    user hash that logged in. The test uses `lowIdCheckTimeoutSeconds` (5 s when it is 0).
-3. Each verdict goes to the client in a new `OP_SERVERIDENT`: `ST_IPV6_STATUS` is `0x01` in the login's one while the
-   dial runs, then `0x07` (reached: the address is published) or `0x05` (not reached: it is not). A withdrawn or
-   unusable address gets an `OP_SERVERIDENT` without the tag.
+3. aMule reads `ST_IPV6_STATUS` from every `OP_SERVERIDENT`, so each step goes to the client in a new one: `0x01`
+   while the dial runs (in the login's one, or in one sent as an update's dial starts), then `0x07` (reached: the
+   address is published) or `0x05` (not reached: it is not). The server never publishes without a dial, so it never
+   sends `0x03`. A withdrawn or unusable address gets an `OP_SERVERIDENT` without the tag.
 4. The same address announced again keeps its verdict, except after a failure: it is dialled again, for a pinhole
    opened since (aMule sends it again once in that case). A new address is held back until its own dial.
 5. At most 4 dials per connection, the login's included, as ed2k-server: the address goes where the client points
    it. Beyond, a new address is not dialled and its status is `0x05`.
 
 aMule sends an address nothing has proved yet only in `OP_IPV6_UPDATE`, right after an `OP_IDCHANGE` with `0x4000`,
-`0x8000` and `0x400000`: the login comes before the flags. Both the update and the dial-back are therefore needed.
+`0x8000` and `0x400000`: the login comes before the flags. Both the update and the dial-back are therefore needed, and
+a non-zero `OP_IPV6_UPDATE` makes the client a reader of IPv6 records as the login tag does (ed2k-server
+`apply_ipv6_update()`); an all-zero one ends it.
 
 The dial-back is a plain (not obfuscated) connection, like the HighID test of the login. A client that requires
 obfuscation accepts a plain test connection only from the IPv4 address of the server it logs in to, so its IPv6
