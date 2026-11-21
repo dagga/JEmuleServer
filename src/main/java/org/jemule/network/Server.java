@@ -1707,11 +1707,11 @@ public class Server {
     }
 
     private byte[] buildServerDescPacket(int challenge, InetAddress client) {
-        String sName = Main.SERVER_NAME;
-        String sDesc = Main.SERVER_DESCRIPTION;
+        ServerConfig current = config;
+        String sName = current.serverName();
+        String sDesc = current.serverDescription();
 
-        int maxFiles = config.maxFiles();
-        int maxUsers = config.maxUsers();
+        int maxUsers = current.maxUsers();
 
         int tcpFlags = Tag.SERVER_TCP_FLAGS;
         int udpFlags = udpFlags();
@@ -1719,7 +1719,7 @@ public class Server {
         java.util.List<org.jemule.protocol.Tag> tags = new java.util.ArrayList<>();
         tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_HASH, "\u0011", getServerHash())); // ST_SERVERHASH (mapped to version tag ID in some contexts, but usually hash is first)
         tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_MAXUSERS, maxUsers));
-        tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_SOFTFILES, config.maxFilesPerUser()));
+        tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_SOFTFILES, current.maxFilesPerUser()));
         tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_HARDFILES, org.jemule.network.handler.PublishHandler.HARD_FILES));
 
         tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_STRING, org.jemule.protocol.Tag.NAME_SERVERNAME, sName));
