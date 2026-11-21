@@ -112,6 +112,15 @@ public final class EmuleTestSupport {
 
         @Override public org.jemule.core.OfferFilesV1 getOfferFilesV1() { return offerFilesV1; }
         public void setOfferFilesV1(org.jemule.core.OfferFilesV1 offerFilesV1) { this.offerFilesV1 = offerFilesV1; }
+
+        private org.jemule.network.natt.NatCallbackService natCallbackService;
+        /** The NAT callback sessions, as a server would give them; none by default. */
+        public void setNatCallbackService(org.jemule.network.natt.NatCallbackService service) {
+            this.natCallbackService = service;
+        }
+        @Override public org.jemule.network.natt.NatCallbackService getNatCallbackService() {
+            return natCallbackService;
+        }
     }
 
     /** Default eMule TCP listen port announced in the login request of test clients. */

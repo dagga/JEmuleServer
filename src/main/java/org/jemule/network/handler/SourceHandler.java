@@ -34,7 +34,8 @@ public class SourceHandler {
         boolean obfu = packet.opcode() == OpCode.GET_SOURCES_OBFU.value;
         log.debug("Client {} requested sources for {} ({})", context.getState().clientId(), hash, obfu ? "OBFU" : "plain");
 
-        var sources = context.getFileIndex().getSources(hash, context.getState(), context.getConfig().maxSourcesPerFile());
+        var sources = context.getFileIndex().getSources(hash, context.getState(),
+                context.getConfig().maxSourcesPerFile(), usableSources(context));
         List<FoundSource> answer = context.getIpv6SourceService().foundSources(context, reachableSources(sources));
         // With few sources here, Kad is asked too: its sources come in a second answer. Not for another server,
         // which asks Kad and the other servers itself
@@ -47,6 +48,22 @@ public class SourceHandler {
         byte opcode = obfu ? OpCode.SOURCES_RESULT_OBFU.value : OpCode.FOUND_SOURCES.value;
         new Packet(Packet.PROTOCOL_ED2K, opcode, response).write(out, context.getState().isZlibSupported());
         if (!fromServer) relaySources(context, data, hashBytes, obfu, answer);
+    }
+
+    /**
+     * The sources of use to the requester of the context, chosen before the limit (#126). A HighID reaches any source
+     * (a LowID through OP_CALLBACKREQUEST), and another server gets them all. A LowID gets the HighID sources, the
+     * LowID ones it receives as IPv6 records, and the LowID ones it can reach by NAT traversal
+     * ({@link org.jemule.network.natt.NatCallbackService#lowIdSourceUsable}): a stock LowID drops the others, which
+     * would only take room in the 255 records of the answer.
+     */
+    static java.util.function.Predicate<ClientState> usableSources(ClientContext context) {
+        ClientState requester = context.getState();
+        if (requester == null || requester.isHighId() || context.isFromServer()) return SourceHandler::reachable;
+        org.jemule.network.natt.NatCallbackService nat = context.getNatCallbackService();
+        org.jemule.network.ipv6.Ipv6SourceService ipv6 = context.getIpv6SourceService();
+        return s -> reachable(s) && (s.isHighId() || ipv6.givesRecord(context, s)
+                || nat != null && nat.lowIdSourceUsable(requester, s));
     }
 
     /** Relay mode: the relay server's HighID sources of the file follow in a second answer. */
@@ -121,7 +138,12 @@ public class SourceHandler {
      * server is an ephemeral port and must never be handed out.
      */
     public static List<ClientState> reachableSources(List<ClientState> sources) {
-        return sources.stream().filter(s -> s.listenPort() > 0 && s.clientId() != 0).toList();
+        return sources.stream().filter(SourceHandler::reachable).toList();
+    }
+
+    /** A source can be handed out in an ed2k record: it has a TCP port and an ID (an IPv6-only client has none). */
+    public static boolean reachable(ClientState s) {
+        return s.listenPort() > 0 && s.clientId() != 0;
     }
 
     /**

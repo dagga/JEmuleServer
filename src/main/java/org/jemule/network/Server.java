@@ -1540,8 +1540,10 @@ public class Server {
                 byte[] hashBytes = java.util.Arrays.copyOfRange(recv, 2 + h * 16, 2 + (h + 1) * 16);
                 String hash = org.jemule.network.handler.HandlerUtils.bytesToHashString(hashBytes);
 
-                var sources = org.jemule.network.handler.SourceHandler.reachableSources(
-                        fileIndex.getSources(hash, null, config.maxSourcesPerFile()));
+                // A client of another server reaches a LowID of this one only by the cross-server callback (#126)
+                var sources = fileIndex.getSources(hash, null, config.maxSourcesPerFile(),
+                        s -> org.jemule.network.handler.SourceHandler.reachable(s)
+                                && (s.isHighId() || natCallbackService.foreignSourceUsable(s)));
                 if (sources.isEmpty()) continue;
 
                 // ed2k IDs are IPv4 addresses (or LowIDs): an IPv6-only client (ID 0) is never handed out.

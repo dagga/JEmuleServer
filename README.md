@@ -584,6 +584,17 @@ client, which must not obtain the HighID in its place.
 
 The server therefore needs to open outgoing TCP connections to the clients.
 
+A LowID source is of use to a HighID, which asks the server to call it back, but not to a LowID: eMule and aMule drop
+LowID sources while they are LowID (`CPartFile::CanAddSource()`) and cannot have a client of the same server called
+back. The answer to `OP_GETSOURCES` (`_OBFU`) of a LowID therefore holds the HighID sources, the LowID sources it gets
+as IPv6 records ([doc/ipv6.md](doc/ipv6.md)), and the LowID sources it can reach by NAT traversal (below): the other
+`0x1000` clients for a `0x1000` client while `natCallback` is on, and every LowID registered for the callback or the
+hole punch for a client that asks with `0x60` (a UDP port in `CT_EMULE_UDPPORTS`, or `0x100000`) while
+`natHolePunch` is on. The others are left out before the `maxSourcesPerFile` limit and the 255 records of the answer,
+so that they no longer push out usable sources. A HighID and another server still get every source. The UDP answer
+to the clients of other servers (`OP_GLOBGETSOURCES`) holds the HighID sources, and the `0x1000` LowIDs only while
+`natCallbackCrossServer` is on.
+
 Two LowID clients cannot call each other back. With `natCallback=true` (off by default), the server runs Lugdunum
 eserver's NAT callback between two LowID clients of this server (aMule master, `docs/NAT_T_Protocol.md`, "Lugdunum
 NAT callback"): a client that sets `0x1000` in `CT_SERVER_FLAGS` at login gets an odd LowID and a 24-byte
