@@ -55,6 +55,7 @@ public final class ClientState {
     private volatile long clientVersion;
     private volatile long emuleVersion;
     private volatile int serverCaps;
+    private volatile int emuleUdpPorts;
     /** OFFERFILES v1 version asked for in the login (string-named uint32 tag offerfiles_v), 0 if none. */
     private volatile long offerFilesRequested;
     /** OFFERFILES v1 terms advertised to this client at login, null for a legacy connection. */
@@ -107,6 +108,10 @@ public final class ClientState {
     /** CT_EMULE_VERSION ((major << 17) | (minor << 10) | (update << 7)), 0 for non eMule clients. */
     public long emuleVersion() { return emuleVersion; }
     public void setEmuleVersion(long emuleVersion) { this.emuleVersion = emuleVersion; }
+
+    /** CT_EMULE_UDPPORTS (0xF9): {@code (Kad UDP port << 16) | client UDP port}, 0 if not sent. */
+    public int emuleUdpPorts() { return emuleUdpPorts; }
+    public void setEmuleUdpPorts(int emuleUdpPorts) { this.emuleUdpPorts = emuleUdpPorts; }
 
     public long offerFilesRequested() { return offerFilesRequested; }
     public void setOfferFilesRequested(long version) { this.offerFilesRequested = version; }
@@ -163,6 +168,16 @@ public final class ClientState {
     public static final int SRVCAP_SUPPORTCRYPT = 0x0200;
     public static final int SRVCAP_REQUESTCRYPT = 0x0400;
     public static final int SRVCAP_REQUIRECRYPT = 0x0800;
+    /** Lugdunum NAT callback opt-in (aMule master a6d6290be0, docs/NAT_T_Protocol.md). */
+    public static final int SRVCAP_NATTRAVERSAL = 0x1000;
+    /**
+     * ed2k-server's hole-punch extension opt-in (0x100000 in CT_SERVER_FLAGS): the client answers a wake with its 0x9F
+     * burst, punches and waits to be dialled (aMule master a6d6290be0, docs/NAT_T_Protocol.md).
+     */
+    public static final int SRVCAP_HOLEPUNCH_EXTENSION = 0x100000;
+
+    /** Crypt options of the client as in CT_SERVER_FLAGS bits 9-11: 0x01 supports, 0x02 requests, 0x04 requires. */
+    public int cryptOptions() { return (serverCaps >> 9) & 0x07; }
 
     public record PendingSearchBatch(List<FileMetadata> results, boolean moreAvailable) {}
 

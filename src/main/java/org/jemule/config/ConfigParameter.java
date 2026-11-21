@@ -28,6 +28,10 @@ import java.util.Locale;
  */
 public enum ConfigParameter {
 
+    SERVER_NAME("serverName", Type.STRING, Scope.HOT, 0, 0,
+            "Server name shown in the clients' server list (empty = default name; new logins and server list refreshes)"),
+    SERVER_DESCRIPTION("serverDescription", Type.STRING, Scope.HOT, 0, 0,
+            "Server description shown in the clients' server list (empty = default description)"),
     PORT("port", Type.INTEGER, Scope.RESTART, 1, 65535, "TCP/UDP port to listen on"),
     MAX_PACKET_SIZE("maxPacketSize", Type.INTEGER, Scope.HOT, 512, 64 * 1024 * 1024,
             "Maximum incoming packet size in bytes"),
@@ -130,7 +134,15 @@ public enum ConfigParameter {
     RELAY_FEED_PORT("relayFeedPort", Type.INTEGER, Scope.HOT, 0, 65535,
             "Relay mode: admin panel HTTP port of the relay server, receiving the files found (0 = no feed)"),
     RELAY_CLIENTS("relayClients", Type.STRING, Scope.HOT, 0, 0,
-            "Relay servers (host names, IPs / CIDR blocks) allowed to feed this index through /api/relay/files (relayToken)");
+            "Relay servers (host names, IPs / CIDR blocks) allowed to feed this index through /api/relay/files (relayToken)"),
+    NAT_CALLBACK("natCallback", Type.BOOLEAN, Scope.HOT, 0, 0,
+            "Lugdunum NAT callback between two LowID clients of this server (opt-in clients, new logins)"),
+    NAT_CALLBACK_TOKEN("natCallbackToken", Type.BOOLEAN, Scope.HOT, 0, 0,
+            "NAT callback: session token in OP_SERVERIDENT, so a 0x9F proven with it counts from any address (new logins, needs natCallback)"),
+    NAT_HOLE_PUNCH("natHolePunch", Type.BOOLEAN, Scope.HOT, 0, 0,
+            "ed2k-server LowID hole punch (0x60 / 0x61 / 0x62) and its hole-punch extension between two LowID clients of this server (new logins, needs natCallback)"),
+    NAT_CALLBACK_CROSS_SERVER("natCallbackCrossServer", Type.BOOLEAN, Scope.HOT, 0, 0,
+            "NAT callback for clients of other servers (0xA6 with requester ID 0, UDP flag 0x100000); needs natCallback");
 
     /** Value type of a parameter, with its parsing and formatting rules. */
     public enum Type {
@@ -263,9 +275,25 @@ public enum ConfigParameter {
         validateFormat(value);
     }
 
+    /**
+     * Longest server name or description in UTF-8 bytes: OP_EMULEINFOACK gives the length of the name in a single
+     * byte.
+     */
+    public static final int MAX_SERVER_TEXT_BYTES = 255;
+
     /** Additional format checks for the string parameters whose content is parsed by the server. */
     private void validateFormat(String value) {
         switch (key) {
+            case "serverName", "serverDescription" -> {
+                if (value.chars().anyMatch(Character::isISOControl)) {
+                    throw new IllegalArgumentException(key + " must not contain control characters");
+                }
+                int bytes = value.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+                if (bytes > MAX_SERVER_TEXT_BYTES) {
+                    throw new IllegalArgumentException(key + " must be at most " + MAX_SERVER_TEXT_BYTES
+                            + " bytes in UTF-8, got " + bytes);
+                }
+            }
             case "adminAllowedIps" -> {
                 for (String token : splitList(value)) {
                     if (token.equals("*") || token.equalsIgnoreCase("all")) continue;
