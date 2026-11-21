@@ -218,6 +218,9 @@ final class ServerSourceSearcher {
         ByteBuffer in = ByteBuffer.wrap(packet).order(ByteOrder.LITTLE_ENDIAN);
         in.position(2);
         Map<Lookup, List<KadPacket.KadSource>> found = new HashMap<>();
+        // An IPv6 source record (ID 0xFFFFFFFF followed by 16 bytes, doc/ipv6.md) is never asked for over IPv4:
+        // should one come, it and the rest of the datagram, no longer aligned, are dropped
+        records:
         while (in.remaining() >= 17) {
             byte[] hash = new byte[16];
             in.get(hash);
@@ -228,6 +231,7 @@ final class ServerSourceSearcher {
             for (int i = 0; i < count; i++) {
                 long id = Integer.toUnsignedLong(in.getInt());
                 int port = Short.toUnsignedInt(in.getShort());
+                if (id == org.jemule.network.ipv6.Ipv6SourceService.SENTINEL_ID) break records;
                 if (!expected) continue;
                 sourcesReceived.incrementAndGet();
                 if (id < LOW_ID_LIMIT || port == 0) continue;

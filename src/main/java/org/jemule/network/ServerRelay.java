@@ -238,7 +238,11 @@ public final class ServerRelay implements AutoCloseable {
         }, List.of());
     }
 
-    /** {@code <hash 16><count 1>(<ID 4><port 2>)*}: the sources with an IP as ID. */
+    /**
+     * {@code <hash 16><count 1>(<ID 4><port 2>)*}: the sources with an IP as ID. An IPv6 source record (ID
+     * {@code 0xFFFFFFFF}, 16 more bytes, doc/ipv6.md) is never asked for, as this server does not send CT_MOD_IP_V6:
+     * should one come, it and the records after it, no longer aligned, are dropped.
+     */
     static List<FoundSource> highIds(byte[] foundSources) {
         List<FoundSource> sources = new ArrayList<>();
         if (foundSources == null || foundSources.length < 17) return sources;
@@ -248,6 +252,7 @@ public final class ServerRelay implements AutoCloseable {
         for (int i = 0; i < count; i++) {
             long id = Integer.toUnsignedLong(input.getInt());
             int port = Short.toUnsignedInt(input.getShort());
+            if (id == org.jemule.network.ipv6.Ipv6SourceService.SENTINEL_ID) break;
             if (id > 0x00FFFFFFL && port > 0) sources.add(new FoundSource(id, port, 0, null));
         }
         return sources;

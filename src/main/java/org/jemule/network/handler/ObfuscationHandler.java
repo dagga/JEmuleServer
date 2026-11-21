@@ -31,10 +31,10 @@ public class ObfuscationHandler {
 
     static final int PRIMESIZE_BYTES = 96;
     static final int DHAGREEMENT_A_BITS = 128;
-    static final int MAGICVALUE_SYNC = 0x835E6FC4;
-    static final byte MAGICVALUE_REQUESTER = 34;
-    static final byte MAGICVALUE_SERVER = (byte) 203;
-    static final byte ENM_OBFUSCATION = 0x00;
+    public static final int MAGICVALUE_SYNC = 0x835E6FC4;
+    public static final byte MAGICVALUE_REQUESTER = 34;
+    public static final byte MAGICVALUE_SERVER = (byte) 203;
+    public static final byte ENM_OBFUSCATION = 0x00;
     static final int MAX_CLIENT_PADDING = 15;
 
     static final BigInteger DH768_P = new BigInteger(1, new byte[] {
