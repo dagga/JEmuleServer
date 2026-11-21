@@ -2,6 +2,7 @@ package org.jemule.network.handler;
 
 import org.jemule.Main;
 import org.jemule.config.OfferFilesConfig;
+import org.jemule.config.ServerConfig;
 import org.jemule.core.ClientRegistry;
 import org.jemule.core.ClientState;
 import org.jemule.core.OfferFilesSession;
@@ -106,8 +107,10 @@ public class LoginHandler {
         log.info("Client {} logged in with ID {}", HandlerUtils.sanitize(state.nickname()), Long.toUnsignedString(clientId));
 
         sendServerStatus(context, out);
-        sendServerMessage(context, out, "Welcome to JEmuleServer version " + Main.VERSION + "\n" +
-                "Your ID is: " + Long.toUnsignedString(clientId));
+        // Shown in the client's server info; read from the running configuration (welcomeMessage, loginMessage)
+        sendServerMessage(context, out, welcomeMessage(context.getConfig(), clientId));
+        String loginMessage = loginMessage(context.getConfig(), clientId);
+        if (loginMessage != null) sendServerMessage(context, out, loginMessage);
         // Relay mode: the client stays here, and learns the relay server that its requests are played on
         org.jemule.network.ServerRelay relay = context.getServerRelay();
         if (relay != null && !relay.isRelayServer(clientIp)) sendRelayServerList(context, out, relay.announce());
@@ -227,6 +230,24 @@ public class LoginHandler {
         list[0] = 1;
         System.arraycopy(entry, 0, list, 1, 6);
         new Packet(Packet.PROTOCOL_ED2K, OpCode.SERVER_LIST.value, list).write(out, context.getState().isZlibSupported());
+    }
+
+    /** The welcome message for {@code clientId}: {@code welcomeMessage}, or the default one when it is empty. */
+    public static String welcomeMessage(ServerConfig config, long clientId) {
+        String template = config.welcomeMessage().isEmpty() ? ServerConfig.DEFAULT_WELCOME_MESSAGE : config.welcomeMessage();
+        return renderMessage(template, clientId);
+    }
+
+    /** The further login message for {@code clientId}, or null when {@code loginMessage} is empty. */
+    public static String loginMessage(ServerConfig config, long clientId) {
+        return config.loginMessage().isEmpty() ? null : renderMessage(config.loginMessage(), clientId);
+    }
+
+    /** {@code {version}} and {@code {id}} replaced; {@code \n} (as typed in the web panel) starts a new line. */
+    static String renderMessage(String template, long clientId) {
+        return template.replace("\r\n", "\n").replace("\\n", "\n")
+                .replace("{version}", Main.VERSION)
+                .replace("{id}", Long.toUnsignedString(clientId));
     }
 
     public static void sendServerMessage(ClientContext context, OutputStream out, String msg) throws IOException {
