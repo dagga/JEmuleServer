@@ -80,10 +80,11 @@ a non-zero `OP_IPV6_UPDATE` makes the client a reader of IPv6 records as the log
 A client that announces the crypt layer in its login (`CT_SERVER_FLAGS`, `SRVCAP_SUPPORTCRYPT` or
 `SRVCAP_REQUIRECRYPT`) is dialled with eMule's client-to-client obfuscation first, as ed2k-server and eNode-go do; the
 HighID test of the login does the same. A client that requires the layer accepts a plain connection only as the test
-of the server it is logging in to, recognised by the server's IPv4 address (`AwaitingTestFromIP`): never over IPv6, and
-never in aMule's strict mode, where even the IPv4 HighID test is refused. The plain dial is only the fallback when the
-obfuscated handshake fails on a client that does not require the layer; a refused or timed out connection is not
-dialled again. `obfuscatedFirewallCheck=false` (hot) goes back to plain dials only.
+of the server it is logging in to, recognised by the server's IPv4 address (`AwaitingTestFromIP`): never over IPv6.
+aMule and eMule have no strict mode (`IsClientCryptLayerRequiredStrict()` always returns false); only eMuleQt's hidden
+`cryptLayerRequiredStrict` option, off by default, refuses the plain IPv4 HighID test as well. The plain dial is only
+the fallback when the obfuscated handshake fails on a client that does not require the layer; a refused or timed out
+connection is not dialled again. `obfuscatedFirewallCheck=false` (hot) goes back to plain dials only.
 
 ### Who gets IPv6 records
 

@@ -2,12 +2,15 @@ package org.jemule.network.handler;
 
 import org.jemule.Main;
 import org.jemule.config.OfferFilesConfig;
+import org.jemule.core.ClientRegistry;
 import org.jemule.core.ClientState;
 import org.jemule.core.OfferFilesSession;
 import org.jemule.core.event.ClientEvent;
 import org.jemule.network.Packet;
 import org.jemule.network.FirewallChecker;
 import org.jemule.network.Server;
+import org.jemule.network.natt.KeepaliveToken;
+import org.jemule.network.natt.NatCallbackService;
 import org.jemule.protocol.OpCode;
 import org.jemule.protocol.Tag;
 import org.slf4j.Logger;
@@ -50,7 +53,13 @@ public class LoginHandler {
             state.setZlibSupported(true);
         }
 
-        long clientId = assignClientId(context, state);
+        // Lugdunum NAT callback: decided once at login, a later change of natCallback applies to the next logins
+        boolean natCallback = context.getConfig().natTraversal().natCallback();
+        boolean natOptIn = natCallback && NatCallbackService.optsIn(state.serverCaps());
+        // ed2k-server's LowID hole punch (natHolePunch, needs natCallback): also decided once at login
+        boolean natHolePunch = context.getConfig().natTraversal().holePunch();
+        long clientId = assignClientId(context, state, !natCallback ? ClientRegistry.LowIdParity.ANY
+                : natOptIn ? ClientRegistry.LowIdParity.ODD : ClientRegistry.LowIdParity.EVEN);
         state.setClientId(clientId);
 
         if (context.getEventManager() != null) {
@@ -65,6 +74,15 @@ public class LoginHandler {
                 log.error("Failed to send relayed packet to {}: {}", state.clientId(), e.getMessage());
             }
         });
+        NatCallbackService natCallbackService = context.getNatCallbackService();
+        if (natCallbackService != null) {
+            if (natOptIn) {
+                natCallbackService.register(state);
+            } else if (natHolePunch && NatCallbackService.clientUdpPort(state) != 0) {
+                // A hole-punch target only: its 0xF9 UDP port and its 0x9F keepalives are where peers punch to
+                natCallbackService.register(state, false);
+            }
+        }
 
         // Send server version FIRST on its own line for eMule auto-detection
         sendServerMessage(context, out, "server version " + Main.ESERVER_VERSION);
@@ -74,17 +92,16 @@ public class LoginHandler {
         sendServerIdent(context, out);
         
         // --- Corrected ID_CHANGE packet construction matching eMule's expectations ---
-        // eMule's ServerSocket.cpp expects: <NEW_ID 4>[<server_flags 4>][<pad 4>][<reported_ip 4>][<obf_tcp_port 4>]
+        // eMule's ServerSocket.cpp expects: <NEW_ID 4>[<server_flags 4>][<server_tcp_port 4>][<reported_ip 4>][<obf_tcp_port 4>]
         // Flags: 0x01=COMPRESSION, 0x08=NEWTAGS, 0x10=UNICODE, 0x80=TYPETAGINTEGER, 0x100=LARGEFILES, 0x200=UDPOBFUSCATION, 0x400=TCPOBFUSCATION
-        int serverFlags = Tag.SERVER_TCP_FLAGS | org.jemule.network.ipv6.Ipv6SourceService.tcpFlags(context.getConfig());
-
-        ByteBuffer idChange = ByteBuffer.allocate(20).order(ByteOrder.LITTLE_ENDIAN);
-        idChange.putInt((int) clientId);
-        idChange.putInt(serverFlags);
-        idChange.putInt(0); // padding/reserved
-        idChange.putInt((int) ClientState.ipToLong(clientIp)); // client's IP as seen by the server (used by LowID clients)
-        idChange.putInt(context.getConfig().port()); // Obfuscation TCP Port
-        new Packet(Packet.PROTOCOL_ED2K, OpCode.ID_CHANGE.value, idChange.array()).write(out, state.isZlibSupported());
+        // 0x1000 (SRV_TCPFLG_NATTRAVERSAL): the Lugdunum NAT callback, for every client while it is enabled
+        // 0x20000 (SRV_TCPFLG_LOWID_HOLEPUNCH) and 0x100000 (SRV_TCPFLG_HOLEPUNCH_EXTENSION): ed2k-server's hole punch
+        int serverFlags = Tag.SERVER_TCP_FLAGS | (natCallback ? Tag.TCPFLG_NATT : 0)
+                | (natHolePunch ? Tag.TCPFLG_LOWID_HOLEPUNCH | Tag.TCPFLG_HOLEPUNCH_EXTENSION : 0)
+                | org.jemule.network.ipv6.Ipv6SourceService.tcpFlags(context.getConfig());
+        new Packet(Packet.PROTOCOL_ED2K, OpCode.ID_CHANGE.value,
+                idChange(state, serverFlags, clientIp, context.getConfig().port(), natOptIn, context.getSocket().getPort()))
+                .write(out, state.isZlibSupported());
 
         log.info("Client {} logged in with ID {}", HandlerUtils.sanitize(state.nickname()), Long.toUnsignedString(clientId));
 
@@ -122,11 +139,32 @@ public class LoginHandler {
     }
 
     /**
-     * Chooses the client's ID like eD2K servers do: its IP (HighID) if it accepts incoming connections on
-     * the TCP port announced in the login (the answer must carry its user hash), a LowID (&lt; 2^24) otherwise. An IP whose ID would be below 2^24
-     * (x.y.z.0) or that is not IPv4 can only get a LowID.
+     * OP_IDCHANGE as read by CServerSocket::ProcessPacket:
+     * <code>&lt;ID 4&gt;&lt;TCP flags 4&gt;&lt;server TCP port 4&gt;&lt;reported IP 4&gt;&lt;obfuscation TCP port 4&gt;</code>,
+     * 20 bytes. A client that opted in to the Lugdunum NAT callback gets Lugdunum's 24-byte form, which appends
+     * <code>&lt;your port 4&gt;</code>: its TCP port as the server sees it, the source port of its connection for a
+     * LowID (after any NAT), its listen port for a HighID (aMule master a6d6290be0, docs/NAT_T_Protocol.md, "Lugdunum
+     * NAT callback"; ed2k-server README, "Lugdunum's NAT callback"). aMule takes the callback as active only when the
+     * 24-byte form comes with the TCP flag 0x1000.
      */
-    static long assignClientId(ClientContext context, ClientState state) {
+    static byte[] idChange(ClientState state, int serverFlags, InetAddress clientIp, int serverPort, boolean natOptIn,
+                           int connectionPort) {
+        ByteBuffer idChange = ByteBuffer.allocate(natOptIn ? 24 : 20).order(ByteOrder.LITTLE_ENDIAN);
+        idChange.putInt((int) state.clientId());
+        idChange.putInt(serverFlags);
+        idChange.putInt(serverPort); // server TCP port (eMule and aMule skip it)
+        idChange.putInt((int) ClientState.ipToLong(clientIp)); // client's IP as seen by the server (used by LowID clients)
+        idChange.putInt(serverPort); // obfuscation TCP port: the same port, obfuscation is detected on it
+        if (natOptIn) idChange.putInt(state.isHighId() ? state.listenPort() : connectionPort);
+        return idChange.array();
+    }
+
+    /**
+     * Chooses the client's ID like eD2K servers do: its IP (HighID) if it accepts incoming connections on
+     * the TCP port announced in the login (the answer must carry its user hash), a LowID (&lt; 2^24) of the given
+     * parity otherwise. An IP whose ID would be below 2^24 (x.y.z.0) or that is not IPv4 can only get a LowID.
+     */
+    static long assignClientId(ClientContext context, ClientState state, ClientRegistry.LowIdParity parity) {
         long ipId = ClientState.ipToLong(state.address());
         if (ipId > 0x00FFFFFFL && state.listenPort() > 0) {
             Server server = context.getServer();
@@ -139,7 +177,7 @@ public class LoginHandler {
                 return ipId;
             }
         }
-        long lowId = context.getRegistry().allocateLowId();
+        long lowId = context.getRegistry().allocateLowId(parity);
         log.info("Client {} ({}:{}) is not reachable: LowID {}", HandlerUtils.sanitize(state.nickname()),
                 state.address().getHostAddress(), state.listenPort(), lowId);
         return lowId;
@@ -170,6 +208,7 @@ public class LoginHandler {
                 case Tag.NAME_CLIENT_VERSION -> { if (tag.isInt()) state.setClientVersion(tag.unsignedValue()); }
                 case Tag.NAME_TCP_FLAGS -> { if (tag.isInt()) state.setServerCaps((int) tag.unsignedValue()); }
                 case Tag.NAME_EMULE_VERSION -> { if (tag.isInt()) state.setEmuleVersion(tag.unsignedValue()); }
+                case Tag.NAME_EMULE_UDPPORTS -> { if (tag.isInt()) state.setEmuleUdpPorts((int) tag.unsignedValue()); }
                 // Highest OFFERFILES version the client implements; any other type than uint32 means a legacy client
                 case Tag.NAME_OFFERFILES_VERSION -> { if (tag.type() == Tag.TYPE_INTEGER) state.setOfferFilesRequested(tag.unsignedValue()); }
                 case Tag.NAME_IPV6 -> { if (tag.type() == Tag.TYPE_HASH) state.ipv6().setLoginTag((byte[]) tag.value()); }
@@ -199,11 +238,18 @@ public class LoginHandler {
     }
 
     private static void sendServerIdent(ClientContext context, OutputStream out) throws IOException {
-        serverIdent(context).write(out, context.getState() != null && context.getState().isZlibSupported());
+        serverIdent(context, true).write(out, context.getState() != null && context.getState().isZlibSupported());
     }
 
-    /** OP_SERVERIDENT for the client of the context: at login, and again with each IPv6 verdict (doc/ipv6.md). */
+    /**
+     * OP_SERVERIDENT for the client of the context: at login, and again with each IPv6 verdict (doc/ipv6.md). Sent
+     * again, it carries the session's NAT callback token unchanged.
+     */
     public static Packet serverIdent(ClientContext context) {
+        return serverIdent(context, false);
+    }
+
+    private static Packet serverIdent(ClientContext context, boolean login) {
         byte[] hash = new byte[16];
         if (context.getServer() != null) {
             System.arraycopy(context.getServer().getServerHash(), 0, hash, 0, 16);
@@ -232,7 +278,8 @@ public class LoginHandler {
 
         // UDP capability flags matching eMule SRV_UDPFLG_ constants
         // Note: We include TCPOBFUSCATION (0x400) in UDP flags as well, as eMule checks it there too
-        int udpFlags = Tag.SERVER_UDP_FLAGS;
+        // SRV_UDPFLG_FOREIGN_NAT_CALLBACK while the cross-server NAT callback is taken
+        int udpFlags = context.getServer() != null ? context.getServer().udpFlags() : Tag.SERVER_UDP_FLAGS;
 
         List<Tag> tags = new ArrayList<>();
         tags.add(new Tag(Tag.TYPE_HASH, "\u0011", hash)); // Send hash as a tag too for extra visibility
@@ -260,6 +307,12 @@ public class LoginHandler {
             tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_OFFERFILES_BATCH_MAX, offerFiles.batchMax()));
             tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_OFFERFILES_MIN_INTERVAL_MS, offerFiles.minIntervalMs()));
         }
+        byte[] nattToken = natCallbackToken(context, login);
+        if (nattToken != null) {
+            // Over TCP only: a 0x9F proven with it counts from any address (NatCallbackService.acceptKeepalive)
+            tags.add(new Tag(Tag.TYPE_HASH, Tag.NAME_NATT_TOKEN, nattToken));
+            tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_NATT_PROOF, KeepaliveToken.PROOF_VERSION));
+        }
         Tag ipv6Status = context.getIpv6SourceService().statusTag(context);
         if (ipv6Status != null) tags.add(ipv6Status);
 
@@ -283,6 +336,21 @@ public class LoginHandler {
         byte[] response = new byte[buf.remaining()];
         buf.get(response);
         return new Packet(Packet.PROTOCOL_ED2K, OpCode.SERVER_IDENT.value, response);
+    }
+
+    /**
+     * The NAT callback session token of this login (ST_NATT_TOKEN, ed2k-server 0.9.88), new at every login: only for
+     * a client that may send 0x9F ({@link NatCallbackService#mayKeepalive}), while natCallback and natCallbackToken
+     * are on. Null for any other client, which gets no unsolicited tag. After the login, the same token again.
+     */
+    static byte[] natCallbackToken(ClientContext context, boolean login) {
+        NatCallbackService natCallbackService = context.getNatCallbackService();
+        if (natCallbackService == null || !context.getConfig().natTraversal().natCallback()
+                || !context.getConfig().natTraversal().natCallbackToken()) {
+            return null;
+        }
+        return login ? natCallbackService.issueToken(context.getState())
+                : natCallbackService.sessionToken(context.getState());
     }
 
     public static void sendServerStatus(ClientContext context, OutputStream out) throws IOException {

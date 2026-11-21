@@ -69,6 +69,10 @@ public record Tag(byte type, String name, Object value) {
     public static final String NAME_TCP_OBFUSCATION_PORT = NAME_TCPPORTOBFUSCATION;
     public static final String NAME_UDPPORTOBFUSCATION = "\u0098"; // ST_UDPPORTOBFUSCATION
     public static final String NAME_UDP_OBFUSCATION_PORT = NAME_UDPPORTOBFUSCATION;
+    /** ST_NATT_PROOF (u32 = 1): the server takes a 0x9F proven with the session token (aMule master a6d6290be0, docs/NAT_T_Protocol.md). */
+    public static final String NAME_NATT_PROOF = "\u00A9";
+    /** ST_NATT_TOKEN (hash, 16 bytes): the session's NAT callback token, new at every login, never sent over UDP. */
+    public static final String NAME_NATT_TOKEN = "\u00AC";
     /** ST_IPV6_STATUS: uint8, the server's verdict on the client's IPv6 address (aMule master a6d6290be0, docs/IPv6_Server_Sources.md). */
     public static final String NAME_IPV6_STATUS = "\u00AB";
 
@@ -85,6 +89,8 @@ public record Tag(byte type, String name, Object value) {
     public static final String NAME_TCP_FLAGS = "\u0020"; // CT_SERVER_FLAGS
     public static final String NAME_CLIENT_VERSION = "\u0011"; // CT_VERSION
     public static final String NAME_EMULE_VERSION = "\u00FB"; // CT_EMULE_VERSION
+    /** CT_EMULE_UDPPORTS (uint32): {@code (Kad UDP port << 16) | client UDP port}, sent by a client that may send 0x9F. */
+    public static final String NAME_EMULE_UDPPORTS = "\u00F9";
     public static final String NAME_MAX_USERS_V2 = "\u0087"; // CT_MAX_USERS_V2 (Same as ST_MAXUSERS, but used in Server.java)
     public static final String NAME_SERVER_VERSION = "\u0091"; // CT_SERVER_VERSION (Same as ST_VERSION, but used in Server.java)
     /** CT_MOD_IP_V6: TAGTYPE_HASH, the client's IPv6 address as 16 raw bytes (login and hello). */
@@ -107,6 +113,23 @@ public record Tag(byte type, String name, Object value) {
     public static final int TCPFLG_LARGEFILES = 0x100;
     public static final int TCPFLG_UDPOBFUSCATION = 0x200;
     public static final int TCPFLG_TCPOBFUSCATION = 0x400;
+    /**
+     * SRV_TCPFLG_NATTRAVERSAL: Lugdunum NAT callback (aMule master a6d6290be0, docs/NAT_T_Protocol.md). Set in
+     * OP_IDCHANGE only while the callback is enabled (natCallback); not part of {@link #SERVER_TCP_FLAGS}.
+     */
+    public static final int TCPFLG_NATT = 0x1000;
+    /**
+     * SRV_TCPFLG_LOWID_HOLEPUNCH: ed2k-server's LowID hole punch, TCP 0x60 / 0x61 / 0x62 (aMule master a6d6290be0,
+     * docs/NAT_T_Protocol.md, "ed2k-server LowID hole punch"). Set in OP_IDCHANGE only while it is enabled
+     * (natHolePunch); aMule sends 0x60 and its 0x9F keepalives only to a server that sets it.
+     */
+    public static final int TCPFLG_LOWID_HOLEPUNCH = 0x20000;
+    /**
+     * SRV_TCPFLG_HOLEPUNCH_EXTENSION: ed2k-server 0.9.85's hole-punch extension (andrey23127/ed2k-server#39): between
+     * two clients that set 0x100000 with 0x1000 in CT_SERVER_FLAGS, a 0x60 wakes the target with 0x37 and the 0x61
+     * carries the port of its fresh 0x9F. Set with {@link #TCPFLG_LOWID_HOLEPUNCH}.
+     */
+    public static final int TCPFLG_HOLEPUNCH_EXTENSION = 0x100000;
     // IPv6 source extension (SRV_TCPFLG_* in aMule master a6d6290be0, include/protocol/ed2k/Client2Server/TCP.h)
     /** SRV_TCPFLG_IPV6: the server sends IPv6 source records to the clients that read them. */
     public static final int TCPFLG_IPV6 = 0x4000;
@@ -123,6 +146,13 @@ public record Tag(byte type, String name, Object value) {
     public static final int UDPFLG_TCPOBFUSCATION = 0x400;
     public static final int UDPFLG_EXT_GETSOURCES2 = 0x20; // Added for reference
     public static final int UDPFLG_EXT_GETFILES = 0x02;    // OP_GLOBSEARCHREQ2 / OP_GLOBSEARCHREQ3 supported
+    /**
+     * SRV_UDPFLG_FOREIGN_NAT_CALLBACK: the server takes a cross-server NAT callback, an OP_NAT_CALLBACKREQUEST (0xA6)
+     * with requester ID 0 from a client logged in to another server (ed2k-server 0.9.86; aMule master a6d6290be0,
+     * docs/NAT_T_Protocol.md "Wire values"). Not to be confused with SRVCAP_HOLEPUNCH_EXTENSION in CT_SERVER_FLAGS nor
+     * SRV_TCPFLG_HOLEPUNCH_EXTENSION in OP_IDCHANGE, which have the same value. Set only with natCallbackCrossServer.
+     */
+    public static final int UDPFLG_FOREIGN_CALLBACK = 0x100000;
 
     /** TCP capabilities announced in OP_IDCHANGE (SRV_TCPFLG_* in eMule server.h). */
     public static final int SERVER_TCP_FLAGS = TCPFLG_COMPRESSION | TCPFLG_NEWTAGS | TCPFLG_UNICODE | TCPFLG_TYPETAGINTEGER
@@ -130,6 +160,11 @@ public record Tag(byte type, String name, Object value) {
     /** UDP capabilities announced in ST_UDPFLAGS / OP_GLOBSERVSTATRES (SRV_UDPFLG_* in eMule server.h). */
     public static final int SERVER_UDP_FLAGS = UDPFLG_EXT_GETSOURCES | UDPFLG_EXT_GETFILES | UDPFLG_NEWTAGS | UDPFLG_UNICODE
             | UDPFLG_LARGEFILES | UDPFLG_UDPOBFUSCATION | UDPFLG_TCPOBFUSCATION;
+
+    /** UDP capabilities announced in ST_UDPFLAGS / OP_GLOBSERVSTATRES, with the cross-server NAT callback when taken. */
+    public static int serverUdpFlags(boolean foreignCallback) {
+        return foreignCallback ? SERVER_UDP_FLAGS | UDPFLG_FOREIGN_CALLBACK : SERVER_UDP_FLAGS;
+    }
 
 
     /** True if this tag holds an integer value (UINT8/16/32/64). */

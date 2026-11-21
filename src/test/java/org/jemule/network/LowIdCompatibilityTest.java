@@ -143,8 +143,9 @@ class LowIdCompatibilityTest {
     }
 
     /**
-     * #124: aMule in strict mode refuses every plain connection, the HighID test included; the test connection is
-     * obfuscated for a client that announces the crypt layer, so that client still gets its HighID.
+     * #124: eMuleQt with cryptLayerRequiredStrict refuses every plain connection, the HighID test included; the
+     * test connection is obfuscated for a client that announces the crypt layer, so that client still gets its
+     * HighID.
      */
     @Test
     @Timeout(10)
