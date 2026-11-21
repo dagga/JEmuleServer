@@ -69,6 +69,10 @@ public record Tag(byte type, String name, Object value) {
     public static final String NAME_TCP_OBFUSCATION_PORT = NAME_TCPPORTOBFUSCATION;
     public static final String NAME_UDPPORTOBFUSCATION = "\u0098"; // ST_UDPPORTOBFUSCATION
     public static final String NAME_UDP_OBFUSCATION_PORT = NAME_UDPPORTOBFUSCATION;
+    /** ST_NATT_PROOF (u32 = 1): the server takes a 0x9F proven with the session token (aMule master a6d6290be0, docs/NAT_T_Protocol.md). */
+    public static final String NAME_NATT_PROOF = "\u00A9";
+    /** ST_NATT_TOKEN (hash, 16 bytes): the session's NAT callback token, new at every login, never sent over UDP. */
+    public static final String NAME_NATT_TOKEN = "\u00AC";
 
     // File Tags (FT_ from opcodes.h)
     public static final String NAME_FILENAME = "\u0001"; // FT_FILENAME (Note: same as NAME_SERVERNAME)
@@ -83,6 +87,8 @@ public record Tag(byte type, String name, Object value) {
     public static final String NAME_TCP_FLAGS = "\u0020"; // CT_SERVER_FLAGS
     public static final String NAME_CLIENT_VERSION = "\u0011"; // CT_VERSION
     public static final String NAME_EMULE_VERSION = "\u00FB"; // CT_EMULE_VERSION
+    /** CT_EMULE_UDPPORTS (uint32): {@code (Kad UDP port << 16) | client UDP port}, sent by a client that may send 0x9F. */
+    public static final String NAME_EMULE_UDPPORTS = "\u00F9";
     public static final String NAME_MAX_USERS_V2 = "\u0087"; // CT_MAX_USERS_V2 (Same as ST_MAXUSERS, but used in Server.java)
     public static final String NAME_SERVER_VERSION = "\u0091"; // CT_SERVER_VERSION (Same as ST_VERSION, but used in Server.java)
 

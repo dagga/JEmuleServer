@@ -134,7 +134,9 @@ public enum ConfigParameter {
     RELAY_CLIENTS("relayClients", Type.STRING, Scope.HOT, 0, 0,
             "Relay servers (host names, IPs / CIDR blocks) allowed to feed this index through /api/relay/files (relayToken)"),
     NAT_CALLBACK("natCallback", Type.BOOLEAN, Scope.HOT, 0, 0,
-            "Lugdunum NAT callback between two LowID clients of this server (opt-in clients, new logins)");
+            "Lugdunum NAT callback between two LowID clients of this server (opt-in clients, new logins)"),
+    NAT_CALLBACK_TOKEN("natCallbackToken", Type.BOOLEAN, Scope.HOT, 0, 0,
+            "NAT callback: session token in OP_SERVERIDENT, so a 0x9F proven with it counts from any address (new logins, needs natCallback)");
 
     /** Value type of a parameter, with its parsing and formatting rules. */
     public enum Type {

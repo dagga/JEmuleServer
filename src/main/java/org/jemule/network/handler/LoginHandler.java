@@ -9,6 +9,7 @@ import org.jemule.core.event.ClientEvent;
 import org.jemule.network.Packet;
 import org.jemule.network.FirewallChecker;
 import org.jemule.network.Server;
+import org.jemule.network.natt.KeepaliveToken;
 import org.jemule.network.natt.NatCallbackService;
 import org.jemule.protocol.OpCode;
 import org.jemule.protocol.Tag;
@@ -191,6 +192,7 @@ public class LoginHandler {
                 case Tag.NAME_CLIENT_VERSION -> { if (tag.isInt()) state.setClientVersion(tag.unsignedValue()); }
                 case Tag.NAME_TCP_FLAGS -> { if (tag.isInt()) state.setServerCaps((int) tag.unsignedValue()); }
                 case Tag.NAME_EMULE_VERSION -> { if (tag.isInt()) state.setEmuleVersion(tag.unsignedValue()); }
+                case Tag.NAME_EMULE_UDPPORTS -> { if (tag.isInt()) state.setEmuleUdpPorts((int) tag.unsignedValue()); }
                 // Highest OFFERFILES version the client implements; any other type than uint32 means a legacy client
                 case Tag.NAME_OFFERFILES_VERSION -> { if (tag.type() == Tag.TYPE_INTEGER) state.setOfferFilesRequested(tag.unsignedValue()); }
                 default -> log.debug("Ignoring unknown login tag 0x{}", tag.name().length() == 1 ? Integer.toHexString(tag.name().charAt(0)) : tag.name());
@@ -275,6 +277,12 @@ public class LoginHandler {
             tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_OFFERFILES_BATCH_MAX, offerFiles.batchMax()));
             tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_OFFERFILES_MIN_INTERVAL_MS, offerFiles.minIntervalMs()));
         }
+        byte[] nattToken = natCallbackToken(context);
+        if (nattToken != null) {
+            // Over TCP only: a 0x9F proven with it counts from any address (NatCallbackService.acceptKeepalive)
+            tags.add(new Tag(Tag.TYPE_HASH, Tag.NAME_NATT_TOKEN, nattToken));
+            tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_NATT_PROOF, KeepaliveToken.PROOF_VERSION));
+        }
 
         ByteBuffer buf = ByteBuffer.allocate(4096).order(ByteOrder.LITTLE_ENDIAN);
         buf.put(hash);
@@ -297,6 +305,20 @@ public class LoginHandler {
         buf.get(response);
 
         new Packet(Packet.PROTOCOL_ED2K, OpCode.SERVER_IDENT.value, response).write(out, context.getState() != null && context.getState().isZlibSupported());
+    }
+
+    /**
+     * The NAT callback session token of this login (ST_NATT_TOKEN, ed2k-server 0.9.88), new at every login: only for
+     * a client that may send 0x9F ({@link NatCallbackService#mayKeepalive}), while natCallback and natCallbackToken
+     * are on. Null for any other client, which gets no unsolicited tag.
+     */
+    static byte[] natCallbackToken(ClientContext context) {
+        NatCallbackService natCallbackService = context.getNatCallbackService();
+        if (natCallbackService == null || !context.getConfig().natTraversal().natCallback()
+                || !context.getConfig().natTraversal().natCallbackToken()) {
+            return null;
+        }
+        return natCallbackService.issueToken(context.getState());
     }
 
     public static void sendServerStatus(ClientContext context, OutputStream out) throws IOException {

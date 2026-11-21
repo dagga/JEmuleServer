@@ -90,9 +90,13 @@ public class Server {
     private final FileIndex fileIndex;
     private final org.jemule.core.MetricsHistory metricsHistory;
     private volatile KadSourceService kadSourceService;
-    /** Lugdunum NAT callback between LowID clients (natCallback, hot): keepalives, requests and notices. */
+    /**
+     * Lugdunum NAT callback between LowID clients (natCallback, hot): keepalives, with their session tokens
+     * (natCallbackToken, hot), requests and notices.
+     */
     private final NatCallbackService natCallbackService = new NatCallbackService(
-            () -> config.natTraversal().natCallback(), System::currentTimeMillis, new NatCallbackTransport());
+            () -> config.natTraversal().natCallback(), () -> config.natTraversal().natCallbackToken(),
+            System::currentTimeMillis, new NatCallbackTransport(), new org.jemule.network.natt.KeepaliveToken());
     /** OFFERFILES v1 ceiling shared by all v1 connections, and its counters. */
     private final org.jemule.core.OfferFilesV1 offerFilesV1 = new org.jemule.core.OfferFilesV1();
     private final FloodProtector floodProtector;
