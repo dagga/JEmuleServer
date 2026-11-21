@@ -94,7 +94,7 @@ class ServerTagsTest {
         assertEquals(Tag.TYPE_INTEGER, verTag.type());
         int version = (int) verTag.value();
         // displayed by eMule as String.format("%u.%02u", v >> 16, v & 0xFFFF)
-        assertEquals("17.16", String.format("%d.%02d", version >>> 16, version & 0xFFFF));
+        assertEquals("17.17", String.format("%d.%02d", version >>> 16, version & 0xFFFF));
 
         Tag maxUsersTag = findTag(tags, Tag.NAME_MAXUSERS);
         assertNotNull(maxUsersTag, "Missing NAME_MAXUSERS tag");
@@ -119,6 +119,44 @@ class ServerTagsTest {
         Tag udpFlagsTag = findTag(tags, Tag.NAME_UDPFLAGS);
         assertNotNull(udpFlagsTag, "Missing NAME_UDPFLAGS tag (newly added)");
         assertEquals(UDP_FLAGS, (int) udpFlagsTag.value());
+    }
+
+    @Test
+    void theUdpDescriptionGivesTheNameAndDescriptionChangedWithoutRestart(
+            @org.junit.jupiter.api.io.TempDir java.nio.file.Path tempDir) throws Exception {
+        ServerConfig config = new ServerConfig(
+                14662, 1000000, 300, 50, 50000, 100000, 100, 200,
+                tempDir.resolve("db").toString(), "", false, 50f, 10, 60, 1800, 120, null
+        );
+        Server server = new Server(config, new ClientFactory());
+        org.jemule.config.ConfigApplyResult result = server.updateConfig(java.util.Map.of(
+                "serverName", "My eD2K server", "serverDescription", "Files for everyone"));
+        assertTrue(result.success(), result.summary());
+        assertTrue(result.applied().contains("serverName"), result.summary());
+        assertTrue(result.applied().contains("serverDescription"), result.summary());
+
+        int challenge = 0x1234F0FF;
+        ByteBuffer reqBuf = ByteBuffer.allocate(6).order(ByteOrder.LITTLE_ENDIAN);
+        reqBuf.put(Packet.PROTOCOL_ED2K);
+        reqBuf.put((byte) 0xA2);
+        reqBuf.putInt(challenge);
+        CapturingDatagramSocket cds = new CapturingDatagramSocket();
+        java.lang.reflect.Method m = Server.class.getDeclaredMethod("handleUdp", java.net.DatagramSocket.class, java.net.DatagramPacket.class);
+        m.setAccessible(true);
+        m.invoke(server, cds, new DatagramPacket(reqBuf.array(), 6, InetAddress.getByName("127.0.0.1"), 40000));
+
+        DatagramPacket response = cds.sent.get(0);
+        ByteBuffer buf = ByteBuffer.wrap(response.getData(), 0, response.getLength()).order(ByteOrder.LITTLE_ENDIAN);
+        buf.get();
+        buf.get();
+        assertEquals(challenge, buf.getInt());
+        List<Tag> tags = Tag.readList(buf);
+        assertEquals("My eD2K server", findTag(tags, Tag.NAME_SERVERNAME).value());
+        assertEquals("Files for everyone", findTag(tags, Tag.NAME_DESCRIPTION).value());
+
+        // An empty value restores the default
+        assertTrue(server.updateConfig(java.util.Map.of("serverName", "")).success());
+        assertEquals(Main.SERVER_NAME, server.configSnapshot().serverName());
     }
 
     @Test

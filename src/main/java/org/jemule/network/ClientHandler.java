@@ -196,6 +196,7 @@ public class ClientHandler implements Runnable, ClientContext {
         if (state != null) {
             registry.remove(state);
             fileIndex.removeSource(state);
+            if (server != null) server.getNatCallbackService().unregister(state);
         }
         try {
             socket.close();

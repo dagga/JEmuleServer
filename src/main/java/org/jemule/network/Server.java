@@ -26,6 +26,9 @@ import org.jemule.config.ConfigParameter;
 import org.jemule.config.ServerConfig;
 import org.jemule.core.*;
 import org.jemule.core.ServerThreads.Tier;
+import org.jemule.network.natt.NatCallbackService;
+import org.jemule.network.natt.NatOpcodes;
+import org.jemule.network.natt.UdpEndpoint;
 import org.jemule.protocol.Tag;
 import org.jemule.core.event.ClientEvent;
 import org.jemule.core.event.EventManager;
@@ -87,6 +90,17 @@ public class Server {
     private final FileIndex fileIndex;
     private final org.jemule.core.MetricsHistory metricsHistory;
     private volatile KadSourceService kadSourceService;
+    /** Timers of the LowID hole punch: short (3 s at most), so kept apart from the maintenance tasks. */
+    private final java.util.concurrent.ScheduledExecutorService natTimers = ServerThreads.maintenanceScheduler("nat-traversal");
+    /**
+     * Lugdunum NAT callback between LowID clients (natCallback, hot): keepalives, with their session tokens
+     * (natCallbackToken, hot), requests and notices; and ed2k-server's LowID hole punch (natHolePunch, hot).
+     */
+    private final NatCallbackService natCallbackService = new NatCallbackService(
+            () -> config.natTraversal().natCallback(), () -> config.natTraversal().natCallbackToken(),
+            () -> config.natTraversal().holePunch(), () -> config.natTraversal().natCallbackCrossServer(),
+            this::isIpBlocked, System::currentTimeMillis, new NatCallbackTransport(),
+            new org.jemule.network.natt.KeepaliveToken(), registry::get, this::scheduleNatTimer);
     /** OFFERFILES v1 ceiling shared by all v1 connections, and its counters. */
     private final org.jemule.core.OfferFilesV1 offerFilesV1 = new org.jemule.core.OfferFilesV1();
     private final FloodProtector floodProtector;
@@ -166,6 +180,65 @@ public class Server {
     /** Search threads evaluating the local index searches of the clients. */
     public org.jemule.core.SearchExecutor getSearchExecutor() {
         return searchExecutor;
+    }
+
+    /** Whether the IP filter refuses {@code address}. */
+    private boolean isIpBlocked(InetAddress address) {
+        return ipFilter.isBlocked(address);
+    }
+
+    /** Lugdunum NAT callback between the LowID clients of this server. */
+    public NatCallbackService getNatCallbackService() {
+        return natCallbackService;
+    }
+
+    /**
+     * UDP capabilities announced in ST_UDPFLAGS, OP_GLOBSERVSTATRES and OP_SERVER_DESC_RES: SRV_UDPFLG_* of eMule
+     * server.h, and SRV_UDPFLG_FOREIGN_NAT_CALLBACK while the cross-server NAT callback is taken.
+     */
+    public int udpFlags() {
+        return natCallbackService.udpFlags();
+    }
+
+    /** Runs a timer of the LowID hole punch; none once the server stops. */
+    private void scheduleNatTimer(Runnable task, long delayMs) {
+        try {
+            natTimers.schedule(() -> {
+                try {
+                    task.run();
+                } catch (RuntimeException e) {
+                    log.warn("NAT traversal timer failed", e);
+                }
+            }, delayMs, TimeUnit.MILLISECONDS);
+        } catch (java.util.concurrent.RejectedExecutionException e) {
+            log.debug("NAT traversal timer dropped: the server is stopping");
+        }
+    }
+
+    /** Notices of the NAT callback: TCP on the target's server connection, UDP obfuscated with its server key. */
+    private final class NatCallbackTransport implements NatCallbackService.Transport {
+        @Override
+        public void sendTcp(long clientId, Packet packet) {
+            registry.sendTo(clientId, packet);
+        }
+
+        @Override
+        public void sendTcp(ClientState client, Packet packet) {
+            registry.sendToConnection(client.connectionId(), packet);
+        }
+
+        @Override
+        public void sendUdp(java.net.DatagramSocket socket, UdpEndpoint to, byte[] datagram) {
+            int key = org.jemule.security.UdpObfuscation.serverKeyFor(to.address());
+            UdpReply reply = new UdpReply(socket, to.address(), to.port(),
+                    plain -> org.jemule.security.UdpObfuscation.encryptForClient(plain, key));
+            try {
+                Server.this.sendUdp(reply, datagram, "NAT callback");
+            } catch (IOException e) {
+                log.debug("NAT callback notice to {}:{} failed: {}", to.address().getHostAddress(), to.port(),
+                        e.getMessage());
+            }
+        }
     }
 
     /** Kad source searches for the clients' OP_GETSOURCES; finds nothing while no Kad node runs. */
@@ -1219,6 +1292,14 @@ public class Server {
                 log.warn("Server gossip polling failed: {}", e.getMessage());
             }
         }, 1, 1, TimeUnit.SECONDS);
+        // Cross-server NAT callback: the requests that waited for their target's 0x9F, and the answer resends
+        maintenance.scheduleWithFixedDelay(() -> {
+            try {
+                if (running) natCallbackService.tick();
+            } catch (RuntimeException e) {
+                log.warn("NAT callback timer failed: {}", e.getMessage());
+            }
+        }, 250, 250, TimeUnit.MILLISECONDS);
         // One index update worker per verified server, started and stopped as the servers are verified or dropped
         maintenance.scheduleWithFixedDelay(() -> {
             try {
@@ -1428,6 +1509,12 @@ public class Server {
         } else if (opcode == (byte) 0xA2) { // OP_SERVER_DESC_REQ [<challenge 4>]
             int challenge = recv.length >= 6 ? ByteBuffer.wrap(recv, 2, 4).order(ByteOrder.LITTLE_ENDIAN).getInt() : 0;
             sendUdp(reply, buildServerDescPacket(challenge, reply.address()), "DESC");
+        } else if (opcode == NatOpcodes.OP_NATT_KEEPALIVE) { // <user hash 16>, plain to port+4 or obfuscated
+            natCallbackService.handleKeepalive(java.util.Arrays.copyOfRange(recv, 2, recv.length), reply.address(),
+                    reply.port(), reply.obfuscator() != null);
+        } else if (opcode == NatOpcodes.OP_NAT_CALLBACKREQUEST) { // <target ID 4><requester ID 4>, obfuscated
+            natCallbackService.handleCallbackRequest(java.util.Arrays.copyOfRange(recv, 2, recv.length),
+                    reply.address(), reply.port(), reply.obfuscator() != null, reply.socket());
         } else if (serverGossip.handle(reply.socket(), reply.address(), reply.port(), recv,
                 reply.obfuscator(), publicIp, config.port(), System.currentTimeMillis())) {
             return;
@@ -1490,7 +1577,7 @@ public class Server {
         resp.putInt(config.maxUsers());
         resp.putInt(config.maxFilesPerUser()); // SoftFiles: distinct files indexed per client
         resp.putInt(org.jemule.network.handler.PublishHandler.HARD_FILES); // HardFiles: an OP_OFFERFILES must declare fewer
-        resp.putInt(Tag.SERVER_UDP_FLAGS);
+        resp.putInt(udpFlags());
         resp.putInt(registry.lowIdCount());
         resp.putShort((short) udpObfuscationPort()); // CServer::SetObfuscationPortUDP
         resp.putShort((short) config.port());        // CServer::SetObfuscationPortTCP
@@ -1647,19 +1734,19 @@ public class Server {
     }
 
     private byte[] buildServerDescPacket(int challenge, InetAddress client) {
-        String sName = Main.SERVER_NAME;
-        String sDesc = Main.SERVER_DESCRIPTION;
+        ServerConfig current = config;
+        String sName = current.serverName();
+        String sDesc = current.serverDescription();
 
-        int maxFiles = config.maxFiles();
-        int maxUsers = config.maxUsers();
+        int maxUsers = current.maxUsers();
 
         int tcpFlags = Tag.SERVER_TCP_FLAGS;
-        int udpFlags = Tag.SERVER_UDP_FLAGS;
+        int udpFlags = udpFlags();
 
         java.util.List<org.jemule.protocol.Tag> tags = new java.util.ArrayList<>();
         tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_HASH, "\u0011", getServerHash())); // ST_SERVERHASH (mapped to version tag ID in some contexts, but usually hash is first)
         tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_MAXUSERS, maxUsers));
-        tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_SOFTFILES, config.maxFilesPerUser()));
+        tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_SOFTFILES, current.maxFilesPerUser()));
         tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_INTEGER, org.jemule.protocol.Tag.NAME_HARDFILES, org.jemule.network.handler.PublishHandler.HARD_FILES));
 
         tags.add(new org.jemule.protocol.Tag(org.jemule.protocol.Tag.TYPE_STRING, org.jemule.protocol.Tag.NAME_SERVERNAME, sName));
@@ -1768,6 +1855,7 @@ public class Server {
         AdminWebPanel panel = adminWebPanel;
         if (panel != null) panel.close();
         maintenance.shutdownNow();
+        natTimers.shutdownNow();
         serverSearchBridge.close();
         serverIndexUpdater.close();
         serverRelay.close();

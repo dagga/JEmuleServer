@@ -43,6 +43,7 @@ public class PacketProcessor {
             case IPV6_UPDATE -> context.getIpv6SourceService().onUpdate(context, p.data());
             case EMULE_INFO -> handleEmuleInfo(context, p.data(), out);
             case CALLBACK_REQUEST -> sourceHandler.handleCallback(context, p.data(), out);
+            case LOWID_HOLEPUNCH_REQUEST -> handleHolePunchRequest(context, p.data());
             case COMPRESSED_PART -> handleCompressedPart(context, p.data(), out);
             case FOUND_SOURCES, SOURCES_RESULT_OBFU -> handleSourcesResult(context, p, out);
             case GET_SERVER_LIST -> sendServerList(context, out);
@@ -56,6 +57,12 @@ public class PacketProcessor {
 
     private static String hex(byte b) {
         return String.format("%02X", b);
+    }
+
+    /** OP_LOWID_HOLEPUNCH_REQUEST (0x60): ed2k-server's LowID hole punch, answered when natHolePunch is on. */
+    private void handleHolePunchRequest(ClientContext context, byte[] data) {
+        org.jemule.network.natt.NatCallbackService natCallback = context.getNatCallbackService();
+        if (natCallback != null) natCallback.handleHolePunchRequest(context.getState(), data);
     }
 
     private void handleDisconnect(ClientContext context) throws IOException {
@@ -81,7 +88,7 @@ public class PacketProcessor {
 
     private void handleEmuleInfo(ClientContext context, byte[] data, OutputStream out) throws IOException {
         log.debug("Received EMULE_INFO from {}", context.getSocket().getRemoteSocketAddress() != null ? HandlerUtils.sanitize(context.getSocket().getRemoteSocketAddress().toString()) : "unknown");
-        String serverName = Main.SERVER_NAME;
+        String serverName = context.getConfig().serverName();
         String serverVersion = Main.ESERVER_VERSION;
         byte[] nameBytes = serverName.getBytes(java.nio.charset.StandardCharsets.UTF_8);
         byte[] versionBytes = serverVersion.getBytes(java.nio.charset.StandardCharsets.UTF_8);
