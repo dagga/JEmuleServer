@@ -839,6 +839,7 @@ public record ServerConfig(
         props.put("databaseImportFromH2", String.valueOf(database.importFromH2()));
         props.put("natCallback", String.valueOf(natTraversal.natCallback()));
         props.put("natCallbackToken", String.valueOf(natTraversal.natCallbackToken()));
+        props.put("natHolePunch", String.valueOf(natTraversal.natHolePunch()));
         return props;
     }
 

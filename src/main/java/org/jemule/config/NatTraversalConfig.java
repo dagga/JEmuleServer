@@ -32,14 +32,28 @@ import java.util.Properties;
  * @param natCallbackToken Session token for the UDP 0x9F keepalives (ed2k-server 0.9.88): a client that may send them
  *                    gets a random token in OP_SERVERIDENT (0xAC, with 0xA9 = 1), and a 0x9F proven with it counts
  *                    from any address. Needs {@code natCallback} (key {@code natCallbackToken}).
+ * @param natHolePunch ed2k-server's LowID hole punch (TCP 0x60 / 0x61 / 0x62, OP_IDCHANGE TCP flag 0x20000) and its
+ *                    hole-punch extension (TCP flag 0x100000): a LowID gets the UDP endpoint of another LowID of this
+ *                    server and both punch towards each other. Needs {@code natCallback}, whose 0x9F keepalives give
+ *                    the endpoints and whose 0x37 wakes an extension target (key {@code natHolePunch}).
  */
-public record NatTraversalConfig(boolean natCallback, boolean natCallbackToken) {
+public record NatTraversalConfig(boolean natCallback, boolean natCallbackToken, boolean natHolePunch) {
 
-    public static final NatTraversalConfig DEFAULT = new NatTraversalConfig(false, false);
+    public static final NatTraversalConfig DEFAULT = new NatTraversalConfig(false, false, false);
 
-    /** The callback alone, without the keepalive session token. */
+    /** The callback alone, without the keepalive session token nor the hole punch. */
     public NatTraversalConfig(boolean natCallback) {
-        this(natCallback, false);
+        this(natCallback, false, false);
+    }
+
+    /** The callback and its keepalive session token, without the hole punch. */
+    public NatTraversalConfig(boolean natCallback, boolean natCallbackToken) {
+        this(natCallback, natCallbackToken, false);
+    }
+
+    /** Whether the LowID hole punch runs: natHolePunch, with the natCallback it needs. */
+    public boolean holePunch() {
+        return natCallback && natHolePunch;
     }
 
     /** Creates a NatTraversalConfig from a Properties object, using DEFAULT values for missing keys. */
@@ -47,7 +61,8 @@ public record NatTraversalConfig(boolean natCallback, boolean natCallbackToken) 
         return new NatTraversalConfig(
                 Boolean.parseBoolean(props.getProperty("natCallback", String.valueOf(DEFAULT.natCallback())).trim()),
                 Boolean.parseBoolean(props.getProperty("natCallbackToken",
-                        String.valueOf(DEFAULT.natCallbackToken())).trim())
+                        String.valueOf(DEFAULT.natCallbackToken())).trim()),
+                Boolean.parseBoolean(props.getProperty("natHolePunch", String.valueOf(DEFAULT.natHolePunch())).trim())
         );
     }
 }

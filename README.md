@@ -599,6 +599,19 @@ client that may send `0x9F` (`0x1000` or `0x100000` in `CT_SERVER_FLAGS`, or a U
 the hash and counter, is then believed from any address when the counter rises; a bad mac or a replayed counter moves
 nothing. The token itself is never taken over UDP.
 
+With `natHolePunch=true` as well (off by default), the server also runs ed2k-server's LowID hole punch (aMule master,
+`docs/NAT_T_Protocol.md`, "ed2k-server LowID hole punch"; ed2k-server README, "Implementing a compatible client") and
+sets the TCP flags `0x20000` and `0x100000` in `OP_IDCHANGE`. A LowID that sends its UDP ports at login
+(`CT_EMULE_UDPPORTS`, `0xF9`) may send `0x9F` and be a target. A LowID asks with TCP `0x60` `<target ID 4><UDP port 2>`;
+both sides get TCP `0x61` `<peer IP 4><TCP port 2><UDP port 2><user hash 16><role 1><peer ID 4><peer crypt 1>`, with
+`<own IP 4><own UDP port 2>` appended when the reader sent a `0x9F` in the last 10 minutes, and punch towards each
+other. The UDP endpoint given is that of the last `0x9F`, else the login IP with the announced port. The `0x61` is sent
+again 1.2 s and 3 s later. Otherwise the requester gets TCP `0x62` `<target ID 4><reason 1>`: 1 target not logged in, 2
+target HighID, 3 bad request (itself, a HighID requester, no UDP port for the requester), 4 target without a UDP port,
+5 no IPv4 endpoint. Between two clients that set `0x100000` with `0x1000` in `CT_SERVER_FLAGS` (the hole-punch
+extension), the target is first woken with `0x37`, and the `0x61` waits up to 3 s for its fresh `0x9F`. Requests share
+the callback's limits.
+
 ## Kademlia Search Bridge
 
 The Kad network holds far more files than a single server, but nothing moderates it. JEmuleServer embeds a Kad node
