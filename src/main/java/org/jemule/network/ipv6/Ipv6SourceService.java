@@ -214,7 +214,7 @@ public class Ipv6SourceService {
         byte[] serverHash = server != null ? server.getServerHash() : new byte[16];
         InetAddress serverIp = server != null ? server.getPublicIp() : null;
         int clientCaps = context.getState() != null ? context.getState().serverCaps() : 0;
-        return new FirewallChecker(timeoutMs).isReachable(address, port, userHash, clientCaps, serverHash, serverIp,
+        return new FirewallChecker(timeoutMs, context.getConfig().obfuscatedFirewallCheck()).isReachable(address, port, userHash, clientCaps, serverHash, serverIp,
                 context.getConfig().port());
     }
 

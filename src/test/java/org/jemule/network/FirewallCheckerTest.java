@@ -1,5 +1,7 @@
 package org.jemule.network;
 
+import org.jemule.config.ConfigParameter;
+import org.jemule.config.ServerConfig;
 import org.jemule.core.ClientState;
 import org.jemule.network.FakeEmuleClient.Crypt;
 import org.junit.jupiter.api.Test;
@@ -10,6 +12,7 @@ import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Properties;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -109,5 +112,36 @@ class FirewallCheckerTest {
             assertFalse(check(client, IPV4, SUPPORTS));
             assertEquals(List.of("refused", "plain"), client.connections());
         }
+    }
+
+    // ---- obfuscatedFirewallCheck=false: plain only, as before
+
+    @Test
+    @Timeout(10)
+    void switchedOffEveryClientIsDialledPlain() throws Exception {
+        try (FakeEmuleClient client = new FakeEmuleClient(IPV4, HASH, Crypt.SUPPORTED)) {
+            assertTrue(new FirewallChecker(2000, false).isReachable(IPV4, client.port(), HASH, REQUIRES, SERVER_HASH,
+                    IPV4, 4661));
+            assertEquals(List.of("plain"), client.connections());
+        }
+        try (FakeEmuleClient client = new FakeEmuleClient(IPV4, HASH, Crypt.REQUIRED)) {
+            assertFalse(new FirewallChecker(2000, false).isReachable(IPV4, client.port(), HASH, REQUIRES, SERVER_HASH,
+                    IPV4, 4661), "strict mode refuses the plain test");
+            assertEquals(List.of("refused"), client.connections());
+        }
+    }
+
+    @Test
+    void theSwitchIsOnByDefaultAndKeptByTheCopies() {
+        assertTrue(ServerConfig.DEFAULT.obfuscatedFirewallCheck());
+        assertTrue(ServerConfig.fromProperties(new Properties()).obfuscatedFirewallCheck());
+        assertEquals("true", ServerConfig.DEFAULT.toProperties().get("obfuscatedFirewallCheck"));
+        Properties off = new Properties();
+        off.setProperty("obfuscatedFirewallCheck", "false");
+        ServerConfig config = ServerConfig.fromProperties(off);
+        assertFalse(config.obfuscatedFirewallCheck());
+        assertFalse(config.withPort(4662).withIpv6Sources(true).obfuscatedFirewallCheck(), "kept by the with* copies");
+        assertTrue(config.withObfuscatedFirewallCheck(true).obfuscatedFirewallCheck());
+        assertEquals(ConfigParameter.Scope.HOT, ConfigParameter.OBFUSCATED_FIREWALL_CHECK.scope());
     }
 }

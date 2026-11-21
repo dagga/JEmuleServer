@@ -83,7 +83,7 @@ HighID test of the login does the same. A client that requires the layer accepts
 of the server it is logging in to, recognised by the server's IPv4 address (`AwaitingTestFromIP`): never over IPv6, and
 never in aMule's strict mode, where even the IPv4 HighID test is refused. The plain dial is only the fallback when the
 obfuscated handshake fails on a client that does not require the layer; a refused or timed out connection is not
-dialled again.
+dialled again. `obfuscatedFirewallCheck=false` (hot) goes back to plain dials only.
 
 ### Who gets IPv6 records
 

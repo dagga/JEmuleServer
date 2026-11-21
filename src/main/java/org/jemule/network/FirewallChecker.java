@@ -27,7 +27,8 @@ import java.util.List;
  * the layer accepts a plain connection only as the test of the server it is logging in to, recognised by the
  * server's IPv4 address (CServerConnect::AwaitingTestFromIP): never over IPv6, never after the login, and never in
  * aMule's strict mode. The plain dial is the fallback when the obfuscated handshake fails on a client that does not
- * require the layer; a refused or timed out connection is not dialled again.
+ * require the layer; a refused or timed out connection is not dialled again. With {@code obfuscatedFirewallCheck=false},
+ * every client is dialled plain only, as before.
  * <p>
  * The answer must come from the client that is logging in: behind a NAT, the announced port may be forwarded
  * to another client sharing the same public IP, which would answer in its place. The user hash of the
@@ -41,9 +42,17 @@ public class FirewallChecker {
     private enum Outcome { REACHED, NOT_REACHED, NO_HANDSHAKE }
 
     private final int timeoutMs;
+    private final boolean obfuscatedFirst;
 
+    /** Dials obfuscated first a client announcing the crypt layer. */
     public FirewallChecker(int timeoutMs) {
+        this(timeoutMs, true);
+    }
+
+    /** @param obfuscatedFirst {@code obfuscatedFirewallCheck}: false dials every client plain only */
+    public FirewallChecker(int timeoutMs, boolean obfuscatedFirst) {
         this.timeoutMs = timeoutMs;
+        this.obfuscatedFirst = obfuscatedFirst;
     }
 
     /**
@@ -57,7 +66,7 @@ public class FirewallChecker {
         boolean requires = (clientCaps & ClientState.SRVCAP_REQUIRECRYPT) != 0;
         boolean supports = requires || (clientCaps & ClientState.SRVCAP_SUPPORTCRYPT) != 0;
         byte[] hello = helloPacket(serverHash, serverIp, serverPort);
-        if (supports) {
+        if (supports && obfuscatedFirst) {
             Outcome obfuscated = dial(ip, port, userHash, hello, true);
             if (obfuscated != Outcome.NO_HANDSHAKE || requires) return obfuscated == Outcome.REACHED;
         }
