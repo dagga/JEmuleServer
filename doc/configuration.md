@@ -8,6 +8,7 @@ Options not set in that file use the defaults built into the server. Keep runtim
 
 | Area | Options | Purpose |
 |---|---|---|
+| Identity | `serverName`, `serverDescription` | Name and description shown in the clients' server list (empty = the JEmuleServer defaults, with the version; at most 255 bytes in UTF-8). Applied without restart, also from the web panel settings: new logins and the clients refreshing their server list get them, the connected clients keep the name received at their login. |
 | Network | `port`, `publicIp`, `maxPacketSize`, `tcpKeepAliveTimeoutInSeconds`, `heartbeatIntervalSeconds`, `lowIdCheckTimeoutSeconds` | Listener, advertised address, packet size and connection/liveness behavior. |
 | NAT traversal | `natCallback` | Opt-in Lugdunum NAT callback between two LowID clients of this server (default `false`, hot, new logins): odd LowIDs and a 24-byte `OP_IDCHANGE` for clients setting `0x1000` in `CT_SERVER_FLAGS`, UDP `0x9F` keepalives and `0xA6` requests, notice to the target by TCP `0x37` or UDP `0xA7`. |
 | Capacity | `maxUsers`, `maxFiles`, `maxFilesPerUser`, `maxSourcesPerFile`, `maxSearchResults` | Limits for clients, indexed files, published files, source replies and search results. |

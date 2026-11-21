@@ -488,9 +488,10 @@ public class AdminInterface implements Runnable {
             out().println("Usage: settings <key> <value> | settings reload | settings fakeFileDetectionEnabled <on|off>");
             return;
         }
+        // The value is the rest of the line: a server name or description holds spaces
         String[] args = parts.length > 2
-                ? (parts[1] + " " + parts[2]).trim().split("\\s+")
-                : parts[1].trim().split("\\s+");
+                ? (parts[1] + " " + parts[2]).trim().split("\\s+", 2)
+                : parts[1].trim().split("\\s+", 2);
         if (args.length == 1 && args[0].equalsIgnoreCase("reload")) {
             if (server == null) {
                 out().println("Configuration reload is unavailable.");
