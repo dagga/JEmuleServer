@@ -132,7 +132,9 @@ public enum ConfigParameter {
     RELAY_FEED_PORT("relayFeedPort", Type.INTEGER, Scope.HOT, 0, 65535,
             "Relay mode: admin panel HTTP port of the relay server, receiving the files found (0 = no feed)"),
     RELAY_CLIENTS("relayClients", Type.STRING, Scope.HOT, 0, 0,
-            "Relay servers (host names, IPs / CIDR blocks) allowed to feed this index through /api/relay/files (relayToken)");
+            "Relay servers (host names, IPs / CIDR blocks) allowed to feed this index through /api/relay/files (relayToken)"),
+    NAT_CALLBACK("natCallback", Type.BOOLEAN, Scope.HOT, 0, 0,
+            "Lugdunum NAT callback between two LowID clients of this server (opt-in clients, new logins)");
 
     /** Value type of a parameter, with its parsing and formatting rules. */
     public enum Type {

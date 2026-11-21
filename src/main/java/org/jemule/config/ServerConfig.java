@@ -58,6 +58,7 @@ import java.util.Properties;
  * @param serverName                Name shown in the clients' server list (empty: {@link #DEFAULT_SERVER_NAME}).
  * @param serverDescription         Description shown in the clients' server list
  *                                  (empty: {@link #DEFAULT_SERVER_DESCRIPTION}).
+ * @param natTraversal              Server-coordinated NAT traversal between LowID clients (Lugdunum NAT callback).
  */
 public record ServerConfig(
         int port,
@@ -149,7 +150,10 @@ public record ServerConfig(
         String serverName,
 
         // Description shown in the clients' server list (ST_DESCRIPTION); empty means DEFAULT_SERVER_DESCRIPTION
-        String serverDescription
+        String serverDescription,
+
+        // Server-coordinated NAT traversal between LowID clients (null means NatTraversalConfig.DEFAULT: all off)
+        NatTraversalConfig natTraversal
 ) {
     /**
      * Default time allowed for the HighID test, in seconds.
@@ -466,7 +470,31 @@ public record ServerConfig(
                 publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad, serverPeers, adminWebPort,
                 serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources,
                 serverIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds,
-                fileRetentionDays, null, null);
+                fileRetentionDays, null, null, NatTraversalConfig.DEFAULT);
+    }
+
+    /**
+     * Constructor retaining source compatibility for callers that do not provide the NAT traversal settings
+     * (uses {@link NatTraversalConfig#DEFAULT}: all off).
+     */
+    public ServerConfig(int port, int maxPacketSize, int maxSearchResults, int floodMaxRequestsPerSecond, int maxUsers,
+                        int maxFiles, int maxFilesPerUser, int maxSourcesPerFile, String databasePath, String ipFilterPath,
+                        boolean fakeFileDetectionEnabled, float cbFailureRateThreshold, int cbMinimumNumberOfCalls,
+                        int cbWaitDurationInSeconds, int tcpKeepAliveTimeoutInSeconds, int heartbeatIntervalSeconds,
+                        String publicIp, int lowIdCheckTimeoutSeconds, String childAbuseKeywordsPath, int adminPort,
+                        KadConfig kad, String serverPeers, int adminWebPort, String serverMetUrl,
+                        String adminBindAddress, String adminAllowedIps, String adminAllowedMacs,
+                        OfferFilesConfig offerFiles, KadSourcesConfig kadSources,
+                        ServerIndexUpdateConfig serverIndexUpdate, String relayServer, DatabaseConfig database,
+                        RelayFeedConfig relayFeed, int remoteSearchCacheMinutes, int indexRefreshSeconds,
+                        int fileRetentionDays, String serverName, String serverDescription) {
+        this(port, maxPacketSize, maxSearchResults, floodMaxRequestsPerSecond, maxUsers, maxFiles, maxFilesPerUser,
+                maxSourcesPerFile, databasePath, ipFilterPath, fakeFileDetectionEnabled, cbFailureRateThreshold,
+                cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds, heartbeatIntervalSeconds,
+                publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad, serverPeers, adminWebPort,
+                serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources,
+                serverIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds,
+                fileRetentionDays, serverName, serverDescription, NatTraversalConfig.DEFAULT);
     }
 
     public ServerConfig {
@@ -487,6 +515,9 @@ public record ServerConfig(
         }
         if (adminAllowedIps == null) {
             adminAllowedIps = DEFAULT_ADMIN_ALLOWED_IPS;
+        }
+        if (natTraversal == null) {
+            natTraversal = NatTraversalConfig.DEFAULT;
         }
         if (adminAllowedMacs == null) {
             adminAllowedMacs = DEFAULT_ADMIN_ALLOWED_MACS;
@@ -567,7 +598,7 @@ public record ServerConfig(
                 maxFilesPerUser, maxSourcesPerFile, databasePath, ipFilterPath, fakeFileDetectionEnabled,
                 cbFailureRateThreshold, cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds,
                 heartbeatIntervalSeconds, publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad,
-                serverPeers, adminWebPort, serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources, serverIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription);
+                serverPeers, adminWebPort, serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources, serverIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription, natTraversal);
     }
 
     /**
@@ -578,7 +609,7 @@ public record ServerConfig(
                 maxFilesPerUser, maxSourcesPerFile, databasePath, ipFilterPath, fakeFileDetectionEnabled,
                 cbFailureRateThreshold, cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds,
                 heartbeatIntervalSeconds, publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, newKad,
-                serverPeers, adminWebPort, serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources, serverIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription);
+                serverPeers, adminWebPort, serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources, serverIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription, natTraversal);
     }
 
     /**
@@ -590,7 +621,7 @@ public record ServerConfig(
                 fakeFileDetectionEnabled, cbFailureRateThreshold, cbMinimumNumberOfCalls, cbWaitDurationInSeconds,
                 tcpKeepAliveTimeoutInSeconds, heartbeatIntervalSeconds, publicIp, lowIdCheckTimeoutSeconds,
                 resolve(baseDir, childAbuseKeywordsPath), adminPort, kad, serverPeers, adminWebPort, serverMetUrl,
-                adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources, serverIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription);
+                adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources, serverIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription, natTraversal);
     }
 
     public ServerConfig withAdminPort(int newAdminPort) {
@@ -598,7 +629,7 @@ public record ServerConfig(
                 maxFilesPerUser, maxSourcesPerFile, databasePath, ipFilterPath, fakeFileDetectionEnabled,
                 cbFailureRateThreshold, cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds,
                 heartbeatIntervalSeconds, publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, newAdminPort, kad,
-                serverPeers, adminWebPort, serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources, serverIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription);
+                serverPeers, adminWebPort, serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources, serverIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription, natTraversal);
     }
 
     public ServerConfig withAdminWebPort(int newAdminWebPort) {
@@ -606,7 +637,7 @@ public record ServerConfig(
                 maxFilesPerUser, maxSourcesPerFile, databasePath, ipFilterPath, fakeFileDetectionEnabled,
                 cbFailureRateThreshold, cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds,
                 heartbeatIntervalSeconds, publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad,
-                serverPeers, newAdminWebPort, serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources, serverIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription);
+                serverPeers, newAdminWebPort, serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources, serverIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription, natTraversal);
     }
 
     public ServerConfig withServerMetUrl(String newServerMetUrl) {
@@ -614,7 +645,7 @@ public record ServerConfig(
                 maxFilesPerUser, maxSourcesPerFile, databasePath, ipFilterPath, fakeFileDetectionEnabled, cbFailureRateThreshold,
                 cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds, heartbeatIntervalSeconds,
                 publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad, serverPeers, adminWebPort,
-                newServerMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources, serverIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription);
+                newServerMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources, serverIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription, natTraversal);
     }
 
     public ServerConfig withAdminBindAddress(String newAdminBindAddress) {
@@ -622,7 +653,7 @@ public record ServerConfig(
                 maxFilesPerUser, maxSourcesPerFile, databasePath, ipFilterPath, fakeFileDetectionEnabled, cbFailureRateThreshold,
                 cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds, heartbeatIntervalSeconds,
                 publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad, serverPeers, adminWebPort,
-                serverMetUrl, newAdminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources, serverIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription);
+                serverMetUrl, newAdminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources, serverIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription, natTraversal);
     }
 
     public ServerConfig withAdminAllowedIps(String newAdminAllowedIps) {
@@ -630,7 +661,7 @@ public record ServerConfig(
                 maxFilesPerUser, maxSourcesPerFile, databasePath, ipFilterPath, fakeFileDetectionEnabled, cbFailureRateThreshold,
                 cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds, heartbeatIntervalSeconds,
                 publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad, serverPeers, adminWebPort,
-                serverMetUrl, adminBindAddress, newAdminAllowedIps, adminAllowedMacs, offerFiles, kadSources, serverIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription);
+                serverMetUrl, adminBindAddress, newAdminAllowedIps, adminAllowedMacs, offerFiles, kadSources, serverIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription, natTraversal);
     }
 
     public ServerConfig withAdminAllowedMacs(String newAdminAllowedMacs) {
@@ -638,7 +669,7 @@ public record ServerConfig(
                 maxFilesPerUser, maxSourcesPerFile, databasePath, ipFilterPath, fakeFileDetectionEnabled, cbFailureRateThreshold,
                 cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds, heartbeatIntervalSeconds,
                 publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad, serverPeers, adminWebPort,
-                serverMetUrl, adminBindAddress, adminAllowedIps, newAdminAllowedMacs, offerFiles, kadSources, serverIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription);
+                serverMetUrl, adminBindAddress, adminAllowedIps, newAdminAllowedMacs, offerFiles, kadSources, serverIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription, natTraversal);
     }
 
     public ServerConfig withKadSources(KadSourcesConfig newKadSources) {
@@ -646,7 +677,7 @@ public record ServerConfig(
                 maxFilesPerUser, maxSourcesPerFile, databasePath, ipFilterPath, fakeFileDetectionEnabled, cbFailureRateThreshold,
                 cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds, heartbeatIntervalSeconds,
                 publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad, serverPeers, adminWebPort,
-                serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, newKadSources, serverIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription);
+                serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, newKadSources, serverIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription, natTraversal);
     }
 
     public ServerConfig withServerIndexUpdate(ServerIndexUpdateConfig newServerIndexUpdate) {
@@ -655,7 +686,7 @@ public record ServerConfig(
                 cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds, heartbeatIntervalSeconds,
                 publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad, serverPeers, adminWebPort,
                 serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources,
-                newServerIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription);
+                newServerIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription, natTraversal);
     }
 
     public ServerConfig withOfferFiles(OfferFilesConfig newOfferFiles) {
@@ -663,7 +694,7 @@ public record ServerConfig(
                 maxFilesPerUser, maxSourcesPerFile, databasePath, ipFilterPath, fakeFileDetectionEnabled, cbFailureRateThreshold,
                 cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds, heartbeatIntervalSeconds,
                 publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad, serverPeers, adminWebPort,
-                serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, newOfferFiles, kadSources, serverIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription);
+                serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, newOfferFiles, kadSources, serverIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription, natTraversal);
     }
 
     /** Same configuration in relay mode for {@code newRelayServer} (empty: no relay mode). */
@@ -673,7 +704,7 @@ public record ServerConfig(
                 cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds, heartbeatIntervalSeconds,
                 publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad, serverPeers, adminWebPort,
                 serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources, serverIndexUpdate,
-                newRelayServer, database, newRelayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription);
+                newRelayServer, database, newRelayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription, natTraversal);
     }
 
     /** Same configuration reusing the results of a remote search for {@code minutes} minutes (0: never). */
@@ -683,7 +714,7 @@ public record ServerConfig(
                 cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds, heartbeatIntervalSeconds,
                 publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad, serverPeers, adminWebPort,
                 serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources, serverIndexUpdate,
-                relayServer, database, relayFeed, minutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription);
+                relayServer, database, relayFeed, minutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription, natTraversal);
     }
 
     /** Same configuration refreshing the file index every {@code seconds} seconds. */
@@ -693,7 +724,7 @@ public record ServerConfig(
                 cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds, heartbeatIntervalSeconds,
                 publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad, serverPeers, adminWebPort,
                 serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources, serverIndexUpdate,
-                relayServer, database, relayFeed, remoteSearchCacheMinutes, seconds, fileRetentionDays, serverName, serverDescription);
+                relayServer, database, relayFeed, remoteSearchCacheMinutes, seconds, fileRetentionDays, serverName, serverDescription, natTraversal);
     }
 
     /** Same configuration keeping a file nobody published nor found for {@code days} days (0: never purged). */
@@ -703,7 +734,8 @@ public record ServerConfig(
                 cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds, heartbeatIntervalSeconds,
                 publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad, serverPeers, adminWebPort,
                 serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources, serverIndexUpdate,
-                relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, days, serverName, serverDescription);
+                relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, days, serverName,
+                serverDescription, natTraversal);
     }
 
     /** Same configuration with another name and description in the clients' server list (empty: the defaults). */
@@ -714,7 +746,18 @@ public record ServerConfig(
                 publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad, serverPeers, adminWebPort,
                 serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources, serverIndexUpdate,
                 relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, name,
-                description);
+                description, natTraversal);
+    }
+
+    /** Same configuration with other NAT traversal settings. */
+    public ServerConfig withNatTraversal(NatTraversalConfig newNatTraversal) {
+        return new ServerConfig(port, maxPacketSize, maxSearchResults, floodMaxRequestsPerSecond, maxUsers, maxFiles,
+                maxFilesPerUser, maxSourcesPerFile, databasePath, ipFilterPath, fakeFileDetectionEnabled, cbFailureRateThreshold,
+                cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds, heartbeatIntervalSeconds,
+                publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad, serverPeers, adminWebPort,
+                serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources, serverIndexUpdate,
+                relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays,
+                serverName, serverDescription, newNatTraversal);
     }
 
     /**
@@ -794,6 +837,7 @@ public record ServerConfig(
         // Not a ConfigParameter, so never shown nor written by the admin panel: only kept for fromProperties
         props.put("databasePassword", database.password());
         props.put("databaseImportFromH2", String.valueOf(database.importFromH2()));
+        props.put("natCallback", String.valueOf(natTraversal.natCallback()));
         return props;
     }
 
@@ -849,7 +893,8 @@ public record ServerConfig(
                 Integer.parseInt(props.getProperty("fileRetentionDays",
                         String.valueOf(DEFAULT_FILE_RETENTION_DAYS)).trim()),
                 props.getProperty("serverName", ""),
-                props.getProperty("serverDescription", "")
+                props.getProperty("serverDescription", ""),
+                NatTraversalConfig.fromProperties(props)
         );
     }
 }

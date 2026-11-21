@@ -20,9 +20,27 @@ public class ClientRegistry {
      * other clients reach a LowID client through OP_CALLBACKREQUEST.
      */
     public long allocateLowId() {
+        return allocateLowId(LowIdParity.ANY);
+    }
+
+    /**
+     * LowID parity: with the Lugdunum NAT callback on, a client that opted in gets an odd LowID and every other client
+     * an even one, so that a peer knows from a source's ID alone whether a callback is worth asking for (aMule master
+     * a6d6290be0, docs/NAT_T_Protocol.md, "Lugdunum NAT callback").
+     */
+    public enum LowIdParity {
+        ANY, ODD, EVEN;
+
+        boolean accepts(long id) {
+            return this == ANY || ((id & 1) == 1) == (this == ODD);
+        }
+    }
+
+    /** Same as {@link #allocateLowId()}, with a LowID of the given parity. */
+    public long allocateLowId(LowIdParity parity) {
         for (long tries = 0; tries < MAX_LOW_ID; tries++) {
             long id = nextLowId.getAndUpdate(v -> v >= MAX_LOW_ID ? 1 : v + 1);
-            if (!clientIdIndex.containsKey(id)) return id;
+            if (parity.accepts(id) && !clientIdIndex.containsKey(id)) return id;
         }
         throw new IllegalStateException("No LowID available");
     }

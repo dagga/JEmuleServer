@@ -103,6 +103,11 @@ public record Tag(byte type, String name, Object value) {
     public static final int TCPFLG_LARGEFILES = 0x100;
     public static final int TCPFLG_UDPOBFUSCATION = 0x200;
     public static final int TCPFLG_TCPOBFUSCATION = 0x400;
+    /**
+     * SRV_TCPFLG_NATTRAVERSAL: Lugdunum NAT callback (aMule master a6d6290be0, docs/NAT_T_Protocol.md). Set in
+     * OP_IDCHANGE only while the callback is enabled (natCallback); not part of {@link #SERVER_TCP_FLAGS}.
+     */
+    public static final int TCPFLG_NATT = 0x1000;
 
     public static final int UDPFLG_EXT_GETSOURCES = 0x01;
     public static final int UDPFLG_NEWTAGS = 0x08;
