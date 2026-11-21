@@ -28,6 +28,10 @@ import java.util.Locale;
  */
 public enum ConfigParameter {
 
+    SERVER_NAME("serverName", Type.STRING, Scope.HOT, 0, 0,
+            "Server name shown in the clients' server list (empty = default name; new logins and server list refreshes)"),
+    SERVER_DESCRIPTION("serverDescription", Type.STRING, Scope.HOT, 0, 0,
+            "Server description shown in the clients' server list (empty = default description)"),
     PORT("port", Type.INTEGER, Scope.RESTART, 1, 65535, "TCP/UDP port to listen on"),
     MAX_PACKET_SIZE("maxPacketSize", Type.INTEGER, Scope.HOT, 512, 64 * 1024 * 1024,
             "Maximum incoming packet size in bytes"),
@@ -267,9 +271,25 @@ public enum ConfigParameter {
         validateFormat(value);
     }
 
+    /**
+     * Longest server name or description in UTF-8 bytes: OP_EMULEINFOACK gives the length of the name in a single
+     * byte.
+     */
+    public static final int MAX_SERVER_TEXT_BYTES = 255;
+
     /** Additional format checks for the string parameters whose content is parsed by the server. */
     private void validateFormat(String value) {
         switch (key) {
+            case "serverName", "serverDescription" -> {
+                if (value.chars().anyMatch(Character::isISOControl)) {
+                    throw new IllegalArgumentException(key + " must not contain control characters");
+                }
+                int bytes = value.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+                if (bytes > MAX_SERVER_TEXT_BYTES) {
+                    throw new IllegalArgumentException(key + " must be at most " + MAX_SERVER_TEXT_BYTES
+                            + " bytes in UTF-8, got " + bytes);
+                }
+            }
             case "adminAllowedIps" -> {
                 for (String token : splitList(value)) {
                     if (token.equals("*") || token.equalsIgnoreCase("all")) continue;
