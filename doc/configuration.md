@@ -8,6 +8,7 @@ Options not set in that file use the defaults built into the server. Keep runtim
 
 | Area | Options | Purpose |
 |---|---|---|
+| Identity | `serverName`, `serverDescription` | Name and description shown in the clients' server list (empty = the JEmuleServer defaults, with the version; at most 255 bytes in UTF-8). Applied without restart, also from the web panel settings: new logins and the clients refreshing their server list get them, the connected clients keep the name received at their login. |
 | Network | `port`, `publicIp`, `maxPacketSize`, `tcpKeepAliveTimeoutInSeconds`, `heartbeatIntervalSeconds`, `lowIdCheckTimeoutSeconds` | Listener, advertised address, packet size and connection/liveness behavior. |
 | Capacity | `maxUsers`, `maxFiles`, `maxFilesPerUser`, `maxSourcesPerFile`, `maxSearchResults` | Limits for clients, indexed files, published files, source replies and search results. |
 | Index | `indexRefreshSeconds` | Seconds between two refreshes of the file index (default `10`, 1 to 600, applied without restart): new files, removals and source counts reach the searches at most that late. Each refresh following source count changes rewrites the source counts of every index segment holding a changed file, so a shorter period costs more CPU on a large index. Lookups by hash see the writes at once. |

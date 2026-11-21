@@ -80,7 +80,7 @@ public class PacketProcessor {
 
     private void handleEmuleInfo(ClientContext context, byte[] data, OutputStream out) throws IOException {
         log.debug("Received EMULE_INFO from {}", context.getSocket().getRemoteSocketAddress() != null ? HandlerUtils.sanitize(context.getSocket().getRemoteSocketAddress().toString()) : "unknown");
-        String serverName = Main.SERVER_NAME;
+        String serverName = context.getConfig().serverName();
         String serverVersion = Main.ESERVER_VERSION;
         byte[] nameBytes = serverName.getBytes(java.nio.charset.StandardCharsets.UTF_8);
         byte[] versionBytes = serverVersion.getBytes(java.nio.charset.StandardCharsets.UTF_8);
