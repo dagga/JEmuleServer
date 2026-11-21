@@ -170,8 +170,10 @@ public class LoginHandler {
             Server server = context.getServer();
             byte[] serverHash = server != null ? server.getServerHash() : new byte[16];
             InetAddress serverIp = server != null ? server.getPublicIp() : null;
-            FirewallChecker checker = new FirewallChecker(context.getConfig().lowIdCheckTimeoutSeconds() * 1000);
-            if (checker.isReachable(state.address(), state.listenPort(), state.userHash(), serverHash, serverIp, context.getConfig().port())) {
+            FirewallChecker checker = new FirewallChecker(context.getConfig().lowIdCheckTimeoutSeconds() * 1000,
+                    context.getConfig().obfuscatedFirewallCheck());
+            if (checker.isReachable(state.address(), state.listenPort(), state.userHash(), state.serverCaps(), serverHash, serverIp,
+                    context.getConfig().port())) {
                 return ipId;
             }
         }

@@ -2,6 +2,7 @@ package org.jemule.network;
 
 import org.jemule.config.ServerConfig;
 import org.jemule.core.ClientRegistry;
+import org.jemule.core.ClientState;
 import org.jemule.core.FileIndex;
 import org.jemule.network.handler.LoginHandler;
 import org.jemule.protocol.OpCode;
@@ -60,11 +61,18 @@ class LowIdCompatibilityTest {
         return login(registry, listenPort, new byte[16]);
     }
 
+    /** eMule's login without the crypt layer: the fake client above only speaks plain. */
+    static final int PLAIN_SRVCAPS = EMULE_DEFAULT_SRVCAPS & ~ClientState.SRVCAP_SUPPORTCRYPT;
+
     static int login(ClientRegistry registry, int listenPort, byte[] userHash) throws Exception {
+        return login(registry, listenPort, userHash, PLAIN_SRVCAPS);
+    }
+
+    static int login(ClientRegistry registry, int listenPort, byte[] userHash, int caps) throws Exception {
         FakeContext ctx = new FakeContext(new DummySocket(InetAddress.getLoopbackAddress(), 51000), CONFIG, registry, new FileIndex(null));
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         new LoginHandler().handleLogin(ctx, new Packet(Packet.PROTOCOL_ED2K, OpCode.LOGIN_REQUEST.value,
-                loginRequest(userHash, listenPort, "tester", EMULE_DEFAULT_SRVCAPS)), out);
+                loginRequest(userHash, listenPort, "tester", caps)), out);
         ByteArrayInputStream in = new ByteArrayInputStream(out.toByteArray());
         while (in.available() > 0) {
             Packet p = Packet.read(in, 65536);
@@ -132,5 +140,23 @@ class LowIdCompatibilityTest {
         }
         assertNotNull(hello.get(), "the test connection was made");
         assertTrue(id > 0 && id < 0x01000000, "LowID expected: " + id);
+    }
+
+    /**
+     * #124: eMuleQt with cryptLayerRequiredStrict refuses every plain connection, the HighID test included; the
+     * test connection is obfuscated for a client that announces the crypt layer, so that client still gets its
+     * HighID.
+     */
+    @Test
+    @Timeout(10)
+    void aClientRequiringTheCryptLayerStrictlyGetsAHighId() throws Exception {
+        byte[] userHash = new byte[16];
+        userHash[0] = 3;
+        int requires = EMULE_DEFAULT_SRVCAPS | ClientState.SRVCAP_REQUESTCRYPT | ClientState.SRVCAP_REQUIRECRYPT;
+        try (FakeEmuleClient client = new FakeEmuleClient(InetAddress.getLoopbackAddress(), userHash,
+                FakeEmuleClient.Crypt.REQUIRED)) {
+            assertEquals(0x0100007F, login(new ClientRegistry(), client.port(), userHash, requires));
+            assertEquals(List.of("obfuscated"), client.connections());
+        }
     }
 }

@@ -6,6 +6,7 @@ import org.jemule.core.ClientState;
 import org.jemule.core.FileIndex;
 import org.jemule.network.EmuleTestSupport.DummySocket;
 import org.jemule.network.EmuleTestSupport.FakeContext;
+import org.jemule.network.FakeEmuleClient;
 import org.jemule.network.Packet;
 import org.jemule.network.handler.FoundSource;
 import org.jemule.network.handler.LoginHandler;
@@ -88,12 +89,16 @@ class Ipv6SourceServiceTest {
 
     /** OP_LOGINREQUEST with the tags of eMuleQt (01, 11, 20, FB, AE, F9), old tag format as CTag::WriteTagToFile. */
     static byte[] loginRequest(byte[] userHash, int listenPort, byte[] ipv6) {
+        return loginRequest(userHash, listenPort, ipv6, EMULE_DEFAULT_SRVCAPS);
+    }
+
+    static byte[] loginRequest(byte[] userHash, int listenPort, byte[] ipv6, int caps) {
         byte[] nick = "aMule".getBytes(StandardCharsets.UTF_8);
         ByteBuffer b = ByteBuffer.allocate(128).order(ByteOrder.LITTLE_ENDIAN);
         b.put(userHash).putInt(0).putShort((short) listenPort).putInt(ipv6 == null ? 5 : 6);
         b.put((byte) 0x02).putShort((short) 1).put((byte) 0x01).putShort((short) nick.length).put(nick);
         b.put((byte) 0x03).putShort((short) 1).put((byte) 0x11).putInt(0x3C);
-        b.put((byte) 0x03).putShort((short) 1).put((byte) 0x20).putInt(EMULE_DEFAULT_SRVCAPS);
+        b.put((byte) 0x03).putShort((short) 1).put((byte) 0x20).putInt(caps);
         b.put((byte) 0x03).putShort((short) 1).put((byte) 0xFB).putInt(3 << 17 | 2 << 10);
         if (ipv6 != null) b.put((byte) 0x01).putShort((short) 1).put((byte) 0xAE).put(ipv6); // CT_MOD_IP_V6
         b.put((byte) 0x03).putShort((short) 1).put((byte) 0xF9).putInt(0); // eMuleQt also sends 0xF9, unknown here
@@ -341,28 +346,13 @@ class Ipv6SourceServiceTest {
     // ---- the dial-back itself, with FirewallChecker on ::1
 
     /** A client listening on [::1], answering OP_HELLO with the given user hash. */
-    static ServerSocket ipv6Client(byte[] userHash) {
-        ServerSocket ss;
+    static FakeEmuleClient ipv6Client(byte[] userHash, FakeEmuleClient.Crypt crypt) {
         try {
-            ss = new ServerSocket();
-            ss.bind(new InetSocketAddress(InetAddress.getByName("::1"), 0), 1);
+            return new FakeEmuleClient(InetAddress.getByName("::1"), userHash, crypt);
         } catch (IOException e) {
             assumeTrue(false, "no IPv6 loopback: " + e.getMessage());
             return null;
         }
-        Thread t = new Thread(() -> {
-            try (Socket s = ss.accept()) {
-                Packet.read(s.getInputStream(), 65536);
-                ByteBuffer b = ByteBuffer.allocate(64).order(ByteOrder.LITTLE_ENDIAN);
-                b.put(userHash).putInt(0).putShort((short) ss.getLocalPort()).putInt(0).putInt(0).putShort((short) 0);
-                new Packet(Packet.PROTOCOL_ED2K, (byte) 0x4C, Arrays.copyOf(b.array(), b.position()))
-                        .write(s.getOutputStream(), false);
-            } catch (IOException ignored) {
-            }
-        });
-        t.setDaemon(true);
-        t.start();
-        return ss;
     }
 
     @Test
@@ -372,11 +362,11 @@ class Ipv6SourceServiceTest {
         byte[] userHash = hash("00112233445566778899AABBCCDDEEFF");
         Ipv6Context ctx = new Ipv6Context(ON, new ClientRegistry(), Ipv6SourceService.DEFAULT);
         InetAddress loopback = InetAddress.getByName("::1");
-        try (ServerSocket ss = ipv6Client(userHash)) {
-            assertTrue(Ipv6SourceService.FIREWALL_CHECKER.reached(ctx, loopback, ss.getLocalPort(), userHash, 2000));
+        try (FakeEmuleClient client = ipv6Client(userHash, FakeEmuleClient.Crypt.NONE)) {
+            assertTrue(Ipv6SourceService.FIREWALL_CHECKER.reached(ctx, loopback, client.port(), userHash, 2000));
         }
-        try (ServerSocket ss = ipv6Client(hash("FFEEDDCCBBAA99887766554433221100"))) {
-            assertFalse(Ipv6SourceService.FIREWALL_CHECKER.reached(ctx, loopback, ss.getLocalPort(), userHash, 2000),
+        try (FakeEmuleClient client = ipv6Client(hash("FFEEDDCCBBAA99887766554433221100"), FakeEmuleClient.Crypt.NONE)) {
+            assertFalse(Ipv6SourceService.FIREWALL_CHECKER.reached(ctx, loopback, client.port(), userHash, 2000),
                     "answered by another client");
         }
     }
@@ -386,15 +376,40 @@ class Ipv6SourceServiceTest {
     void aLoginOnIpv6LoopbackIsReachedByTheRealDialBack() throws Exception {
         assumeIpv6();
         byte[] userHash = hash("00112233445566778899AABBCCDDEEFF");
-        try (ServerSocket ss = ipv6Client(userHash)) {
+        try (FakeEmuleClient client = ipv6Client(userHash, FakeEmuleClient.Crypt.SUPPORTED)) {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
-            Ipv6Context ctx = new Ipv6Context(ON, new ClientRegistry(),
-                    new Ipv6SourceService(a -> true, Ipv6SourceService.FIREWALL_CHECKER));
-            byte[] request = loginRequest(userHash, ss.getLocalPort(), InetAddress.getByName("::1").getAddress());
-            new LoginHandler().handleLogin(ctx, new Packet(Packet.PROTOCOL_ED2K, OpCode.LOGIN_REQUEST.value, request), out);
+            Ipv6Context ctx = loginOnIpv6Loopback(userHash, client.port(), EMULE_DEFAULT_SRVCAPS, out);
             assertEquals(0x07, status(awaitServerIdents(out, 2).get(1)));
             assertArrayEquals(InetAddress.getByName("::1").getAddress(), ctx.getState().ipv6().publishedAddress());
+            assertEquals(List.of("obfuscated"), client.connections());
         }
+    }
+
+    /**
+     * #124: a client that requires the crypt layer refuses a plain connection over IPv6 (aMule accepts one only as
+     * the login's test, from the server's IPv4 address); the obfuscated dial reaches it.
+     */
+    @Test
+    @Timeout(15)
+    void aClientRequiringTheCryptLayerIsReachedOverIpv6() throws Exception {
+        assumeIpv6();
+        byte[] userHash = hash("00112233445566778899AABBCCDDEEFF");
+        int requires = EMULE_DEFAULT_SRVCAPS | ClientState.SRVCAP_REQUESTCRYPT | ClientState.SRVCAP_REQUIRECRYPT;
+        try (FakeEmuleClient client = ipv6Client(userHash, FakeEmuleClient.Crypt.REQUIRED)) {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            loginOnIpv6Loopback(userHash, client.port(), requires, out);
+            assertEquals(0x07, status(awaitServerIdents(out, 2).get(1)));
+            assertEquals(List.of("obfuscated"), client.connections());
+        }
+    }
+
+    private static Ipv6Context loginOnIpv6Loopback(byte[] userHash, int port, int caps, ByteArrayOutputStream out)
+            throws Exception {
+        Ipv6Context ctx = new Ipv6Context(ON, new ClientRegistry(),
+                new Ipv6SourceService(a -> true, Ipv6SourceService.FIREWALL_CHECKER));
+        byte[] request = loginRequest(userHash, port, InetAddress.getByName("::1").getAddress(), caps);
+        new LoginHandler().handleLogin(ctx, new Packet(Packet.PROTOCOL_ED2K, OpCode.LOGIN_REQUEST.value, request), out);
+        return ctx;
     }
 
     // ---- source records
