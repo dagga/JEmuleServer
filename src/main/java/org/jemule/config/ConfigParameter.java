@@ -32,6 +32,10 @@ public enum ConfigParameter {
             "Server name shown in the clients' server list (empty = default name; new logins and server list refreshes)"),
     SERVER_DESCRIPTION("serverDescription", Type.STRING, Scope.HOT, 0, 0,
             "Server description shown in the clients' server list (empty = default description)"),
+    WELCOME_MESSAGE("welcomeMessage", Type.STRING, Scope.HOT, 0, 0,
+            "Welcome message shown in the client's server info at login (empty = default; {version}, {id}; \\n = new line)"),
+    LOGIN_MESSAGE("loginMessage", Type.STRING, Scope.HOT, 0, 0,
+            "Further message sent at login after the welcome message, e.g. rules (empty = none; {version}, {id}; \\n = new line)"),
     PORT("port", Type.INTEGER, Scope.RESTART, 1, 65535, "TCP/UDP port to listen on"),
     MAX_PACKET_SIZE("maxPacketSize", Type.INTEGER, Scope.HOT, 512, 64 * 1024 * 1024,
             "Maximum incoming packet size in bytes"),
@@ -283,6 +287,9 @@ public enum ConfigParameter {
      */
     public static final int MAX_SERVER_TEXT_BYTES = 255;
 
+    /** Longest welcome or login message in UTF-8 bytes, placeholders included: well below OP_SERVERMESSAGE's u16. */
+    public static final int MAX_SERVER_MESSAGE_BYTES = 2048;
+
     /** Additional format checks for the string parameters whose content is parsed by the server. */
     private void validateFormat(String value) {
         switch (key) {
@@ -294,6 +301,22 @@ public enum ConfigParameter {
                 if (bytes > MAX_SERVER_TEXT_BYTES) {
                     throw new IllegalArgumentException(key + " must be at most " + MAX_SERVER_TEXT_BYTES
                             + " bytes in UTF-8, got " + bytes);
+                }
+            }
+            case "welcomeMessage", "loginMessage" -> {
+                if (value.chars().anyMatch(c -> Character.isISOControl(c) && c != '\n' && c != '\r')) {
+                    throw new IllegalArgumentException(key + " must not contain control characters");
+                }
+                int bytes = value.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+                if (bytes > MAX_SERVER_MESSAGE_BYTES) {
+                    throw new IllegalArgumentException(key + " must be at most " + MAX_SERVER_MESSAGE_BYTES
+                            + " bytes in UTF-8, got " + bytes);
+                }
+                // eMule reads a line starting with "server version" as the server's version (CServerSocket)
+                for (String line : value.split("\\\\n|\\r?\\n")) {
+                    if (line.strip().toLowerCase(java.util.Locale.ROOT).startsWith("server version")) {
+                        throw new IllegalArgumentException(key + " must not have a line starting with 'server version'");
+                    }
                 }
             }
             case "adminAllowedIps" -> {
