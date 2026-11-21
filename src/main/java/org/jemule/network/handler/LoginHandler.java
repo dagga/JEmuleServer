@@ -9,6 +9,7 @@ import org.jemule.core.event.ClientEvent;
 import org.jemule.network.Packet;
 import org.jemule.network.FirewallChecker;
 import org.jemule.network.Server;
+import org.jemule.network.natt.KeepaliveToken;
 import org.jemule.network.natt.NatCallbackService;
 import org.jemule.protocol.OpCode;
 import org.jemule.protocol.Tag;
@@ -55,6 +56,8 @@ public class LoginHandler {
         // Lugdunum NAT callback: decided once at login, a later change of natCallback applies to the next logins
         boolean natCallback = context.getConfig().natTraversal().natCallback();
         boolean natOptIn = natCallback && NatCallbackService.optsIn(state.serverCaps());
+        // ed2k-server's LowID hole punch (natHolePunch, needs natCallback): also decided once at login
+        boolean natHolePunch = context.getConfig().natTraversal().holePunch();
         long clientId = assignClientId(context, state, !natCallback ? ClientRegistry.LowIdParity.ANY
                 : natOptIn ? ClientRegistry.LowIdParity.ODD : ClientRegistry.LowIdParity.EVEN);
         state.setClientId(clientId);
@@ -72,7 +75,14 @@ public class LoginHandler {
             }
         });
         NatCallbackService natCallbackService = context.getNatCallbackService();
-        if (natOptIn && natCallbackService != null) natCallbackService.register(state);
+        if (natCallbackService != null) {
+            if (natOptIn) {
+                natCallbackService.register(state);
+            } else if (natHolePunch && NatCallbackService.clientUdpPort(state) != 0) {
+                // A hole-punch target only: its 0xF9 UDP port and its 0x9F keepalives are where peers punch to
+                natCallbackService.register(state, false);
+            }
+        }
 
         // Send server version FIRST on its own line for eMule auto-detection
         sendServerMessage(context, out, "server version " + Main.ESERVER_VERSION);
@@ -84,7 +94,9 @@ public class LoginHandler {
         // eMule's ServerSocket.cpp expects: <NEW_ID 4>[<server_flags 4>][<server_tcp_port 4>][<reported_ip 4>][<obf_tcp_port 4>]
         // Flags: 0x01=COMPRESSION, 0x08=NEWTAGS, 0x10=UNICODE, 0x80=TYPETAGINTEGER, 0x100=LARGEFILES, 0x200=UDPOBFUSCATION, 0x400=TCPOBFUSCATION
         // 0x1000 (SRV_TCPFLG_NATTRAVERSAL): the Lugdunum NAT callback, for every client while it is enabled
-        int serverFlags = Tag.SERVER_TCP_FLAGS | (natCallback ? Tag.TCPFLG_NATT : 0);
+        // 0x20000 (SRV_TCPFLG_LOWID_HOLEPUNCH) and 0x100000 (SRV_TCPFLG_HOLEPUNCH_EXTENSION): ed2k-server's hole punch
+        int serverFlags = Tag.SERVER_TCP_FLAGS | (natCallback ? Tag.TCPFLG_NATT : 0)
+                | (natHolePunch ? Tag.TCPFLG_LOWID_HOLEPUNCH | Tag.TCPFLG_HOLEPUNCH_EXTENSION : 0);
         new Packet(Packet.PROTOCOL_ED2K, OpCode.ID_CHANGE.value,
                 idChange(state, serverFlags, clientIp, context.getConfig().port(), natOptIn, context.getSocket().getPort()))
                 .write(out, state.isZlibSupported());
@@ -191,6 +203,7 @@ public class LoginHandler {
                 case Tag.NAME_CLIENT_VERSION -> { if (tag.isInt()) state.setClientVersion(tag.unsignedValue()); }
                 case Tag.NAME_TCP_FLAGS -> { if (tag.isInt()) state.setServerCaps((int) tag.unsignedValue()); }
                 case Tag.NAME_EMULE_VERSION -> { if (tag.isInt()) state.setEmuleVersion(tag.unsignedValue()); }
+                case Tag.NAME_EMULE_UDPPORTS -> { if (tag.isInt()) state.setEmuleUdpPorts((int) tag.unsignedValue()); }
                 // Highest OFFERFILES version the client implements; any other type than uint32 means a legacy client
                 case Tag.NAME_OFFERFILES_VERSION -> { if (tag.type() == Tag.TYPE_INTEGER) state.setOfferFilesRequested(tag.unsignedValue()); }
                 default -> log.debug("Ignoring unknown login tag 0x{}", tag.name().length() == 1 ? Integer.toHexString(tag.name().charAt(0)) : tag.name());
@@ -276,6 +289,12 @@ public class LoginHandler {
             tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_OFFERFILES_BATCH_MAX, offerFiles.batchMax()));
             tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_OFFERFILES_MIN_INTERVAL_MS, offerFiles.minIntervalMs()));
         }
+        byte[] nattToken = natCallbackToken(context);
+        if (nattToken != null) {
+            // Over TCP only: a 0x9F proven with it counts from any address (NatCallbackService.acceptKeepalive)
+            tags.add(new Tag(Tag.TYPE_HASH, Tag.NAME_NATT_TOKEN, nattToken));
+            tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_NATT_PROOF, KeepaliveToken.PROOF_VERSION));
+        }
 
         ByteBuffer buf = ByteBuffer.allocate(4096).order(ByteOrder.LITTLE_ENDIAN);
         buf.put(hash);
@@ -298,6 +317,20 @@ public class LoginHandler {
         buf.get(response);
 
         new Packet(Packet.PROTOCOL_ED2K, OpCode.SERVER_IDENT.value, response).write(out, context.getState() != null && context.getState().isZlibSupported());
+    }
+
+    /**
+     * The NAT callback session token of this login (ST_NATT_TOKEN, ed2k-server 0.9.88), new at every login: only for
+     * a client that may send 0x9F ({@link NatCallbackService#mayKeepalive}), while natCallback and natCallbackToken
+     * are on. Null for any other client, which gets no unsolicited tag.
+     */
+    static byte[] natCallbackToken(ClientContext context) {
+        NatCallbackService natCallbackService = context.getNatCallbackService();
+        if (natCallbackService == null || !context.getConfig().natTraversal().natCallback()
+                || !context.getConfig().natTraversal().natCallbackToken()) {
+            return null;
+        }
+        return natCallbackService.issueToken(context.getState());
     }
 
     public static void sendServerStatus(ClientContext context, OutputStream out) throws IOException {

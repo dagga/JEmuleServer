@@ -135,6 +135,10 @@ public enum ConfigParameter {
             "Relay servers (host names, IPs / CIDR blocks) allowed to feed this index through /api/relay/files (relayToken)"),
     NAT_CALLBACK("natCallback", Type.BOOLEAN, Scope.HOT, 0, 0,
             "Lugdunum NAT callback between two LowID clients of this server (opt-in clients, new logins)"),
+    NAT_CALLBACK_TOKEN("natCallbackToken", Type.BOOLEAN, Scope.HOT, 0, 0,
+            "NAT callback: session token in OP_SERVERIDENT, so a 0x9F proven with it counts from any address (new logins, needs natCallback)"),
+    NAT_HOLE_PUNCH("natHolePunch", Type.BOOLEAN, Scope.HOT, 0, 0,
+            "ed2k-server LowID hole punch (0x60 / 0x61 / 0x62) and its hole-punch extension between two LowID clients of this server (new logins, needs natCallback)"),
     NAT_CALLBACK_CROSS_SERVER("natCallbackCrossServer", Type.BOOLEAN, Scope.HOT, 0, 0,
             "NAT callback for clients of other servers (0xA6 with requester ID 0, UDP flag 0x100000); needs natCallback");
 

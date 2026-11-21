@@ -55,6 +55,7 @@ public final class ClientState {
     private volatile long clientVersion;
     private volatile long emuleVersion;
     private volatile int serverCaps;
+    private volatile int emuleUdpPorts;
     /** OFFERFILES v1 version asked for in the login (string-named uint32 tag offerfiles_v), 0 if none. */
     private volatile long offerFilesRequested;
     /** OFFERFILES v1 terms advertised to this client at login, null for a legacy connection. */
@@ -107,6 +108,10 @@ public final class ClientState {
     /** CT_EMULE_VERSION ((major << 17) | (minor << 10) | (update << 7)), 0 for non eMule clients. */
     public long emuleVersion() { return emuleVersion; }
     public void setEmuleVersion(long emuleVersion) { this.emuleVersion = emuleVersion; }
+
+    /** CT_EMULE_UDPPORTS (0xF9): {@code (Kad UDP port << 16) | client UDP port}, 0 if not sent. */
+    public int emuleUdpPorts() { return emuleUdpPorts; }
+    public void setEmuleUdpPorts(int emuleUdpPorts) { this.emuleUdpPorts = emuleUdpPorts; }
 
     public long offerFilesRequested() { return offerFilesRequested; }
     public void setOfferFilesRequested(long version) { this.offerFilesRequested = version; }

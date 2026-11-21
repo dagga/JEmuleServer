@@ -354,8 +354,8 @@ class CrossServerCallbackTest {
     void offByDefaultAndAnnouncedOnlyWhenTaken() {
         assertEquals(NatTraversalConfig.DEFAULT, NatTraversalConfig.fromProperties(new java.util.Properties()));
         assertFalse(NatTraversalConfig.DEFAULT.natCallbackCrossServer());
-        assertFalse(new NatTraversalConfig(false, true).crossServerEnabled(), "needs natCallback");
-        assertTrue(new NatTraversalConfig(true, true).crossServerEnabled());
+        assertFalse(new NatTraversalConfig(false, false, false, true).crossServerEnabled(), "needs natCallback");
+        assertTrue(new NatTraversalConfig(true, false, false, true).crossServerEnabled());
 
         assertEquals(Tag.SERVER_UDP_FLAGS | Tag.UDPFLG_FOREIGN_CALLBACK, service.udpFlags());
         assertEquals(0x100000, Tag.UDPFLG_FOREIGN_CALLBACK);

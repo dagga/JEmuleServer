@@ -90,10 +90,17 @@ public class Server {
     private final FileIndex fileIndex;
     private final org.jemule.core.MetricsHistory metricsHistory;
     private volatile KadSourceService kadSourceService;
-    /** Lugdunum NAT callback between LowID clients (natCallback, hot): keepalives, requests and notices. */
+    /** Timers of the LowID hole punch: short (3 s at most), so kept apart from the maintenance tasks. */
+    private final java.util.concurrent.ScheduledExecutorService natTimers = ServerThreads.maintenanceScheduler("nat-traversal");
+    /**
+     * Lugdunum NAT callback between LowID clients (natCallback, hot): keepalives, with their session tokens
+     * (natCallbackToken, hot), requests and notices; and ed2k-server's LowID hole punch (natHolePunch, hot).
+     */
     private final NatCallbackService natCallbackService = new NatCallbackService(
-            () -> config.natTraversal().natCallback(), () -> config.natTraversal().natCallbackCrossServer(),
-            this::isIpBlocked, System::currentTimeMillis, new NatCallbackTransport());
+            () -> config.natTraversal().natCallback(), () -> config.natTraversal().natCallbackToken(),
+            () -> config.natTraversal().holePunch(), () -> config.natTraversal().natCallbackCrossServer(),
+            this::isIpBlocked, System::currentTimeMillis, new NatCallbackTransport(),
+            new org.jemule.network.natt.KeepaliveToken(), registry::get, this::scheduleNatTimer);
     /** OFFERFILES v1 ceiling shared by all v1 connections, and its counters. */
     private final org.jemule.core.OfferFilesV1 offerFilesV1 = new org.jemule.core.OfferFilesV1();
     private final FloodProtector floodProtector;
@@ -193,11 +200,31 @@ public class Server {
         return natCallbackService.udpFlags();
     }
 
+    /** Runs a timer of the LowID hole punch; none once the server stops. */
+    private void scheduleNatTimer(Runnable task, long delayMs) {
+        try {
+            natTimers.schedule(() -> {
+                try {
+                    task.run();
+                } catch (RuntimeException e) {
+                    log.warn("NAT traversal timer failed", e);
+                }
+            }, delayMs, TimeUnit.MILLISECONDS);
+        } catch (java.util.concurrent.RejectedExecutionException e) {
+            log.debug("NAT traversal timer dropped: the server is stopping");
+        }
+    }
+
     /** Notices of the NAT callback: TCP on the target's server connection, UDP obfuscated with its server key. */
     private final class NatCallbackTransport implements NatCallbackService.Transport {
         @Override
         public void sendTcp(long clientId, Packet packet) {
             registry.sendTo(clientId, packet);
+        }
+
+        @Override
+        public void sendTcp(ClientState client, Packet packet) {
+            registry.sendToConnection(client.connectionId(), packet);
         }
 
         @Override
@@ -1828,6 +1855,7 @@ public class Server {
         AdminWebPanel panel = adminWebPanel;
         if (panel != null) panel.close();
         maintenance.shutdownNow();
+        natTimers.shutdownNow();
         serverSearchBridge.close();
         serverIndexUpdater.close();
         serverRelay.close();

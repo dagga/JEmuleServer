@@ -42,6 +42,7 @@ public class PacketProcessor {
             case GET_SOURCES, GET_SOURCES_OBFU -> sourceHandler.handleGetSources(context, p, out);
             case EMULE_INFO -> handleEmuleInfo(context, p.data(), out);
             case CALLBACK_REQUEST -> sourceHandler.handleCallback(context, p.data(), out);
+            case LOWID_HOLEPUNCH_REQUEST -> handleHolePunchRequest(context, p.data());
             case COMPRESSED_PART -> handleCompressedPart(context, p.data(), out);
             case FOUND_SOURCES, SOURCES_RESULT_OBFU -> handleSourcesResult(context, p, out);
             case GET_SERVER_LIST -> sendServerList(context, out);
@@ -55,6 +56,12 @@ public class PacketProcessor {
 
     private static String hex(byte b) {
         return String.format("%02X", b);
+    }
+
+    /** OP_LOWID_HOLEPUNCH_REQUEST (0x60): ed2k-server's LowID hole punch, answered when natHolePunch is on. */
+    private void handleHolePunchRequest(ClientContext context, byte[] data) {
+        org.jemule.network.natt.NatCallbackService natCallback = context.getNatCallbackService();
+        if (natCallback != null) natCallback.handleHolePunchRequest(context.getState(), data);
     }
 
     private void handleDisconnect(ClientContext context) throws IOException {

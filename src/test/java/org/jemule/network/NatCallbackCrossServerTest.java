@@ -26,7 +26,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class NatCallbackCrossServerTest {
 
     static final int PORT = SourcesCompatibilityTest.CONFIG.port();
-    static final ServerConfig ENABLED = SourcesCompatibilityTest.CONFIG.withNatTraversal(new NatTraversalConfig(true, true));
+    static final ServerConfig ENABLED = SourcesCompatibilityTest.CONFIG.withNatTraversal(new NatTraversalConfig(true, false, false, true));
 
     Server server;
 
@@ -57,7 +57,7 @@ class NatCallbackCrossServerTest {
         props.setProperty("natCallback", "true");
         props.setProperty("natCallbackCrossServer", "true");
         ServerConfig config = ServerConfig.fromProperties(props);
-        assertEquals(new NatTraversalConfig(true, true), config.natTraversal());
+        assertEquals(new NatTraversalConfig(true, false, false, true), config.natTraversal());
         assertEquals("true", config.toProperties().get("natCallbackCrossServer"));
         assertEquals(NatTraversalConfig.DEFAULT, ServerConfig.DEFAULT.natTraversal());
         assertEquals("false", ServerConfig.DEFAULT.toProperties().get("natCallbackCrossServer"));
@@ -71,7 +71,7 @@ class NatCallbackCrossServerTest {
         assertEquals(0, statusUdpFlags() & 0x100000, "off by default");
         server.stop();
 
-        server = new Server(SourcesCompatibilityTest.CONFIG.withNatTraversal(new NatTraversalConfig(false, true)),
+        server = new Server(SourcesCompatibilityTest.CONFIG.withNatTraversal(new NatTraversalConfig(false, false, false, true)),
                 new ClientFactory());
         assertEquals(0, statusUdpFlags() & 0x100000, "needs natCallback");
         server.stop();

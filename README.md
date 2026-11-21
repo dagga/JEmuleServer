@@ -591,6 +591,27 @@ the target gets the requester's UDP endpoint by TCP `0x37`, or by UDP `0xA7` whe
 20 s before, and punches it. A requester gets 10 requests at once then one a second, a target 20 notices then one a
 second. The server sends nothing else, and no file data.
 
+With `natCallbackToken=true` as well (off by default), a client whose UDP leaves from another public IP than its TCP
+(carrier NAT, VPN) can still give its UDP endpoint (ed2k-server 0.9.88; aMule master, "Split TCP and UDP exit"). A
+client that may send `0x9F` (`0x1000` or `0x100000` in `CT_SERVER_FLAGS`, or a UDP port in `CT_EMULE_UDPPORTS`) gets
+16 random bytes in `OP_SERVERIDENT` (`0xAC`, with `0xA9` = 1), over TCP only and new at every login. Its 36-byte
+`0x9F` `<user hash 16><counter 4><mac 16>`, the mac being the first 16 bytes of HMAC-SHA256 keyed with the token over
+the hash and counter, is then believed from any address when the counter rises; a bad mac or a replayed counter moves
+nothing. The token itself is never taken over UDP.
+
+With `natHolePunch=true` as well (off by default), the server also runs ed2k-server's LowID hole punch (aMule master,
+`docs/NAT_T_Protocol.md`, "ed2k-server LowID hole punch"; ed2k-server README, "Implementing a compatible client") and
+sets the TCP flags `0x20000` and `0x100000` in `OP_IDCHANGE`. A LowID that sends its UDP ports at login
+(`CT_EMULE_UDPPORTS`, `0xF9`) may send `0x9F` and be a target. A LowID asks with TCP `0x60` `<target ID 4><UDP port 2>`;
+both sides get TCP `0x61` `<peer IP 4><TCP port 2><UDP port 2><user hash 16><role 1><peer ID 4><peer crypt 1>`, with
+`<own IP 4><own UDP port 2>` appended when the reader sent a `0x9F` in the last 10 minutes, and punch towards each
+other. The UDP endpoint given is that of the last `0x9F`, else the login IP with the announced port. The `0x61` is sent
+again 1.2 s and 3 s later. Otherwise the requester gets TCP `0x62` `<target ID 4><reason 1>`: 1 target not logged in, 2
+target HighID, 3 bad request (itself, a HighID requester, no UDP port for the requester), 4 target without a UDP port,
+5 no IPv4 endpoint. Between two clients that set `0x100000` with `0x1000` in `CT_SERVER_FLAGS` (the hole-punch
+extension), the target is first woken with `0x37`, and the `0x61` waits up to 3 s for its fresh `0x9F`. Requests share
+the callback's limits.
+
 With `natCallbackCrossServer=true` as well (off by default), a client logged in to another server may ask this
 server to wake one of these LowIDs (`0xA6` with requester ID 0, ed2k-server's cross-server NAT callback), announced
 with `0x100000` in the UDP flags. The requester gets the target's UDP endpoint only when the target announced the
