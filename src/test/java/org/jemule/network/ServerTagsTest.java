@@ -94,7 +94,7 @@ class ServerTagsTest {
         assertEquals(Tag.TYPE_INTEGER, verTag.type());
         int version = (int) verTag.value();
         // displayed by eMule as String.format("%u.%02u", v >> 16, v & 0xFFFF)
-        assertEquals("17.17", String.format("%d.%02d", version >>> 16, version & 0xFFFF));
+        assertEquals("17.18", String.format("%d.%02d", version >>> 16, version & 0xFFFF));
 
         Tag maxUsersTag = findTag(tags, Tag.NAME_MAXUSERS);
         assertNotNull(maxUsersTag, "Missing NAME_MAXUSERS tag");
