@@ -611,8 +611,11 @@ other. The UDP endpoint given is that of the last `0x9F`, else the login IP with
 again 1.2 s and 3 s later. Otherwise the requester gets TCP `0x62` `<target ID 4><reason 1>`: 1 target not logged in, 2
 target HighID, 3 bad request (itself, a HighID requester, no UDP port for the requester), 4 target without a UDP port,
 5 no IPv4 endpoint. Between two clients that set `0x100000` with `0x1000` in `CT_SERVER_FLAGS` (the hole-punch
-extension), the target is first woken with `0x37`, and the `0x61` waits up to 3 s for its fresh `0x9F`. Requests share
-the callback's limits.
+extension), the target is first woken with `0x37`, and the `0x61` waits up to 3 s for its fresh `0x9F`. A target that
+implements only Lugdunum's callback (`0x1000` without `0x100000`, e.g. NeoMule, NeoLoader) ignores `0x61`: when it has
+sent no `0x9F` in its session, it also gets a `0x37` with the requester's endpoint, so that it dials the requester, as
+ed2k-server's bridge does; not when one side requires the crypt layer and the two cannot use it. Requests share the
+callback's limits.
 
 With `natCallbackCrossServer=true` as well (off by default), a client logged in to another server may ask this
 server to wake one of these LowIDs (`0xA6` with requester ID 0, ed2k-server's cross-server NAT callback), announced

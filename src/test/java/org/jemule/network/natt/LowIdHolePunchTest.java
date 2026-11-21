@@ -447,8 +447,137 @@ class LowIdHolePunchTest {
             punch(a, 13, 4672);
             String flags = Integer.toHexString(pair[0]) + " " + Integer.toHexString(pair[1]);
             assertEquals(List.of(NatOpcodes.OP_LOWID_HOLEPUNCH_INFO), opcodes(to(a)), flags);
-            assertEquals(List.of(NatOpcodes.OP_LOWID_HOLEPUNCH_INFO), opcodes(to(b)), flags);
+            // A Lugdunum-only target is also bridged with 0x37 (tested below)
+            List<Byte> toTarget = pair[1] == NATT
+                    ? List.of(NatOpcodes.OP_LOWID_HOLEPUNCH_INFO, NatOpcodes.OP_NAT_CALLBACKREQUESTED)
+                    : List.of(NatOpcodes.OP_LOWID_HOLEPUNCH_INFO);
+            assertEquals(toTarget, opcodes(to(b)), flags);
         }
+    }
+
+    // Bridge to a Lugdunum-only target (#127, ed2k-server's bridge(), andrey23127/ed2k-server#39)
+
+    /** The 0x37 sent to {@code c}, which must be one: its body. */
+    byte[] bridge(ClientState c) {
+        List<Packet> notices = to(c).stream().filter(p -> p.opcode() == NatOpcodes.OP_NAT_CALLBACKREQUESTED).toList();
+        assertEquals(1, notices.size(), "one 0x37: " + opcodes(to(c)));
+        return notices.getFirst().data();
+    }
+
+    boolean bridged(ClientState c) {
+        return to(c).stream().anyMatch(p -> p.opcode() == NatOpcodes.OP_NAT_CALLBACKREQUESTED);
+    }
+
+    @Test
+    void aLugdunumOnlyTargetIsBridgedWhateverTheRequesterAnnounces() throws Exception {
+        for (int requesterCaps : new int[]{0, NATT, EXT}) {
+            setup();
+            ClientState a = lowId(0xA, 12, "5.6.7.8", requesterCaps, 4672);
+            ClientState b = lowId(0xB, 13, "9.9.9.9", NATT, 5672);
+            punch(a, 13, 4672);
+            String flags = Integer.toHexString(requesterCaps);
+            assertEquals(List.of(NatOpcodes.OP_LOWID_HOLEPUNCH_INFO), opcodes(to(a)),
+                    "the requester's side is unchanged");
+            assertEquals(List.of(NatOpcodes.OP_LOWID_HOLEPUNCH_INFO, NatOpcodes.OP_NAT_CALLBACKREQUESTED),
+                    opcodes(to(b)), flags);
+            byte[] body = bridge(b);
+            // <requester IP 4><requester UDP port 2><requester ID 4><crypt 1>, the real requester ID
+            assertEquals(11, body.length, flags);
+            assertArrayEquals(new byte[]{5, 6, 7, 8}, Arrays.copyOfRange(body, 0, 4));
+            assertEquals(4672, le(body).getShort(4) & 0xFFFF);
+            assertEquals(12, le(body).getInt(6));
+            assertEquals(0, body[10]);
+            assertEquals(1, service.holePunchCounters().get("bridge"));
+            // Sent once per 0x60: the resends of the 0x61 do not repeat it
+            advance(10_000);
+            assertEquals(1, to(b).stream().filter(p -> p.opcode() == NatOpcodes.OP_NAT_CALLBACKREQUESTED).count());
+        }
+    }
+
+    @Test
+    void theBridgeGivesTheRequestersBestKnownPortAndItsHashWithTheCryptLayer() throws Exception {
+        ClientState a = lowId(0xA, 12, "5.6.7.8", SUPPORTS | REQUESTS, 4672);
+        ClientState b = lowId(0xB, 13, "9.9.9.9", NATT | SUPPORTS, 5672);
+        // A's fresh 0x9F wins over its announced port
+        assertTrue(service.handleKeepalive(hash(0xA), ip("5.6.7.8"), 41000, false));
+        punch(a, 13, 4672);
+        byte[] body = bridge(b);
+        assertEquals(27, body.length, "the requester's user hash follows");
+        assertEquals(41000, le(body).getShort(4) & 0xFFFF);
+        assertEquals(0x80 | 0x03, body[10] & 0xFF);
+        assertArrayEquals(hash(0xA), Arrays.copyOfRange(body, 11, 27));
+    }
+
+    @Test
+    void aBridgedTargetWithoutAUdpPortStillGetsThe0x37() throws Exception {
+        ClientState a = lowId(0xA, 12, "5.6.7.8", 0, 4672);
+        ClientState b = lowId(0xB, 13, "9.9.9.9", NATT, 0);
+        punch(a, 13, 4672);
+        assertEquals(FAIL_TARGET_NO_UDP, failReason(a, 13));
+        assertEquals(List.of(NatOpcodes.OP_NAT_CALLBACKREQUESTED), opcodes(to(b)), "the target dials: no port needed");
+        assertEquals(4672, le(bridge(b)).getShort(4) & 0xFFFF);
+    }
+
+    @Test
+    void noBridgeForATargetThatReads0x61() throws Exception {
+        // A stock target (hole punch only, through its 0xF9 port), and an extension target
+        for (int targetCaps : new int[]{0, EXT}) {
+            setup();
+            ClientState a = lowId(0xA, 12, "5.6.7.8", 0, 4672);
+            ClientState b = lowId(0xB, 13, "9.9.9.9", targetCaps, 5672);
+            punch(a, 13, 4672);
+            assertFalse(bridged(b), Integer.toHexString(targetCaps));
+            assertEquals(0, service.holePunchCounters().get("bridge"));
+        }
+        // A Lugdunum target that sent a 0x9F in this session: it reads 0x61
+        setup();
+        ClientState a = lowId(0xA, 12, "5.6.7.8", 0, 4672);
+        ClientState b = lowId(0xB, 13, "9.9.9.9", NATT, 5672);
+        assertTrue(service.handleKeepalive(hash(0xB), ip("9.9.9.9"), 50000, false));
+        punch(a, 13, 4672);
+        assertEquals(List.of(NatOpcodes.OP_LOWID_HOLEPUNCH_INFO), opcodes(to(b)));
+        // Even once that 0x9F is no longer fresh
+        sent.clear();
+        advance(NatCallbackService.KEEPALIVE_TTL_MS + 10_000);
+        sent.clear();
+        punch(a, 13, 4672);
+        assertFalse(bridged(b));
+    }
+
+    @Test
+    void noBridgeWhenTheCryptLayerRulesItOut() throws Exception {
+        // B requires the crypt layer, A has none: no 0x37, the 0x61 still goes out (it rules out nothing)
+        ClientState a = lowId(0xA, 12, "5.6.7.8", 0, 4672);
+        ClientState b = lowId(0xB, 13, "9.9.9.9", NATT | 0x200 | 0x400 | 0x800, 5672);
+        punch(a, 13, 4672);
+        assertEquals(List.of(NatOpcodes.OP_LOWID_HOLEPUNCH_INFO), opcodes(to(a)));
+        assertEquals(List.of(NatOpcodes.OP_LOWID_HOLEPUNCH_INFO), opcodes(to(b)));
+        assertEquals(0, service.holePunchCounters().get("bridge"));
+    }
+
+    @Test
+    void noBridgeWhenThePairCannotBeServed() throws Exception {
+        ClientState a = lowId(0xA, 12, "5.6.7.8", 0, 0);
+        ClientState b = lowId(0xB, 13, "9.9.9.9", NATT, 5672);
+        // No requester port at all: nothing for the target to dial
+        punch(a, 13, 0);
+        assertEquals(FAIL_BAD_REQUEST, failReason(a, 13));
+        assertFalse(bridged(b));
+        // Over the target's allowance: dropped, bridge included
+        sent.clear();
+        for (int i = 0; i < NatCallbackService.TARGET_BURST + 1; i++) {
+            ClientState r = lowId(0x20 + i, 100 + 2L * i, "10.0.0." + (i + 1), 0, 4672);
+            punch(r, 13, 4672);
+        }
+        assertEquals(NatCallbackService.TARGET_BURST - 1,
+                to(b).stream().filter(p -> p.opcode() == NatOpcodes.OP_NAT_CALLBACKREQUESTED).count(),
+                "the first 0x60 took one of the burst");
+        // Disabled
+        sent.clear();
+        holePunch.set(false);
+        advance(60_000);
+        punch(lowId(0xC, 14, "5.6.7.9", 0, 4672), 13, 4672);
+        assertFalse(bridged(b));
     }
 
     @Test

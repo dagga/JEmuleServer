@@ -54,6 +54,10 @@ import java.util.function.LongSupplier;
  *   0x100000): the target is first woken with Lugdunum's TCP 0x37 carrying the requester's endpoint; it answers with
  *   0x9F, and on its first accepted 0x9F, or after {@link #EXTENSION_WAIT_MS} without one, both get the 0x61, then the
  *   resends. A 0x60 for a pair already waiting adds nothing.</li>
+ *   <li>Bridge, for a target that implements only Lugdunum's callback (0x1000 without 0x100000, e.g. NeoMule's
+ *   {@code CanLow2Low()}, NeoLoader) and so ignores 0x61: after the answer, the target also gets Lugdunum's TCP 0x37
+ *   carrying the requester's endpoint, so that it dials the requester ({@link #bridge}, ed2k-server's
+ *   {@code bridge()}, andrey23127/ed2k-server#39).</li>
  * </ol>
  * The UDP endpoint given for a client is the source of its last accepted 0x9F when that is under
  * {@link NatCallbackService#KEEPALIVE_TTL_MS} old, else its login IPv4 with the port it announced (0xF9, or the port of
@@ -148,6 +152,7 @@ final class LowIdHolePunch {
     private final LongAdder extensionStarted = new LongAdder();
     private final LongAdder extensionFresh = new LongAdder();
     private final LongAdder extensionTimeout = new LongAdder();
+    private final LongAdder bridged = new LongAdder();
 
     /**
      * @param service   the sessions and their 0x9F endpoints
@@ -211,6 +216,8 @@ final class LowIdHolePunch {
             }
         }
         boolean sent = answer(requester, targetId) == 0;
+        // Whether or not the requester got its 0x61: a target without a UDP port dials and needs none
+        if (sides.failure() == 0) bridge(requester, sides);
         if (sent) {
             long key = key(requester.lowId, targetId);
             Pending p = new Pending(key, requester, targetId, false);
@@ -241,6 +248,32 @@ final class LowIdHolePunch {
                 new Packet(Packet.PROTOCOL_ED2K, NatOpcodes.OP_NAT_CALLBACKREQUESTED, body));
         scheduler.schedule(() -> release(p, false), EXTENSION_WAIT_MS);
         return Outcome.TARGET_WOKEN;
+    }
+
+    /**
+     * Bridge to a Lugdunum-only target, as ed2k-server's {@code bridge()}: TCP 0x37
+     * {@code <requester IP 4><requester UDP port 2><requester ID 4><crypt 1>[<user hash 16>]}, sent once per 0x60, in
+     * addition to the answer, when the target opted in to Lugdunum's callback (0x1000), did not announce the
+     * extension (0x100000) and had no 0x9F accepted in this session: a 0x9F proves that the client reads 0x61. The
+     * requester needs no 0x1000 of its own. Its port is the one {@link #endpoint} gives (a fresh 0x9F, else 0xF9 or its
+     * 0x60), and nothing is sent without one, nor when one side requires the crypt layer and the two cannot use it
+     * ({@link NatCallbackService#notice}). The target's allowance was charged for this 0x60 already.
+     */
+    private void bridge(Session requester, Sides sides) {
+        Session target = sides.target();
+        if (!target.lugdunum || target.extension || target.keepalive != null) return;
+        Endpoint from = sides.requester();
+        if (from.port() == 0) return;
+        ClientState r = requester.client;
+        byte[] body = NatCallbackService.notice(from.ip(), from.port(), requester.lowId, r.cryptOptions(), r.userHash(),
+                target.client.cryptOptions());
+        if (body == null) return;
+        transport.sendTcp(target.client, new Packet(Packet.PROTOCOL_ED2K, NatOpcodes.OP_NAT_CALLBACKREQUESTED, body));
+        bridged.increment();
+        if (log.isDebugEnabled()) {
+            log.debug("LowID hole punch from {} to Lugdunum-only {}: 0x37 sent to the target", requester.lowId,
+                    sides.targetId());
+        }
     }
 
     /** A 0x9F of {@code session} was accepted: the extension coordinations waiting for it go ahead. */
@@ -391,7 +424,8 @@ final class LowIdHolePunch {
 
     /**
      * Counters after ed2k-server's holepunch_*: 0x60 received, 0x61 pairs sent (resends included), 0x62 by reason,
-     * requests over a limit, and the extension's wakes, released by a fresh 0x9F or after the wait.
+     * requests over a limit, the extension's wakes, released by a fresh 0x9F or after the wait, and the 0x37 bridges to
+     * Lugdunum-only targets.
      */
     Map<String, Long> counters() {
         Map<String, Long> counters = new LinkedHashMap<>();
@@ -406,6 +440,7 @@ final class LowIdHolePunch {
         counters.put("ext_started", extensionStarted.sum());
         counters.put("ext_fresh", extensionFresh.sum());
         counters.put("ext_timeout", extensionTimeout.sum());
+        counters.put("bridge", bridged.sum());
         return counters;
     }
 }
