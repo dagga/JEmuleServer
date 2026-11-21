@@ -382,6 +382,15 @@ public final class NatCallbackService {
         return tokens.issue(client.connectionId());
     }
 
+    /**
+     * The token {@link #issueToken} gave this session, for an OP_SERVERIDENT sent again during it (the IPv6 verdict,
+     * doc/ipv6.md): the client keeps signing its 0x9F with it. Null as for {@link #issueToken}.
+     */
+    public byte[] sessionToken(ClientState client) {
+        if (!enabled.getAsBoolean() || !tokenEnabled.getAsBoolean() || !mayKeepalive(client)) return null;
+        return tokens.current(client.connectionId());
+    }
+
     /** Forgets a client that disconnected, and its session token; nothing else if it never opted in. */
     public void unregister(ClientState client) {
         if (client == null) return;

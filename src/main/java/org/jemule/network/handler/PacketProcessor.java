@@ -40,6 +40,7 @@ public class PacketProcessor {
             case QUERY_MORE_RESULT -> searchHandler.handleQueryMoreResult(context, out);
             case PUBLISH_FILES, OFFER_FILES -> publishHandler.handlePublish(context, op, p.data(), out);
             case GET_SOURCES, GET_SOURCES_OBFU -> sourceHandler.handleGetSources(context, p, out);
+            case IPV6_UPDATE -> context.getIpv6SourceService().onUpdate(context, p.data());
             case EMULE_INFO -> handleEmuleInfo(context, p.data(), out);
             case CALLBACK_REQUEST -> sourceHandler.handleCallback(context, p.data(), out);
             case LOWID_HOLEPUNCH_REQUEST -> handleHolePunchRequest(context, p.data());

@@ -35,7 +35,7 @@ public class SourceHandler {
         log.debug("Client {} requested sources for {} ({})", context.getState().clientId(), hash, obfu ? "OBFU" : "plain");
 
         var sources = context.getFileIndex().getSources(hash, context.getState(), context.getConfig().maxSourcesPerFile());
-        List<FoundSource> answer = FoundSource.of(reachableSources(sources));
+        List<FoundSource> answer = context.getIpv6SourceService().foundSources(context, reachableSources(sources));
         // With few sources here, Kad is asked too: its sources come in a second answer. Not for another server,
         // which asks Kad and the other servers itself
         boolean fromServer = context.isFromServer();
@@ -93,10 +93,13 @@ public class SourceHandler {
         return encodeObfu(hashBytes, FoundSource.of(reachableSources(sources)));
     }
 
-    /** OP_FOUNDSOURCES_OBFU of {@code sources}, at most 255. */
+    /**
+     * OP_FOUNDSOURCES_OBFU of {@code sources}, at most 255. An IPv6 record ends with its address:
+     * <code>&lt;0xFFFFFFFF 4&gt;&lt;port 2&gt;&lt;cryptOptions 1&gt;[&lt;userhash 16&gt;]&lt;IPv6 16&gt;</code>.
+     */
     public static byte[] encodeObfu(byte[] hashBytes, List<FoundSource> sources) {
         int count = Math.min(sources.size(), 255);
-        ByteBuffer buf = ByteBuffer.allocate(16 + 1 + count * (6 + 1 + 16)).order(ByteOrder.LITTLE_ENDIAN);
+        ByteBuffer buf = ByteBuffer.allocate(16 + 1 + count * (6 + 1 + 16 + 16)).order(ByteOrder.LITTLE_ENDIAN);
         buf.put(hashBytes);
         buf.put((byte) count);
         for (int i = 0; i < count; i++) {
@@ -107,6 +110,7 @@ public class SourceHandler {
             buf.putShort((short) s.port());
             buf.put((byte) (options | (withHash ? 0x80 : 0)));
             if (withHash) buf.put(s.userHash());
+            if (s.ipv6() != null) buf.put(s.ipv6());
         }
         return Arrays.copyOf(buf.array(), buf.position());
     }
@@ -128,18 +132,22 @@ public class SourceHandler {
         return encodePlain(hashBytes, FoundSource.of(reachableSources(sources)));
     }
 
-    /** OP_FOUNDSOURCES of {@code sources}, at most 255. */
+    /**
+     * OP_FOUNDSOURCES of {@code sources}, at most 255. An IPv6 record ends with its address:
+     * <code>&lt;0xFFFFFFFF 4&gt;&lt;port 2&gt;&lt;IPv6 16&gt;</code>.
+     */
     public static byte[] encodePlain(byte[] hashBytes, List<FoundSource> sources) {
         int count = Math.min(sources.size(), 255);
-        ByteBuffer buf = ByteBuffer.allocate(16 + 1 + count * 6).order(ByteOrder.LITTLE_ENDIAN);
+        ByteBuffer buf = ByteBuffer.allocate(16 + 1 + count * (6 + 16)).order(ByteOrder.LITTLE_ENDIAN);
         buf.put(hashBytes);
         buf.put((byte) count);
         for (int i = 0; i < count; i++) {
             FoundSource s = sources.get(i);
             buf.putInt((int) s.id());
             buf.putShort((short) s.port());
+            if (s.ipv6() != null) buf.put(s.ipv6());
         }
-        return buf.array();
+        return Arrays.copyOf(buf.array(), buf.position());
     }
 
     /**

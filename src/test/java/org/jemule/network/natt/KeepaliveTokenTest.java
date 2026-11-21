@@ -52,6 +52,18 @@ class KeepaliveTokenTest {
     }
 
     @Test
+    void theCurrentTokenKeepsItsCounter() {
+        KeepaliveToken tokens = new KeepaliveToken();
+        byte[] token = tokens.issue(3);
+        assertEquals(KeepaliveToken.Verdict.ACCEPTED, tokens.verify(3, KeepaliveToken.proof(USER_HASH, token, 4)));
+        assertArrayEquals(token, tokens.current(3), "same token for an OP_SERVERIDENT sent again");
+        assertEquals(KeepaliveToken.Verdict.REPLAY, tokens.verify(3, KeepaliveToken.proof(USER_HASH, token, 4)));
+        assertEquals(KeepaliveToken.Verdict.ACCEPTED, tokens.verify(3, KeepaliveToken.proof(USER_HASH, token, 5)));
+        assertEquals(KeepaliveToken.TOKEN_SIZE, tokens.current(4).length, "drawn when the connection holds none");
+        assertTrue(tokens.holds(4));
+    }
+
+    @Test
     void aNewLoginDrawsANewTokenAndRestartsTheCounter() {
         KeepaliveToken tokens = new KeepaliveToken();
         byte[] first = tokens.issue(1);

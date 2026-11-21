@@ -53,7 +53,7 @@ class NatKeepaliveTokenTest {
         server.stop();
     }
 
-    record Login(ClientState state, List<Tag> identTags) {
+    record Login(ClientState state, List<Tag> identTags, FakeContext context) {
     }
 
     /** Logs a client in from 127.0.0.1 and returns the tags of its OP_SERVERIDENT. */
@@ -84,10 +84,32 @@ class NatKeepaliveTokenTest {
             if (p.opcode() == OpCode.SERVER_IDENT.value) {
                 ByteBuffer b = ByteBuffer.wrap(p.data()).order(ByteOrder.LITTLE_ENDIAN);
                 b.position(16 + 4 + 2); // <hash 16><IP 4><port 2><tags>
-                return new Login(ctx.getState(), Tag.readList(b));
+                return new Login(ctx.getState(), Tag.readList(b), ctx);
             }
         }
         throw new AssertionError("no OP_SERVERIDENT");
+    }
+
+    /**
+     * An OP_SERVERIDENT sent again during the session (the IPv6 verdict, doc/ipv6.md) carries the login's token, and
+     * the client's counter goes on.
+     */
+    @Test
+    void anOpServerIdentSentAgainKeepsTheSessionToken() throws Exception {
+        Login login = login(BASE.withNatTraversal(new NatTraversalConfig(true, true)), EMULE_DEFAULT_SRVCAPS | ClientState.SRVCAP_NATTRAVERSAL);
+        long lowId = login.state().clientId();
+        byte[] token = (byte[]) tag(login.identTags(), Tag.NAME_NATT_TOKEN).value();
+        keepalive(KeepaliveToken.proof(USER_HASH, token, 1), "198.51.100.20", 40001);
+
+        Packet again = LoginHandler.serverIdent(login.context());
+        ByteBuffer b = ByteBuffer.wrap(again.data()).order(ByteOrder.LITTLE_ENDIAN);
+        b.position(16 + 4 + 2);
+        assertArrayEquals(token, (byte[]) tag(Tag.readList(b), Tag.NAME_NATT_TOKEN).value());
+
+        keepalive(KeepaliveToken.proof(USER_HASH, token, 2), "198.51.100.21", 40002);
+        assertEquals(Optional.of(new UdpEndpoint(InetAddress.getByName("198.51.100.21"), 40002)),
+                server.getNatCallbackService().endpointOf(lowId));
+        server.getNatCallbackService().unregister(login.state());
     }
 
     static Tag tag(List<Tag> tags, String name) {

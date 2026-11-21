@@ -15,10 +15,10 @@ TODO tracks implementation work, not configuration reference. Configuration defa
 - [x] ed2k-server LowID hole punch (opt-in, `natHolePunch`): TCP flags `0x20000` and `0x100000` in `OP_IDCHANGE`, LowIDs with a UDP port in `CT_EMULE_UDPPORTS` registered as targets, TCP `0x60` answered by `0x61` to both sides (30 bytes, 36 with the reader's own `0x9F` endpoint) sent again at +1.2 s and +3 s, or `0x62` with ed2k-server's reasons; between two hole-punch extension clients, a `0x37` wake and up to 3 s of wait for the target's fresh `0x9F`. Rate limited as the callback. To check against aMule master.
 - [x] Built-in admin web panel on configurable loopback-only HTTP (`adminWebPort`, default 8080), with server-side client search, named verified server peers, IP/fake-file filters, persistent hash blocks, runtime settings, and potential-bot matches labeled as nickname heuristics only. The CLI includes client search plus `peers`, `filters`, `bots`, `blocks`, and `settings` commands.
 - [x] OFFERFILES v1 (opt-in): clients that ask at login are told, in `OP_SERVERIDENT`, how many files per batch and how often they may publish, and are held to it, so a large library is published in minutes instead of hours. Same contract as ed2k-server and aMule 3.2.
+- [x] IPv6 (opt-in, `ipv6Sources`): clients can connect over IPv6, and a client that is LowID on IPv4 but has a public IPv6 (login tag `0xAE` or `OP_IPV6_UPDATE`) is dialled back on it, user hash checked, and then published as an IPv6 source to the LowID clients that can parse it, never to other servers. Same extension as aMule master, eMuleQt, ed2k-server and eNode-go ([IPv6](doc/ipv6.md)); still to be tried against aMule master.
 
 ## Remaining
 
-- [ ] IPv6 (opt-in): clients can connect over IPv6, and a client that is LowID on IPv4 but has a public IPv6 is published as an IPv6 source to peers that can parse it.
 - [ ] HighID verified by a client-to-client hello, not only a TCP connect: a port forwarded to a different client behind the same NAT no longer earns HighID.
 - [ ] IP filtering in eMule guarding.p2p format, with per-range hit statistics.
 - [ ] GeoIP country and provider for IPv4 and IPv6 (MaxMind DB, with the ip-to-country.csv fallback), bot/scanner detection, CSAM-publisher banning.

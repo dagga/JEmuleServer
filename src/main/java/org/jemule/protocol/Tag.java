@@ -73,6 +73,8 @@ public record Tag(byte type, String name, Object value) {
     public static final String NAME_NATT_PROOF = "\u00A9";
     /** ST_NATT_TOKEN (hash, 16 bytes): the session's NAT callback token, new at every login, never sent over UDP. */
     public static final String NAME_NATT_TOKEN = "\u00AC";
+    /** ST_IPV6_STATUS: uint8, the server's verdict on the client's IPv6 address (aMule master a6d6290be0, docs/IPv6_Server_Sources.md). */
+    public static final String NAME_IPV6_STATUS = "\u00AB";
 
     // File Tags (FT_ from opcodes.h)
     public static final String NAME_FILENAME = "\u0001"; // FT_FILENAME (Note: same as NAME_SERVERNAME)
@@ -91,6 +93,8 @@ public record Tag(byte type, String name, Object value) {
     public static final String NAME_EMULE_UDPPORTS = "\u00F9";
     public static final String NAME_MAX_USERS_V2 = "\u0087"; // CT_MAX_USERS_V2 (Same as ST_MAXUSERS, but used in Server.java)
     public static final String NAME_SERVER_VERSION = "\u0091"; // CT_SERVER_VERSION (Same as ST_VERSION, but used in Server.java)
+    /** CT_MOD_IP_V6: TAGTYPE_HASH, the client's IPv6 address as 16 raw bytes (login and hello). */
+    public static final String NAME_IPV6 = "\u00AE";
 
 
     // OFFERFILES v1 (doc/offerfiles-v1.md): string-named uint32 tags, which legacy peers skip as unknown tags.
@@ -126,6 +130,13 @@ public record Tag(byte type, String name, Object value) {
      * carries the port of its fresh 0x9F. Set with {@link #TCPFLG_LOWID_HOLEPUNCH}.
      */
     public static final int TCPFLG_HOLEPUNCH_EXTENSION = 0x100000;
+    // IPv6 source extension (SRV_TCPFLG_* in aMule master a6d6290be0, include/protocol/ed2k/Client2Server/TCP.h)
+    /** SRV_TCPFLG_IPV6: the server sends IPv6 source records to the clients that read them. */
+    public static final int TCPFLG_IPV6 = 0x4000;
+    /** SRV_TCPFLG_IPV6_UPDATE: the server accepts OP_IPV6_UPDATE (trusted by aMule only with TCPFLG_IPV6). */
+    public static final int TCPFLG_IPV6_UPDATE = 0x8000;
+    /** SRV_TCPFLG_IPV6_PROBE: the server dials an IPv6 address back before publishing it. */
+    public static final int TCPFLG_IPV6_PROBE = 0x400000;
 
     public static final int UDPFLG_EXT_GETSOURCES = 0x01;
     public static final int UDPFLG_NEWTAGS = 0x08;

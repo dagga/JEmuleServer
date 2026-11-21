@@ -100,6 +100,18 @@ public final class KeepaliveToken {
         return token.clone();
     }
 
+    /**
+     * The token the connection {@code connectionId} already holds, with its counter, or a new one: an OP_SERVERIDENT
+     * sent again during the session (the IPv6 verdict, doc/ipv6.md) must not change the token the client signs with.
+     */
+    public byte[] current(int connectionId) {
+        return sessions.computeIfAbsent(connectionId, id -> {
+            byte[] token = new byte[TOKEN_SIZE];
+            random.nextBytes(token);
+            return new Session(token);
+        }).token.clone();
+    }
+
     /** Whether the connection {@code connectionId} holds a token. */
     public boolean holds(int connectionId) {
         return sessions.containsKey(connectionId);
