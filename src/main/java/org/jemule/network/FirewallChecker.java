@@ -25,10 +25,11 @@ import java.util.List;
  * A client that announces the crypt layer in its login (CT_SERVER_FLAGS, SRVCAP_SUPPORTCRYPT / SRVCAP_REQUIRECRYPT)
  * is dialled obfuscated first ({@link ClientObfuscation}), as ed2k-server and eNode-go do. A client that requires
  * the layer accepts a plain connection only as the test of the server it is logging in to, recognised by the
- * server's IPv4 address (CServerConnect::AwaitingTestFromIP): never over IPv6, never after the login, and never in
- * aMule's strict mode. The plain dial is the fallback when the obfuscated handshake fails on a client that does not
- * require the layer; a refused or timed out connection is not dialled again. With {@code obfuscatedFirewallCheck=false},
- * every client is dialled plain only, as before.
+ * server's IPv4 address (CServerConnect::AwaitingTestFromIP): never over IPv6, and never after the login. eMuleQt's
+ * hidden cryptLayerRequiredStrict option (off by default) refuses even that one; aMule and eMule have no such mode.
+ * The plain dial is the fallback when the obfuscated handshake fails on a client that does not require the layer;
+ * a refused or timed out connection is not dialled again. With {@code obfuscatedFirewallCheck=false}, every client is
+ * dialled plain only, as before.
  * <p>
  * The answer must come from the client that is logging in: behind a NAT, the announced port may be forwarded
  * to another client sharing the same public IP, which would answer in its place. The user hash of the

@@ -60,8 +60,8 @@ import java.util.Properties;
  *                                  when the JVM has no IPv6 ({@code java.net.preferIPv4Stack}).
  * @param obfuscatedFirewallCheck   Dial the HighID test and the IPv6 dial-back with eMule's client obfuscation first
  *                                  when the client announces the crypt layer (on by default); off, both are plain, and
- *                                  a client that requires the layer is not reached over IPv6, nor at all in aMule's
- *                                  strict mode.
+ *                                  a client that requires the layer is not reached over IPv6, nor at all with
+ *                                  eMuleQt's strict option.
  */
 public record ServerConfig(
         int port,
