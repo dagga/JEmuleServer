@@ -612,6 +612,12 @@ target HighID, 3 bad request (itself, a HighID requester, no UDP port for the re
 extension), the target is first woken with `0x37`, and the `0x61` waits up to 3 s for its fresh `0x9F`. Requests share
 the callback's limits.
 
+With `natCallbackCrossServer=true` as well (off by default), a client logged in to another server may ask this
+server to wake one of these LowIDs (`0xA6` with requester ID 0, ed2k-server's cross-server NAT callback), announced
+with `0x100000` in the UDP flags. The requester gets the target's UDP endpoint only when the target announced the
+hole-punch extension; requests are limited per source IP and per target. See
+[doc/nat-callback-cross-server.md](doc/nat-callback-cross-server.md).
+
 ## Kademlia Search Bridge
 
 The Kad network holds far more files than a single server, but nothing moderates it. JEmuleServer embeds a Kad node

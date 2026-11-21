@@ -260,7 +260,8 @@ public class LoginHandler {
 
         // UDP capability flags matching eMule SRV_UDPFLG_ constants
         // Note: We include TCPOBFUSCATION (0x400) in UDP flags as well, as eMule checks it there too
-        int udpFlags = Tag.SERVER_UDP_FLAGS;
+        // SRV_UDPFLG_FOREIGN_NAT_CALLBACK while the cross-server NAT callback is taken
+        int udpFlags = context.getServer() != null ? context.getServer().udpFlags() : Tag.SERVER_UDP_FLAGS;
 
         List<Tag> tags = new ArrayList<>();
         tags.add(new Tag(Tag.TYPE_HASH, "\u0011", hash)); // Send hash as a tag too for extra visibility

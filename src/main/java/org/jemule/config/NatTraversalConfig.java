@@ -36,24 +36,39 @@ import java.util.Properties;
  *                    hole-punch extension (TCP flag 0x100000): a LowID gets the UDP endpoint of another LowID of this
  *                    server and both punch towards each other. Needs {@code natCallback}, whose 0x9F keepalives give
  *                    the endpoints and whose 0x37 wakes an extension target (key {@code natHolePunch}).
+ * @param natCallbackCrossServer Cross-server NAT callback (ed2k-server 0.9.86): a client logged in to another server
+ *                    may ask, with a server-key obfuscated 0xA6 with requester ID 0, to wake a LowID of this server;
+ *                    announced by SRV_UDPFLG_FOREIGN_NAT_CALLBACK (0x100000) in the UDP flags. It needs
+ *                    {@code natCallback} (key {@code natCallbackCrossServer}; doc/nat-callback-cross-server.md).
  */
-public record NatTraversalConfig(boolean natCallback, boolean natCallbackToken, boolean natHolePunch) {
+public record NatTraversalConfig(boolean natCallback, boolean natCallbackToken, boolean natHolePunch,
+                                 boolean natCallbackCrossServer) {
 
-    public static final NatTraversalConfig DEFAULT = new NatTraversalConfig(false, false, false);
+    public static final NatTraversalConfig DEFAULT = new NatTraversalConfig(false, false, false, false);
 
-    /** The callback alone, without the keepalive session token nor the hole punch. */
+    /** The callback alone, without the keepalive session token, the hole punch nor the cross-server callback. */
     public NatTraversalConfig(boolean natCallback) {
-        this(natCallback, false, false);
+        this(natCallback, false, false, false);
     }
 
-    /** The callback and its keepalive session token, without the hole punch. */
+    /** The callback and its keepalive session token, without the hole punch nor the cross-server callback. */
     public NatTraversalConfig(boolean natCallback, boolean natCallbackToken) {
-        this(natCallback, natCallbackToken, false);
+        this(natCallback, natCallbackToken, false, false);
+    }
+
+    /** The callback, its keepalive session token and the hole punch, without the cross-server callback. */
+    public NatTraversalConfig(boolean natCallback, boolean natCallbackToken, boolean natHolePunch) {
+        this(natCallback, natCallbackToken, natHolePunch, false);
     }
 
     /** Whether the LowID hole punch runs: natHolePunch, with the natCallback it needs. */
     public boolean holePunch() {
         return natCallback && natHolePunch;
+    }
+
+    /** Whether the cross-server callback is taken and announced: it needs the callback itself. */
+    public boolean crossServerEnabled() {
+        return natCallback && natCallbackCrossServer;
     }
 
     /** Creates a NatTraversalConfig from a Properties object, using DEFAULT values for missing keys. */
@@ -62,7 +77,9 @@ public record NatTraversalConfig(boolean natCallback, boolean natCallbackToken, 
                 Boolean.parseBoolean(props.getProperty("natCallback", String.valueOf(DEFAULT.natCallback())).trim()),
                 Boolean.parseBoolean(props.getProperty("natCallbackToken",
                         String.valueOf(DEFAULT.natCallbackToken())).trim()),
-                Boolean.parseBoolean(props.getProperty("natHolePunch", String.valueOf(DEFAULT.natHolePunch())).trim())
+                Boolean.parseBoolean(props.getProperty("natHolePunch", String.valueOf(DEFAULT.natHolePunch())).trim()),
+                Boolean.parseBoolean(props.getProperty("natCallbackCrossServer",
+                        String.valueOf(DEFAULT.natCallbackCrossServer())).trim())
         );
     }
 }

@@ -21,6 +21,7 @@ package org.jemule.network.natt;
 
 import org.jemule.core.ClientState;
 import org.jemule.network.Packet;
+import org.jemule.protocol.Tag;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -36,6 +37,7 @@ import java.util.concurrent.atomic.LongAdder;
 import java.util.function.BooleanSupplier;
 import java.util.function.LongFunction;
 import java.util.function.LongSupplier;
+import java.util.function.Predicate;
 
 /**
  * Lugdunum eserver's LowID-to-LowID NAT callback between two clients of this server (eserver 17.15+), as described in
@@ -57,8 +59,8 @@ import java.util.function.LongSupplier;
  *   the server is open). The target punches the requester's endpoint; the requester gets no answer (aMule then sends
  *   the reverse 0xA6, which brings it the target's endpoint).</li>
  * </ol>
- * Requester ID 0 marks the cross-server form ({@link #handleForeignRequest}); a same-server notice never carries it,
- * since LowIDs start at 1. Only IPv4 endpoints are handed out: a client logged in over IPv6 can neither ask (its
+ * Requester ID 0 marks the cross-server form, served by {@link CrossServerCallback} when natCallbackCrossServer is on
+ * ({@link #handleForeignRequest}); a same-server notice never carries it, since LowIDs start at 1. Only IPv4 endpoints are handed out: a client logged in over IPv6 can neither ask (its
  * datagrams never match its login IPv4) nor be answered by UDP.
  * Every refusal is silent, as on eserver: a requester cannot tell an unknown target from a lost datagram.
  * <p>
@@ -115,12 +117,16 @@ public final class NatCallbackService {
         void schedule(Runnable task, long delayMs);
     }
 
-    /** What became of a 0xA6. Only the two FORWARDED values sent anything. */
+    /** What became of a 0xA6. Only the two FORWARDED values and FOREIGN_WOKEN sent anything. */
     public enum Outcome {
         FORWARDED_TCP, FORWARDED_UDP,
         DISABLED, NOT_OBFUSCATED, SHORT,
-        /** Requester ID 0: the cross-server form, not served by this server. */
+        /** Requester ID 0: the cross-server form, while natCallbackCrossServer is off. */
         FOREIGN_UNSUPPORTED,
+        /** Requester ID 0: the target was woken ({@link CrossServerCallback.Outcome} says more). */
+        FOREIGN_WOKEN,
+        /** Requester ID 0: refused ({@link CrossServerCallback.Outcome} says why). */
+        FOREIGN_REFUSED,
         UNKNOWN_REQUESTER, WRONG_ADDRESS, REQUESTER_RATE_LIMITED, SAME_CLIENT,
         TARGET_NOT_CAPABLE, CRYPT_MISMATCH, TARGET_RATE_LIMITED
     }
@@ -174,8 +180,10 @@ public final class NatCallbackService {
 
     private final BooleanSupplier enabled;
     private final BooleanSupplier tokenEnabled;
+    private final BooleanSupplier crossServerEnabled;
     private final LongSupplier clock;
     private final Transport transport;
+    private final CrossServerCallback crossServer;
     /** Session tokens of the 0x9F proofs, by connection. */
     private final KeepaliveToken tokens;
     /** ed2k-server's LowID hole punch, over the same sessions. */
@@ -197,6 +205,20 @@ public final class NatCallbackService {
      */
     public NatCallbackService(BooleanSupplier enabled, LongSupplier clock, Transport transport) {
         this(enabled, () -> false, clock, transport, new KeepaliveToken());
+    }
+
+    /**
+     * @param enabled            whether the callback is on (natCallback), read at each datagram
+     * @param crossServerEnabled whether the cross-server callback is on (natCallbackCrossServer); it also needs
+     *                           {@code enabled}
+     * @param blocked            addresses refused by the IP filter, for the cross-server requests
+     * @param clock              current time in milliseconds
+     * @param transport          where notices go
+     */
+    public NatCallbackService(BooleanSupplier enabled, BooleanSupplier crossServerEnabled,
+                              Predicate<InetAddress> blocked, LongSupplier clock, Transport transport) {
+        this(enabled, () -> false, () -> false, crossServerEnabled, blocked, clock, transport, new KeepaliveToken(),
+                id -> null, (task, delayMs) -> { });
     }
 
     /**
@@ -225,16 +247,75 @@ public final class NatCallbackService {
     public NatCallbackService(BooleanSupplier enabled, BooleanSupplier tokenEnabled, BooleanSupplier holePunchEnabled,
                               LongSupplier clock, Transport transport, KeepaliveToken tokens,
                               LongFunction<ClientState> clients, Scheduler scheduler) {
+        this(enabled, tokenEnabled, holePunchEnabled, () -> false, ip -> false, clock, transport, tokens, clients,
+                scheduler);
+    }
+
+    /**
+     * @param enabled            whether the callback is on (natCallback), read at each datagram
+     * @param tokenEnabled       whether the 0x9F session token is on (natCallbackToken), read at each login and
+     *                           datagram
+     * @param holePunchEnabled   whether the LowID hole punch is on (natCallback and natHolePunch), read at each 0x60
+     * @param crossServerEnabled whether the cross-server callback is on (natCallbackCrossServer); it also needs
+     *                           {@code enabled}
+     * @param blocked            addresses refused by the IP filter, for the cross-server requests
+     * @param clock              current time in milliseconds
+     * @param transport          where notices and hole-punch answers go
+     * @param tokens             the session tokens
+     * @param clients            the client logged in under a server ID, or null: a hole-punch target need not be
+     *                           registered here to get its 0x62 reason
+     * @param scheduler          runs the hole punch's timers
+     */
+    public NatCallbackService(BooleanSupplier enabled, BooleanSupplier tokenEnabled, BooleanSupplier holePunchEnabled,
+                              BooleanSupplier crossServerEnabled, Predicate<InetAddress> blocked, LongSupplier clock,
+                              Transport transport, KeepaliveToken tokens, LongFunction<ClientState> clients,
+                              Scheduler scheduler) {
         this.enabled = enabled;
         this.tokenEnabled = tokenEnabled;
+        this.crossServerEnabled = crossServerEnabled;
         this.clock = clock;
         this.transport = transport;
         this.tokens = tokens;
+        this.crossServer = new CrossServerCallback(this, blocked, clock);
         this.holePunch = new LowIdHolePunch(this, holePunchEnabled, clients, clock, transport, scheduler);
     }
 
     public boolean isEnabled() {
         return enabled.getAsBoolean();
+    }
+
+    /** Whether the cross-server callback is taken (and announced): natCallbackCrossServer with natCallback. */
+    public boolean isCrossServerEnabled() {
+        return enabled.getAsBoolean() && crossServerEnabled.getAsBoolean();
+    }
+
+    /** UDP flags of ST_UDPFLAGS and OP_GLOBSERVSTATRES: SRV_UDPFLG_FOREIGN_NAT_CALLBACK only while it is taken. */
+    public int udpFlags() {
+        return Tag.serverUdpFlags(isCrossServerEnabled());
+    }
+
+    /** The cross-server callback. */
+    public CrossServerCallback crossServer() {
+        return crossServer;
+    }
+
+    /** Timeouts and resends of the cross-server callback; called a few times a second. */
+    public void tick() {
+        crossServer.tick(clock.getAsLong());
+    }
+
+    Transport transport() {
+        return transport;
+    }
+
+    /** The session of {@code lowId}, if it opted in. */
+    Session session(long lowId) {
+        return sessions.get(lowId);
+    }
+
+    /** The endpoint of {@code session}'s last accepted 0x9F, if it is still its LowID's session and recent. */
+    Optional<UdpEndpoint> endpointOf(Session session) {
+        return sessions.get(session.lowId) == session ? endpointOf(session.lowId) : Optional.empty();
     }
 
     /** Whether a client announcing {@code serverCaps} in CT_SERVER_FLAGS opts in to the callback. */
@@ -341,8 +422,11 @@ public final class NatCallbackService {
     public void onKeepalive(long lowId, InetAddress ip, int port) {
         Session session = sessions.get(lowId);
         if (session == null || port < 1 || port > 0xFFFF) return;
-        session.keepalive = new Seen(new UdpEndpoint(ip, port), clock.getAsLong(), null);
+        UdpEndpoint endpoint = new UdpEndpoint(ip, port);
+        session.keepalive = new Seen(endpoint, clock.getAsLong(), null);
         if (session.udpPort == 0) session.udpPort = port;
+        // The cross-server requesters waiting for this client's next 0x9F get its endpoint now
+        crossServer.onTargetKeepalive(session, endpoint);
     }
 
     /**
@@ -490,11 +574,14 @@ public final class NatCallbackService {
     /**
      * Requester ID 0: {@code <target ID 4><0 4>[<crypt 1>]} from a client logged in to another server (cross-server
      * NAT callback, ed2k-server 0.9.86; aMule master a6d6290be0, docs/NAT_T_Protocol.md). {@code payload} is the whole
-     * request, {@code ip:port} its source, already known to be obfuscated. This server does not announce it (no UDP
-     * flag 0x100000), so the request is dropped.
+     * request, {@code ip:port} its source, already known to be obfuscated. Dropped unless natCallbackCrossServer is
+     * on, then served by {@link CrossServerCallback}.
      */
     Outcome handleForeignRequest(long targetId, byte[] payload, InetAddress ip, int port, DatagramSocket socket) {
-        return Outcome.FOREIGN_UNSUPPORTED;
+        if (!crossServerEnabled.getAsBoolean()) return Outcome.FOREIGN_UNSUPPORTED;
+        int crypt = payload.length > 8 ? payload[8] & 0x07 : 0; // absent: none, as on ed2k-server
+        return crossServer.onRequest(targetId, crypt, ip, port, socket).woken()
+                ? Outcome.FOREIGN_WOKEN : Outcome.FOREIGN_REFUSED;
     }
 
     /**

@@ -138,7 +138,9 @@ public enum ConfigParameter {
     NAT_CALLBACK_TOKEN("natCallbackToken", Type.BOOLEAN, Scope.HOT, 0, 0,
             "NAT callback: session token in OP_SERVERIDENT, so a 0x9F proven with it counts from any address (new logins, needs natCallback)"),
     NAT_HOLE_PUNCH("natHolePunch", Type.BOOLEAN, Scope.HOT, 0, 0,
-            "ed2k-server LowID hole punch (0x60 / 0x61 / 0x62) and its hole-punch extension between two LowID clients of this server (new logins, needs natCallback)");
+            "ed2k-server LowID hole punch (0x60 / 0x61 / 0x62) and its hole-punch extension between two LowID clients of this server (new logins, needs natCallback)"),
+    NAT_CALLBACK_CROSS_SERVER("natCallbackCrossServer", Type.BOOLEAN, Scope.HOT, 0, 0,
+            "NAT callback for clients of other servers (0xA6 with requester ID 0, UDP flag 0x100000); needs natCallback");
 
     /** Value type of a parameter, with its parsing and formatting rules. */
     public enum Type {
