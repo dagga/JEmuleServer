@@ -237,9 +237,8 @@ public class LoginHandler {
             }
         }
 
-        String serverName = Main.SERVER_NAME;
-        String serverVersion = Main.ESERVER_VERSION;
-        String desc = Main.SERVER_DESCRIPTION;
+        String serverName = context.getConfig().serverName();
+        String desc = context.getConfig().serverDescription();
 
         int maxFiles = context.getConfig().maxFiles();
         int maxUsers = context.getConfig().maxUsers();

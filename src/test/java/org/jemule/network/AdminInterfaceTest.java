@@ -282,6 +282,18 @@ public class AdminInterfaceTest {
     }
 
     @Test
+    void settingsCommandKeepsTheSpacesOfAServerName() {
+        java.util.Map<String, String> change = java.util.Map.of("serverName", "My eD2K server (no pedo)");
+        org.mockito.Mockito.when(server.updateConfig(change))
+                .thenReturn(org.jemule.config.ConfigApplyResult.builder().applied("serverName").build());
+
+        admin.handleCommand("settings serverName My eD2K server (no pedo)");
+
+        verify(server).updateConfig(change);
+        assertTrue(outContent.toString().contains("Applied: serverName"), outContent.toString());
+    }
+
+    @Test
     void settingsCommandReportsAnInvalidValue() {
         org.mockito.Mockito.when(server.updateConfig(java.util.Map.of("maxUsers", "-1")))
                 .thenReturn(org.jemule.config.ConfigApplyResult.builder()
