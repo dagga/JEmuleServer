@@ -1277,10 +1277,22 @@ public class FileIndex implements AutoCloseable {
      * @return A list of {@link ClientState} representing sources.
      */
     public List<ClientState> getSources(String hash, ClientState requester, int limit) {
+        return getSources(hash, requester, limit, s -> true);
+    }
+
+    /**
+     * As {@link #getSources(String, ClientState, int)}, among the sources {@code usable} accepts only: the others are
+     * left out before the limit, so that they do not push out usable ones.
+     */
+    public List<ClientState> getSources(String hash, ClientState requester, int limit,
+                                        java.util.function.Predicate<ClientState> usable) {
         if (hash == null) return Collections.emptyList();
         ConcurrentHashMap<String, ClientState> sources = liveSources.get(id(hash));
         if (sources == null || sources.isEmpty()) return Collections.emptyList();
-        List<ClientState> all = new ArrayList<>(sources.values());
+        List<ClientState> all = new ArrayList<>(sources.size());
+        for (ClientState source : sources.values()) {
+            if (usable.test(source)) all.add(source);
+        }
         if (all.isEmpty()) return Collections.emptyList();
         if (all.size() <= limit && requester == null) {
             Collections.shuffle(all);

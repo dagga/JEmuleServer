@@ -483,14 +483,14 @@ class Ipv6SourceServiceTest {
         assumeIpv6();
         Ipv6Context ctx = sourcesSetup(ON, lowIdRequester(true));
         List<Parsed> plain = parse(withOpcode(getSources(ctx, false), OpCode.FOUND_SOURCES).get(0).data(), false, true);
-        assertEquals(4, plain.size());
+        assertEquals(2, plain.size(), "the LowIDs it cannot reach are left out (#126)");
         List<Parsed> ipv6 = plain.stream().filter(r -> r.ipv6() != null).toList();
         assertEquals(1, ipv6.size(), "only the LowID source the dial-back reached");
         assertArrayEquals(ADDRESS, ipv6.get(0).ipv6());
         assertEquals(4662, ipv6.get(0).port(), "its login TCP port, the one dialled");
-        assertTrue(plain.stream().anyMatch(r -> r.id() == 6), "the unreached LowID keeps its LowID");
+        assertTrue(plain.stream().noneMatch(r -> r.id() == 6), "the unreached LowID is of no use to a LowID");
         assertTrue(plain.stream().anyMatch(r -> r.id() == 0x2A6ED85BL), "the HighID keeps its IPv4");
-        assertTrue(plain.stream().anyMatch(r -> r.id() == 9), "the requester's own record stays classic");
+        assertTrue(plain.stream().noneMatch(r -> r.id() == 9), "nor is the requester itself");
 
         List<Parsed> obfu = parse(withOpcode(getSources(ctx, true), OpCode.SOURCES_RESULT_OBFU).get(0).data(), true, true);
         Parsed record = obfu.stream().filter(r -> r.ipv6() != null).findFirst().orElseThrow();
@@ -507,12 +507,15 @@ class Ipv6SourceServiceTest {
         highId.ipv6().announce(hash("20010db8000000000000000000000008"), a -> true);
         Ipv6Context server = sourcesSetup(ON, lowIdRequester(true));
         server.setFromServer(true);
-        for (Ipv6Context ctx : List.of(sourcesSetup(ON, lowIdRequester(false)), sourcesSetup(ON, highId), server,
-                sourcesSetup(OFF, lowIdRequester(true)))) {
+        // A LowID gets only the HighID source; the HighID and the other server get all four (#126)
+        for (var e : List.of(java.util.Map.entry(sourcesSetup(ON, lowIdRequester(false)), 1),
+                java.util.Map.entry(sourcesSetup(ON, highId), 4), java.util.Map.entry(server, 4),
+                java.util.Map.entry(sourcesSetup(OFF, lowIdRequester(true)), 1))) {
+            Ipv6Context ctx = e.getKey();
             for (boolean obfu : List.of(false, true)) {
                 Packet answer = getSources(ctx, obfu).get(0);
                 List<Parsed> records = parse(answer.data(), obfu, false);
-                assertEquals(4, records.size());
+                assertEquals((int) e.getValue(), records.size());
                 assertTrue(records.stream().noneMatch(r -> r.id() == Ipv6SourceService.SENTINEL_ID));
             }
         }

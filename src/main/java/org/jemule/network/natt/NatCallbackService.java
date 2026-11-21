@@ -405,6 +405,43 @@ public final class NatCallbackService {
         return session != null && session.lugdunum;
     }
 
+    /**
+     * Whether {@code source}, a LowID of this server, is of use to {@code requester}, a LowID of this server asking for
+     * sources (#126). A stock client that is LowID drops LowID sources ({@code CPartFile::CanAddSource()} while
+     * firewalled) and cannot ask this server to call them back ({@code CemuleApp::CanDoCallback()}); only NAT
+     * traversal reaches them:
+     * <ul>
+     *   <li>Lugdunum's callback (natCallback): both opted in with 0x1000; the requester asks with 0xA6;</li>
+     *   <li>the hole punch (natHolePunch): the requester announced a UDP port (0xF9) or the extension (0x100000), so it
+     *   asks with 0x60, and the source has a session, so it is a target: it reads 0x61, or it is Lugdunum-only and is
+     *   bridged with 0x37.</li>
+     * </ul>
+     */
+    public boolean lowIdSourceUsable(ClientState requester, ClientState source) {
+        if (requester == null || source == null || !enabled.getAsBoolean()) return false;
+        Session target = sessionOf(source);
+        if (target == null) return false;
+        Session asking = sessionOf(requester);
+        if (asking != null && asking.lugdunum && target.lugdunum) return true;
+        return holePunch.isEnabled() && asksHolePunch(requester);
+    }
+
+    /** Whether {@code client} sends 0x60: it announced a client UDP port (0xF9) or the hole-punch extension. */
+    static boolean asksHolePunch(ClientState client) {
+        return clientUdpPort(client) != 0 || (client.serverCaps() & ClientState.SRVCAP_HOLEPUNCH_EXTENSION) != 0;
+    }
+
+    /**
+     * Whether {@code source}, a LowID of this server, is of use to a client of another server (OP_GLOBGETSOURCES):
+     * only through the cross-server callback (natCallbackCrossServer), to a source that opted in with 0x1000 (#126).
+     * A client of another server cannot have this server call a LowID back otherwise.
+     */
+    public boolean foreignSourceUsable(ClientState source) {
+        if (source == null || !enabled.getAsBoolean() || !crossServerEnabled.getAsBoolean()) return false;
+        Session target = sessionOf(source);
+        return target != null && target.lugdunum;
+    }
+
     /** Clients registered for the callback or, with natHolePunch, for the hole punch only. */
     public int sessionCount() {
         return sessions.size();

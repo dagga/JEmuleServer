@@ -144,7 +144,9 @@ public class ServerIntegrationTest {
                     byte[] sr = sourcesRes.data();
                     Assertions.assertTrue(sr.length >= 17, "SOURCES_RESULT payload too short");
                     int count = sr[16] & 0xFF;
-                    Assertions.assertTrue(count >= 1, "Expected at least one source after publish");
+                    // Nothing listens on its port 4662: the client is a LowID, its only source. A LowID source is of
+                    // no use to a LowID without NAT traversal, itself included (#126)
+                    Assertions.assertEquals(0, count, "no LowID source for a LowID requester");
                 } else {
                     // TCP GET_SOURCES was flaky in this environment; continue and validate via UDP below
                 }
@@ -173,20 +175,11 @@ public class ServerIntegrationTest {
                     for (int i = 0; i < 16; i++) hashBytes[i] = (byte) Integer.parseInt(hash.substring(i*2, i*2+2), 16);
                     System.arraycopy(hashBytes, 0, udpReq, 2, 16);
                     ds.send(new java.net.DatagramPacket(udpReq, udpReq.length, java.net.InetAddress.getByName(loopbackHost), serverPort));
+                    // The only source is a LowID that did not opt in to the cross-server callback: of no use to a
+                    // client of another server, so no OP_GLOBFOUNDSOURCES at all (#126)
+                    ds.setSoTimeout(700);
                     java.net.DatagramPacket udpResp = new java.net.DatagramPacket(new byte[512], 512);
-                    ds.receive(udpResp);
-                    byte[] gr = udpResp.getData();
-                    int len = udpResp.getLength();
-                    Assertions.assertEquals(Packet.PROTOCOL_ED2K & 0xFF, gr[0] & 0xFF);
-                    Assertions.assertEquals(0x9B, gr[1] & 0xFF);
-
-                    // Payload: [E3 9B] [16 bytes hash] [1 byte count] [count * (ID 4, port 2)]
-                    if (len >= 2 + 16 + 1) {
-                        int ipv4Count = gr[2 + 16] & 0xFF;
-                        Assertions.assertTrue(ipv4Count >= 1, "Expected at least one source in OP_GLOBFOUNDSOURCES");
-                    } else {
-                        Assertions.fail("UDP response too short");
-                    }
+                    Assertions.assertThrows(java.net.SocketTimeoutException.class, () -> ds.receive(udpResp));
                 }
             }
             return null;

@@ -172,6 +172,12 @@ public class Ipv6SourceService {
         return records;
     }
 
+    /** Whether {@link #foundSources} gives {@code source} to the requester of the context as an IPv6 record. */
+    public boolean givesRecord(ClientContext context, ClientState source) {
+        return !source.isHighId() && source.connectionId() != context.getState().connectionId()
+                && source.ipv6().publishedAddress() != null && readsRecords(context);
+    }
+
     /** Whether IPv6 records may go to the requester: a LowID client that reads them, never another server. */
     private static boolean readsRecords(ClientContext context) {
         ClientState requester = context.getState();

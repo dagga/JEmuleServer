@@ -181,7 +181,8 @@ class ProtocolSequenceTest {
         FileMetadata meta = new FileMetadata(hash, "file.iso", 12345, "ISO");
         fi.addFile(meta);
 
-        org.jemule.core.ClientState source = new org.jemule.core.ClientState(remote, 9000, 101, System.currentTimeMillis(), new AtomicLong(System.currentTimeMillis()));
+        // A HighID: a LowID source is of no use to a LowID requester nor to another server's client (#126)
+        org.jemule.core.ClientState source = new org.jemule.core.ClientState(remote, 9000, 0x0100007FL, System.currentTimeMillis(), new AtomicLong(System.currentTimeMillis()));
         source.setListenPort(4662);
         meta.sources().put(String.valueOf(source.clientId()), source);
 
