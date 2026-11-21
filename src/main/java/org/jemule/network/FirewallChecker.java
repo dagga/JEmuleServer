@@ -106,9 +106,11 @@ public class FirewallChecker {
                     // OP_HELLOANSWER: <user hash 16><ID 4><port 2><tags>...
                     byte[] data = p.data();
                     if (data.length >= 16 && Arrays.equals(data, 0, 16, userHash, 0, 16)) {
+                        log.debug("Firewall check ({}) of {}:{} reached", mode, ip.getHostAddress(), port);
                         return Outcome.REACHED;
                     }
-                    log.info("Firewall check of {}:{} answered by another client (user hash mismatch)", ip.getHostAddress(), port);
+                    log.info("Firewall check ({}) of {}:{} answered by another client (user hash mismatch)", mode,
+                            ip.getHostAddress(), port);
                     return Outcome.NOT_REACHED;
                 }
             }
