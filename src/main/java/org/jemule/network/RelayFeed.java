@@ -20,6 +20,7 @@ package org.jemule.network;
 
 import org.jemule.core.FileIndex;
 import org.jemule.core.FileMetadata;
+import org.jemule.core.FileSource;
 import org.jemule.core.ServerThreads;
 import org.jemule.network.handler.HandlerUtils;
 import org.jemule.protocol.Tag;
@@ -52,7 +53,10 @@ import java.util.zip.GZIPOutputStream;
  * server cannot be reached, the queue keeps the newest {@link #CAPACITY} files and the oldest are lost.
  * <p>
  * Body: gzip of {@code <count 4>(<hash 16><ID 4><port 2><tags>)[count]}, the OP_SEARCHRESULT format, with ID and
- * port 0: the files, never their sources.
+ * port 0: the files, never their sources. FT_SOURCES is the real source count, 0 included, and {@link #ORIGIN_TAG}
+ * the channel that found the file, so that the relay server applies its own thresholds by channel
+ * ({@link RelayFeedReceiver}, #84). A relay server older than 1.7.2 ignores the tag and drops the files without a
+ * source, as it drops them in any search result.
  */
 public final class RelayFeed implements FileIndex.RelayFeed, AutoCloseable {
     private static final Logger log = LoggerFactory.getLogger(RelayFeed.class);
@@ -67,6 +71,12 @@ public final class RelayFeed implements FileIndex.RelayFeed, AutoCloseable {
     static final long RETRY_AFTER = 30_000;
     /** Slots of the cache of the files already queued (lossy: two files may share a slot). */
     static final int RECENT_SLOTS = 1 << 19;
+    /** Integer tag with the code of the channel that found the file ({@link #originCode}). */
+    public static final String ORIGIN_TAG = "jemuleOrigin";
+
+    /** A file waiting for the relay server, with the channel that found it. */
+    record Queued(FileMetadata file, FileSource origin) {
+    }
 
     /** Posts a batch; returns the HTTP status (a fake one in the tests). */
     interface Transport {
@@ -83,7 +93,7 @@ public final class RelayFeed implements FileIndex.RelayFeed, AutoCloseable {
     private final LongSupplier clock;
     private final int capacity;
     private final Object lock = new Object();
-    private final ArrayDeque<FileMetadata> queue = new ArrayDeque<>();
+    private final ArrayDeque<Queued> queue = new ArrayDeque<>();
     /** Fingerprint and highest source count of the files queued lately: a file is sent again when its count rose. */
     private final long[] recentKeys = new long[RECENT_SLOTS];
     private final int[] recentCounts = new int[RECENT_SLOTS];
@@ -148,11 +158,16 @@ public final class RelayFeed implements FileIndex.RelayFeed, AutoCloseable {
         return running && relayMode.getAsBoolean();
     }
 
-    /** Queues a file for the relay server, unless it was queued lately with as many sources. */
+    /** Queues a file of an unknown channel. */
+    void offer(FileMetadata file) {
+        offer(file, FileSource.UNKNOWN);
+    }
+
+    /** Queues a file found by {@code origin} for the relay server, unless it was queued lately with as many sources. */
     @Override
-    public void offer(FileMetadata file) {
+    public void offer(FileMetadata file, FileSource origin) {
         if (file == null || file.hash() == null || target.get() == null) return;
-        int count = Math.max(1, file.sourceCount());
+        int count = file.sourceCount();
         long key = fingerprint(file.hash());
         int slot = (int) (key ^ (key >>> 32)) & (RECENT_SLOTS - 1);
         boolean wake;
@@ -164,7 +179,7 @@ public final class RelayFeed implements FileIndex.RelayFeed, AutoCloseable {
             }
             recentKeys[slot] = key;
             recentCounts[slot] = count;
-            queue.addLast(file);
+            queue.addLast(new Queued(file, origin == null ? FileSource.UNKNOWN : origin));
             while (queue.size() > capacity) {
                 queue.pollFirst();
                 dropped++;
@@ -209,7 +224,7 @@ public final class RelayFeed implements FileIndex.RelayFeed, AutoCloseable {
         URI uri = target.get();
         String secret = token.get();
         if (uri == null || secret == null || secret.isEmpty()) return Flush.IDLE;
-        List<FileMetadata> batch = new ArrayList<>();
+        List<Queued> batch = new ArrayList<>();
         synchronized (lock) {
             while (batch.size() < BATCH && !queue.isEmpty()) batch.add(queue.pollFirst());
         }
@@ -246,7 +261,7 @@ public final class RelayFeed implements FileIndex.RelayFeed, AutoCloseable {
     }
 
     /** A failed batch goes back to the head of the queue, before the files queued since. */
-    private void requeue(List<FileMetadata> batch) {
+    private void requeue(List<Queued> batch) {
         synchronized (lock) {
             for (int i = batch.size() - 1; i >= 0; i--) queue.addFirst(batch.get(i));
             while (queue.size() > capacity) {
@@ -257,23 +272,47 @@ public final class RelayFeed implements FileIndex.RelayFeed, AutoCloseable {
     }
 
     /** {@code <count 4>(<hash 16><ID 4><port 2><tags>)[count]}. */
-    static byte[] encode(List<FileMetadata> files) {
+    static byte[] encode(List<Queued> files) {
         ByteArrayOutputStream out = new ByteArrayOutputStream(files.size() * 96);
         out.writeBytes(ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(files.size()).array());
         ByteBuffer item = ByteBuffer.allocate(64 * 1024).order(ByteOrder.LITTLE_ENDIAN);
-        for (FileMetadata file : files) {
+        for (Queued queued : files) {
             item.clear();
-            item.put(HandlerUtils.hashToBytes(file.hash()));
+            item.put(HandlerUtils.hashToBytes(queued.file().hash()));
             item.putInt(0);
             item.putShort((short) 0);
-            Tag.writeList(item, tags(file));
+            Tag.writeList(item, tags(queued.file(), queued.origin()));
             out.write(item.array(), 0, item.position());
         }
         return out.toByteArray();
     }
 
-    /** Name, size, type, the media tags the index keeps, and the source counts. */
-    static List<Tag> tags(FileMetadata file) {
+    /**
+     * The code of {@code origin} in {@link #ORIGIN_TAG}: fixed values, not the enum's order, which may change between
+     * the versions of the two servers.
+     */
+    static int originCode(FileSource origin) {
+        return switch (origin) {
+            case CLIENT_PUSH -> 1;
+            case CLIENT_PUSH_V1 -> 2;
+            case KAD_SEARCH -> 3;
+            case SERVER_SEARCH -> 4;
+            case SERVER_INDEX_UPDATE -> 5;
+            case RELAY_FEED -> 6;
+            case UNKNOWN -> 0;
+        };
+    }
+
+    /** The channel of {@code code}; UNKNOWN for 0 or a code of a later version. */
+    static FileSource origin(long code) {
+        for (FileSource source : FileSource.values()) {
+            if (originCode(source) == code) return source;
+        }
+        return FileSource.UNKNOWN;
+    }
+
+    /** Name, size, type, the media tags the index keeps, the source counts and the channel. */
+    static List<Tag> tags(FileMetadata file, FileSource origin) {
         List<Tag> tags = new ArrayList<>();
         tags.add(new Tag(Tag.TYPE_STRING, Tag.NAME_FILENAME, file.name()));
         tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_FILESIZE, (int) (file.size() & 0xFFFFFFFFL)));
@@ -286,12 +325,14 @@ public final class RelayFeed implements FileIndex.RelayFeed, AutoCloseable {
         FileMetadata indexed = file.indexed();
         if (indexed.tags() != null) {
             for (Tag tag : indexed.tags()) {
-                if (!Tag.NAME_SOURCES.equals(tag.name())) tags.add(tag);
+                if (!Tag.NAME_SOURCES.equals(tag.name()) && !ORIGIN_TAG.equals(tag.name())) tags.add(tag);
             }
         }
-        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, Math.max(1, file.sourceCount())));
+        // The real count, 0 included: the relay server decides what it keeps
+        tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, file.sourceCount()));
         int complete = file.completeSourceCount();
         if (complete > 0) tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_COMPLETE_SOURCES, complete));
+        tags.add(new Tag(Tag.TYPE_INTEGER, ORIGIN_TAG, originCode(origin)));
         return tags;
     }
 

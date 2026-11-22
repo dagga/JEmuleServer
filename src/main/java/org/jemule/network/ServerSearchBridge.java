@@ -342,7 +342,7 @@ public final class ServerSearchBridge implements AutoCloseable {
             while (input.hasRemaining()) {
                 if (input.remaining() < 24 || (input.get() & 0xFF) != (Packet.PROTOCOL_ED2K & 0xFF)
                         || (input.get() & 0xFF) != OP_GLOBSEARCHRES) return null;
-                if (!readResult(input, files)) return null;
+                if (!readResult(input, files, false)) return null;
             }
         } catch (RuntimeException e) {
             return null;
@@ -357,6 +357,14 @@ public final class ServerSearchBridge implements AutoCloseable {
      * @return the files, or null for a malformed payload
      */
     static List<FileMetadata> decodeSearchResult(byte[] payload) {
+        return decodeSearchResult(payload, false);
+    }
+
+    /**
+     * As {@link #decodeSearchResult(byte[])}; with {@code keepSourceless}, the files whose source count is 0 are kept
+     * (the relay feed, #84), where an OP_SEARCHRESULT of another server drops them.
+     */
+    static List<FileMetadata> decodeSearchResult(byte[] payload, boolean keepSourceless) {
         if (payload == null || payload.length < 4) return null;
         ByteBuffer input = ByteBuffer.wrap(payload).order(ByteOrder.LITTLE_ENDIAN);
         int count = input.getInt();
@@ -364,7 +372,7 @@ public final class ServerSearchBridge implements AutoCloseable {
         List<FileMetadata> files = new ArrayList<>(count);
         try {
             for (int i = 0; i < count; i++) {
-                if (input.remaining() < 22 || !readResult(input, files)) return null;
+                if (input.remaining() < 22 || !readResult(input, files, keepSourceless)) return null;
             }
         } catch (RuntimeException e) {
             return null;
@@ -392,7 +400,7 @@ public final class ServerSearchBridge implements AutoCloseable {
     }
 
     /** Reads {@code <hash 16><ID 4><port 2><tags>} and adds the file when it is valid; false when malformed. */
-    private static boolean readResult(ByteBuffer input, List<FileMetadata> files) {
+    private static boolean readResult(ByteBuffer input, List<FileMetadata> files, boolean keepSourceless) {
         byte[] hashBytes = new byte[16];
         input.get(hashBytes);
         input.position(input.position() + 6); // server-assigned client ID and port
@@ -403,12 +411,12 @@ public final class ServerSearchBridge implements AutoCloseable {
         if (tagCount < 1 || tagCount > 128) return false;
         List<Tag> tags = Tag.readList(input);
         if (tags.size() != tagCount) return false;
-        FileMetadata metadata = metadata(hashBytes, tags);
+        FileMetadata metadata = metadata(hashBytes, tags, keepSourceless);
         if (metadata != null) files.add(metadata);
         return true;
     }
 
-    private static FileMetadata metadata(byte[] hashBytes, List<Tag> tags) {
+    private static FileMetadata metadata(byte[] hashBytes, List<Tag> tags, boolean keepSourceless) {
         String hash = org.jemule.network.handler.HandlerUtils.bytesToHashString(hashBytes);
         String name = null;
         String type = null;
@@ -424,7 +432,8 @@ public final class ServerSearchBridge implements AutoCloseable {
             else if (tag.name().equals(Tag.NAME_SOURCES) && tag.isInt()) sources = tag.unsignedValue();
         }
         if (!org.jemule.network.handler.HandlerUtils.isValidFilename(name)
-                || size < 0 || sources == 0 || sources > Integer.MAX_VALUE || sizeHigh > 0x7FFFFFFFL) return null;
+                || size < 0 || (sources == 0 && !keepSourceless) || sources > Integer.MAX_VALUE
+                || sizeHigh > 0x7FFFFFFFL) return null;
         size |= sizeHigh << 32;
         return FileMetadata.withoutSources(hash, name, size, type, List.copyOf(tags));
     }

@@ -786,8 +786,13 @@ With a relay server set:
 - **Every file found here goes to the relay server**: the Kad results, the other servers' results, the index update
   and the clients' `OP_OFFERFILES` (the files, not their sources). They are posted by batches of 2,000 files every
   2 seconds at most to `http://<relay server>:<relayFeedPort>/api/relay/files`, gzip compressed, with
-  `Authorization: Bearer <relayToken>`. A file is sent again only when its source count rose. The relay server indexes
-  them like search results, after the child abuse filter and the fake file detector.
+  `Authorization: Bearer <relayToken>`. A file is sent again only when its source count rose. Each file carries its
+  real source count, 0 included, and the channel that found it. The relay server indexes them like search results,
+  after the child abuse filter and the fake file detector, and applies its own threshold for that channel: its
+  `kadMinSourcesForIngest` to the Kad files, its `serverIndexUpdateMinSources` to the index update files, one source to
+  the other servers' search results, none to the files the relay's clients published. The relay's own thresholds stay
+  a first filter, which saves traffic. A relay server older than 1.7.2 drops the files without a source and indexes the
+  others as before; a relay older than 1.7.2 sends no channel, and its files are kept as before.
 - **The local index is only a fallback.** It is no longer written (nor `maxFiles` reached: the relay server decides)
   and only answers the searches while the relay server cannot. It keeps the online sources of this server's clients.
 - **The file count announced** to the clients (`OP_SERVERSTATUS`) and to the other servers (`OP_GLOBSERVSTATRES`)

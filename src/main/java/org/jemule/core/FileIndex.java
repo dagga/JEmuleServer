@@ -631,8 +631,8 @@ public class FileIndex implements AutoCloseable {
         /** Whether the server is in relay mode now. */
         boolean relayMode();
 
-        /** Hands over a file found by any channel. */
-        void offer(FileMetadata file);
+        /** Hands over a file found by {@code source}, the channel the relay server applies its thresholds by. */
+        void offer(FileMetadata file, FileSource source);
     }
 
     private volatile RelayFeed relayFeed;
@@ -666,7 +666,7 @@ public class FileIndex implements AutoCloseable {
         List<FileMetadata> handed = new ArrayList<>(files.size());
         for (FileMetadata file : files) {
             if (file == null || file.hash() == null) continue;
-            feed.offer(file);
+            feed.offer(file, source);
             if (!file.sources().isEmpty()) {
                 liveSources.compute(id(file.hash()), (k, sources) -> {
                     if (sources == null) sources = new ConcurrentHashMap<>();
