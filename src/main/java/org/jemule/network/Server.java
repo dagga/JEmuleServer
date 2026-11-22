@@ -448,7 +448,9 @@ public class Server {
                 this.config.relayFeed().port(), this.config.relayFeed().effectiveToken(), RelayIndexView.PATH),
                 () -> this.config.relayFeed().effectiveToken());
         // Receiving side: the files of the relay servers allowed by relayClients
-        this.relayFeedReceiver = new RelayFeedReceiver(() -> this.config.relayFeed(), fileIndex, fakeFileDetector, ingestion);
+        // with this server's thresholds for the channel that found each file on the relay (#84)
+        this.relayFeedReceiver = new RelayFeedReceiver(() -> this.config.relayFeed(),
+                origin -> RelayFeedReceiver.minSources(this.config, origin), fileIndex, fakeFileDetector, ingestion);
         if (!config.relayServer().isBlank()) {
             log.info("Relay mode: the index of {} is used and fed ({}); the local index is only a fallback",
                     config.relayServer(), relayFeedTarget() == null

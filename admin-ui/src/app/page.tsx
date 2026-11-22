@@ -202,7 +202,8 @@ function Figures({ o }: { o: Obj }) {
             label="Files from relay servers"
             value={fmt(rr.newFiles || 0)}
             sub={'new files indexed since the last start · ' + fmt(rr.files || 0) + ' received in ' + fmt(rr.batches || 0)
-              + ' batches from ' + rr.clients + ' · ' + fmt(rr.rejected || 0) + ' rejected by the filters · ' + fmt(rr.denied || 0)
+              + ' batches from ' + rr.clients + ' · ' + fmt(rr.rejected || 0) + ' rejected by the filters · '
+              + fmt(rr.belowThreshold || 0) + ' below this server\'s source thresholds · ' + fmt(rr.denied || 0)
               + ' refused posts · ' + fmt(rr.busy || 0) + ' deferred (ingestion busy)' + (rr.lastFrom ? ' · last from ' + rr.lastFrom : '')}
           />
         ) : null}

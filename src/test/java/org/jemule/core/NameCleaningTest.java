@@ -92,7 +92,7 @@ class NameCleaningTest {
                 return true;
             }
 
-            public void offer(FileMetadata file) {
+            public void offer(FileMetadata file, FileSource source) {
                 fed.add(file);
             }
         });

@@ -334,4 +334,104 @@ class RelayFeedTest {
         for (int i = 0; i < 1000; i++) many.add(RelayFeed.fingerprint(hash(i)));
         assertEquals(1000, many.stream().distinct().count());
     }
+
+    // #84: the real source count and the channel, the relay server's own thresholds
+
+    /** A relay server's config with kadMinSourcesForIngest=1 and serverIndexUpdateMinSources=5. */
+    private static ServerConfig thresholds() {
+        Properties props = new Properties();
+        props.setProperty("kadMinSourcesForIngest", "1");
+        props.setProperty("serverIndexUpdateMinSources", "5");
+        return ServerConfig.fromProperties(props);
+    }
+
+    private static Tag tag(FileMetadata file, String name) {
+        return file.tags().stream().filter(t -> name.equals(t.name())).findFirst().orElse(null);
+    }
+
+    @Test
+    void theFeedSendsTheRealSourceCountAndTheChannel() throws Exception {
+        FileIndex index = new FileIndex(null);
+        List<byte[]> bodies = new CopyOnWriteArrayList<>();
+        try (RelayFeed feed = new RelayFeed(() -> true, () -> TARGET, () -> TOKEN, (uri, token, body) -> {
+            bodies.add(new java.util.zip.GZIPInputStream(new ByteArrayInputStream(body)).readAllBytes());
+            return 200;
+        }, System::currentTimeMillis, RelayFeed.CAPACITY)) {
+            index.setRelayFeed(feed);
+            index.addFiles(List.of(file(hash(1), "kad without sources.avi", 0)), FileSource.KAD_SEARCH);
+            index.addFiles(List.of(file(hash(2), "index update.avi", 4)), FileSource.SERVER_INDEX_UPDATE);
+            assertEquals(RelayFeed.Flush.SENT, feed.flushOnce());
+        }
+        List<FileMetadata> files = ServerSearchBridge.decodeSearchResult(bodies.getFirst(), true);
+        assertEquals(2, files.size());
+        assertEquals(0, files.get(0).sourceCount(), "0 is sent as it is, no longer as 1");
+        assertEquals(3L, tag(files.get(0), RelayFeed.ORIGIN_TAG).unsignedValue(), "Kad search");
+        assertEquals(4, files.get(1).sourceCount());
+        assertEquals(5L, tag(files.get(1), RelayFeed.ORIGIN_TAG).unsignedValue(), "index update");
+        // A relay server before 1.7.2 decodes the batch as a search result: the file without sources is dropped there
+        assertEquals(List.of(hash(2)), ServerSearchBridge.decodeSearchResult(bodies.getFirst()).stream()
+                .map(FileMetadata::hash).toList());
+    }
+
+    @Test
+    void theChannelCodesAreFixed() {
+        for (FileSource source : FileSource.values()) {
+            assertEquals(source, RelayFeed.origin(RelayFeed.originCode(source)));
+        }
+        assertEquals(FileSource.UNKNOWN, RelayFeed.origin(99), "a channel of a later version");
+        assertEquals(1, RelayFeed.originCode(FileSource.CLIENT_PUSH));
+        assertEquals(3, RelayFeed.originCode(FileSource.KAD_SEARCH));
+        assertEquals(5, RelayFeed.originCode(FileSource.SERVER_INDEX_UPDATE));
+    }
+
+    @Test
+    void theRelayServerAppliesItsOwnThresholdsByChannel() throws Exception {
+        FileIndex index = new FileIndex(null);
+        ServerConfig config = thresholds();
+        RelayFeedReceiver receiver = new RelayFeedReceiver(() -> new RelayFeedConfig(8080, TOKEN, "127.0.0.1"),
+                origin -> RelayFeedReceiver.minSources(config, origin), index, null, IngestionExecutor.direct());
+        List<RelayFeed.Queued> batch = List.of(
+                new RelayFeed.Queued(file(hash(1), "kad none.avi", 0), FileSource.KAD_SEARCH),
+                new RelayFeed.Queued(file(hash(2), "kad two.avi", 2), FileSource.KAD_SEARCH),
+                new RelayFeed.Queued(file(hash(3), "update three.avi", 3), FileSource.SERVER_INDEX_UPDATE),
+                new RelayFeed.Queued(file(hash(4), "update six.avi", 6), FileSource.SERVER_INDEX_UPDATE),
+                new RelayFeed.Queued(file(hash(5), "published.avi", 0), FileSource.CLIENT_PUSH),
+                new RelayFeed.Queued(file(hash(6), "server search none.avi", 0), FileSource.SERVER_SEARCH),
+                new RelayFeed.Queued(file(hash(7), "server search one.avi", 1), FileSource.SERVER_SEARCH));
+        RelayFeedReceiver.Answer answer = receiver.receive(InetAddress.getLoopbackAddress(), "Bearer " + TOKEN,
+                new ByteArrayInputStream(RelayFeed.gzip(RelayFeed.encode(batch))));
+        assertEquals(200, answer.status());
+        assertFalse(index.contains(hash(1)), "below this server's kadMinSourcesForIngest, whatever the relay's");
+        assertTrue(index.contains(hash(2)));
+        assertFalse(index.contains(hash(3)), "below serverIndexUpdateMinSources");
+        assertTrue(index.contains(hash(4)));
+        assertTrue(index.contains(hash(5)), "a file a relay's client published is always kept");
+        assertFalse(index.contains(hash(6)));
+        assertTrue(index.contains(hash(7)));
+        assertEquals(3L, receiver.stats().get("belowThreshold"));
+        assertEquals(0L, receiver.stats().get("withoutOrigin"));
+        FileMetadata stored = index.search("update", 10).getFirst();
+        assertNull(tag(stored, RelayFeed.ORIGIN_TAG), "the channel is not indexed");
+        assertEquals(6, stored.sourceCount());
+    }
+
+    @Test
+    void theFilesOfAnOlderRelayAreKeptAsBefore() throws Exception {
+        // A relay before 1.7.2: no channel tag, at least one source
+        java.io.ByteArrayOutputStream body = new java.io.ByteArrayOutputStream();
+        body.writeBytes(java.nio.ByteBuffer.allocate(4).order(java.nio.ByteOrder.LITTLE_ENDIAN).putInt(1).array());
+        java.nio.ByteBuffer item = java.nio.ByteBuffer.allocate(4096).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+        item.put(org.jemule.network.handler.HandlerUtils.hashToBytes(hash(1))).putInt(0).putShort((short) 0);
+        Tag.writeList(item, List.of(new Tag(Tag.TYPE_STRING, Tag.NAME_FILENAME, "old relay.avi"),
+                new Tag(Tag.TYPE_INTEGER, Tag.NAME_FILESIZE, 1000), new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, 1)));
+        body.write(item.array(), 0, item.position());
+        FileIndex index = new FileIndex(null);
+        ServerConfig config = thresholds();
+        RelayFeedReceiver receiver = new RelayFeedReceiver(() -> new RelayFeedConfig(8080, TOKEN, "127.0.0.1"),
+                origin -> RelayFeedReceiver.minSources(config, origin), index, null, IngestionExecutor.direct());
+        assertEquals(200, receiver.receive(InetAddress.getLoopbackAddress(), "Bearer " + TOKEN,
+                new ByteArrayInputStream(RelayFeed.gzip(body.toByteArray()))).status());
+        assertTrue(index.contains(hash(1)));
+        assertEquals(1L, receiver.stats().get("withoutOrigin"));
+    }
 }
