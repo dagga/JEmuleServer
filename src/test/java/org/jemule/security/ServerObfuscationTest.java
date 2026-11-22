@@ -28,8 +28,13 @@ class ServerObfuscationTest {
         int key = 0x0BADCAFE;
         assertArrayEquals(message, UdpObfuscation.decryptFromClient(
                 ServerObfuscation.encode(message, key, ServerObfuscation.REQUEST), key));
-        assertArrayEquals(message, ServerObfuscation.decode(
-                UdpObfuscation.encryptForClient(message, key), key, ServerObfuscation.ANSWER));
+        // The answer's first byte is anything but 0xE3, as eMule's EncryptSendClient; the decoder of other servers'
+        // datagrams also reads 0xC5 and 0xD4 as plain: draw an answer it does not take for one (2 in 255 otherwise)
+        byte[] answer;
+        do {
+            answer = UdpObfuscation.encryptForClient(message, key);
+        } while (answer[0] == (byte) 0xC5 || answer[0] == (byte) 0xD4);
+        assertArrayEquals(message, ServerObfuscation.decode(answer, key, ServerObfuscation.ANSWER));
         assertEquals(ServerObfuscation.ANSWER, ServerObfuscation.reverse(ServerObfuscation.REQUEST));
         assertEquals(ServerObfuscation.REQUEST, ServerObfuscation.reverse(ServerObfuscation.ANSWER));
     }

@@ -17,14 +17,14 @@ import java.util.Arrays;
  * Server side of eMule's obfuscated client -&gt; server TCP handshake (EncryptedStreamSocket.cpp, "Basic Obfuscated
  * Handshake Protocol Client &lt;-&gt; Server"):
  * <pre>
- * Client: &lt;marker 1 (not E3/C5/D4)&gt;&lt;g^a 96&gt;&lt;random padding 0-15&gt;                       (plain)
+ * Client: &lt;marker 1 (not E3/C5/D4)&gt;&lt;g^a 96&gt;&lt;padLen 1&gt;&lt;random padding padLen&gt;            (plain)
  * Server: &lt;g^b 96&gt; (plain) RC4[&lt;MAGICVALUE_SYNC 4&gt;&lt;methods supported 1&gt;&lt;method preferred 1&gt;&lt;padLen 1&gt;&lt;padding&gt;]
  * Client: RC4[&lt;MAGICVALUE_SYNC 4&gt;&lt;method selected 1&gt;&lt;padLen 1&gt;&lt;padding&gt;]   (sent together with its first packet)
  * S = (g^a)^b mod p (96 bytes, big-endian); server send key = MD5(S, 203), receive key = MD5(S, 34);
  * the first 1024 bytes of each RC4 stream are discarded. All integers are little-endian.
  * </pre>
- * The client's padding is not encrypted and its length is not transmitted: the server locates the start of the
- * encrypted stream by looking for the magic value at each of the 16 possible offsets.
+ * The client's padding is not encrypted; its length, 0 to 15 in eMule and aMule ({@code GenerateByte() % 16}), comes
+ * in the byte before it. Its answer starts right after the padding.
  */
 public class ObfuscationHandler {
     private static final Logger log = LoggerFactory.getLogger(ObfuscationHandler.class);
@@ -35,7 +35,6 @@ public class ObfuscationHandler {
     public static final byte MAGICVALUE_REQUESTER = 34;
     public static final byte MAGICVALUE_SERVER = (byte) 203;
     public static final byte ENM_OBFUSCATION = 0x00;
-    static final int MAX_CLIENT_PADDING = 15;
 
     static final BigInteger DH768_P = new BigInteger(1, new byte[] {
             (byte)0xF2,(byte)0xBF,(byte)0x52,(byte)0xC5,(byte)0x5F,(byte)0x58,(byte)0x7A,(byte)0xDD,(byte)0x53,(byte)0x71,(byte)0xA9,(byte)0x36,
@@ -93,26 +92,17 @@ public class ObfuscationHandler {
         out.write(response);
         out.flush();
 
-        // The client's unencrypted padding (0-15 bytes) precedes its encrypted answer: find where the
-        // encrypted stream starts by decrypting the magic value at each possible offset.
-        ByteArrayOutputStream received = new ByteArrayOutputStream();
-        received.writeBytes(pin.readNBytes(4));
-        Obfuscation.RC4 receiveKey = null;
-        for (int offset = 0; offset <= MAX_CLIENT_PADDING; offset++) {
-            while (received.size() < offset + 4) {
-                int next = pin.read();
-                if (next == -1) throw new EOFException("Obfuscation handshake: connection closed");
-                received.write(next);
-            }
-            Obfuscation.RC4 candidate = rc4(s, MAGICVALUE_REQUESTER);
-            byte[] magic = Arrays.copyOfRange(received.toByteArray(), offset, offset + 4);
-            candidate.crypt(magic);
-            if (ByteBuffer.wrap(magic).order(ByteOrder.LITTLE_ENDIAN).getInt() == MAGICVALUE_SYNC) {
-                receiveKey = candidate;
-                break;
-            }
+        // The client's unencrypted padding, after its length byte, precedes its encrypted answer
+        // (CEncryptedStreamSocket::StartNegotiation, ECS_PENDING_SERVER)
+        int padLength = pin.read();
+        if (padLength == -1 || pin.readNBytes(padLength).length < padLength) {
+            throw new EOFException("Obfuscation handshake: connection closed");
         }
-        if (receiveKey == null) {
+        byte[] magic = pin.readNBytes(4);
+        if (magic.length < 4) throw new EOFException("Obfuscation handshake: connection closed");
+        Obfuscation.RC4 receiveKey = rc4(s, MAGICVALUE_REQUESTER);
+        receiveKey.crypt(magic);
+        if (ByteBuffer.wrap(magic).order(ByteOrder.LITTLE_ENDIAN).getInt() != MAGICVALUE_SYNC) {
             throw new IOException("Obfuscation handshake failed: magic value not received from " + sanitize(remote));
         }
 
