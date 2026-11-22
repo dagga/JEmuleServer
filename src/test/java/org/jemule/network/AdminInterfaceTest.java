@@ -44,6 +44,24 @@ public class AdminInterfaceTest {
     }
 
     @Test
+    void theNatCommandShowsTheCounters() {
+        org.jemule.network.natt.NatCallbackService nat = new org.jemule.network.natt.NatCallbackService(() -> true,
+                System::currentTimeMillis, new org.jemule.network.natt.NatCallbackService.Transport() {
+                    @Override public void sendTcp(long clientId, Packet packet) { }
+                    @Override public void sendUdp(java.net.DatagramSocket socket,
+                                                  org.jemule.network.natt.UdpEndpoint to, byte[] datagram) { }
+                });
+        org.mockito.Mockito.when(server.getNatCallbackService()).thenReturn(nat);
+        admin.handleCommand("nat");
+        String out = outContent.toString();
+        assertTrue(out.contains("NAT traversal"), out);
+        assertTrue(out.contains("Options: callback on"), out);
+        assertTrue(out.contains("0x9F keepalives: 0 accepted, 0 ignored; proofs none"), out);
+        assertEquals("forwarded_tcp 2, bridge 1", AdminInterface.counts(new java.util.LinkedHashMap<>(
+                java.util.Map.of("forwarded_tcp", 2L)) {{ put("short", 0L); put("bridge", 1L); }}));
+    }
+
+    @Test
     void testStatusCommand() {
         admin.handleCommand("status");
         assertTrue(outContent.toString().contains("Server Status"));

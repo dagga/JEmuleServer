@@ -109,6 +109,7 @@ public class AdminInterface implements Runnable {
             case "unban" -> handleUnban(line.trim().substring(parts[0].length()).strip());
             case "events" -> showEvents();
             case "kad" -> handleKad(parts);
+            case "nat" -> showNat();
             case "peers" -> showPeers();
             case "servers" -> handleServers(line.trim().substring(parts[0].length()).strip());
             case "filters" -> handleFilters(parts);
@@ -664,6 +665,45 @@ public class AdminInterface implements Runnable {
         out().println("---------------------------");
     }
 
+    /** The NAT traversal counters since the start (natCallback, natCallbackToken, natHolePunch, cross-server). */
+    private void showNat() {
+        org.jemule.network.natt.NatCallbackService nat = server != null ? server.getNatCallbackService() : null;
+        if (nat == null) {
+            out().println("NAT traversal not available.");
+            return;
+        }
+        Map<String, Object> stats = nat.stats();
+        out().println("--- NAT traversal ---");
+        out().println("Options: callback " + onOff(stats.get("callbackEnabled"))
+                + ", token " + onOff(stats.get("tokenEnabled"))
+                + ", hole punch " + onOff(stats.get("holePunchEnabled"))
+                + ", cross-server " + onOff(stats.get("crossServerEnabled")));
+        out().println("Sessions: " + stats.get("sessions") + " (" + stats.get("lugdunumSessions") + " with 0x1000)");
+        out().println("0x9F keepalives: " + stats.get("keepalivesAccepted") + " accepted, "
+                + stats.get("keepalivesIgnored") + " ignored; proofs " + counts(stats.get("keepaliveProofs")));
+        out().println("0xA6 callback requests: " + counts(stats.get("callbackRequests")));
+        out().println("0x60 hole punch: " + counts(stats.get("holePunch")));
+        out().println("Cross-server 0xA6: " + counts(stats.get("crossServer")));
+        out().println("---------------------");
+    }
+
+    private static String onOff(Object enabled) {
+        return Boolean.TRUE.equals(enabled) ? "on" : "off";
+    }
+
+    /** The non-zero counters of {@code counters}, "none" when all are zero. */
+    static String counts(Object counters) {
+        if (!(counters instanceof Map<?, ?> map)) return "none";
+        StringBuilder text = new StringBuilder();
+        for (Map.Entry<?, ?> e : map.entrySet()) {
+            if (e.getValue() instanceof Number n && n.longValue() != 0) {
+                if (!text.isEmpty()) text.append(", ");
+                text.append(e.getKey()).append(' ').append(n);
+            }
+        }
+        return text.isEmpty() ? "none" : text.toString();
+    }
+
     private void showHelp() {
         out().println("Available commands:");
         out().println("  status          - Show server performance and stats");
@@ -692,6 +732,8 @@ public class AdminInterface implements Runnable {
         out().println("  kad contacts    - List the " + MAX_LISTED_KAD_CONTACTS + " most recent Kademlia contacts");
         out().println("  kad bootstrap <ip> <port> - Send a bootstrap request to a Kademlia node");
         out().println("  kad stats       - Show the Kademlia counters (searches, ingestion, bans)");
+        out().println("  nat             - NAT traversal: options, sessions, 0x9F keepalives and proofs, callbacks,"
+                + " hole punch");
         out().println("  help            - Show this help message");
         out().println("  stop/exit/quit  - Shutdown the server");
     }

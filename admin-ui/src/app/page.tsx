@@ -106,6 +106,9 @@ function Figures({ o }: { o: Obj }) {
   const v: Obj = o.offerFilesV1 ?? {}, k: Obj = o.kadSources ?? {}, ss: Obj = o.serverSources ?? {};
   const iu: Obj = o.serverIndexUpdate ?? {}, r: Obj = o.relay ?? {}, rf: Obj = o.relayFeed ?? {}, rr: Obj = o.relayFeedReceived ?? {};
   const protection: Obj = o.protection ?? {}, database: Obj = o.database ?? {};
+  const nat: Obj = o.natTraversal ?? {}, proofs: Obj = nat.keepaliveProofs ?? {}, cb: Obj = nat.callbackRequests ?? {};
+  const hp: Obj = nat.holePunch ?? {}, xs: Obj = nat.crossServer ?? {};
+  const sum = (m: Obj) => Object.values(m).reduce((a: number, n) => a + (typeof n === 'number' ? n : 0), 0);
 
   // The index is full at maxFiles or when the live heap reaches the guard, whichever comes first
   const fileFill = f.max ? f.local / f.max : 0, heapFill = m.guardMb ? m.liveOldMb / m.guardMb : 0;
@@ -207,6 +210,21 @@ function Figures({ o }: { o: Obj }) {
               + ' refused posts · ' + fmt(rr.busy || 0) + ' deferred (ingestion busy)' + (rr.lastFrom ? ' · last from ' + rr.lastFrom : '')}
           />
         ) : null}
+        <Tile
+          label="NAT traversal"
+          value={fmt(nat.sessions || 0)}
+          extra={nat.callbackEnabled
+            ? <State level="good" label={'Callback' + (nat.tokenEnabled ? ', token' : '') + (nat.holePunchEnabled ? ', hole punch' : '')
+              + (nat.crossServerEnabled ? ', cross-server' : '')} />
+            : <Disabled>Disabled (natCallback)</Disabled>}
+          sub={'LowID sessions (' + fmt(nat.lugdunumSessions || 0) + ' with 0x1000) · 0x9F keepalives: '
+            + fmt(nat.keepalivesAccepted || 0) + ' accepted, ' + fmt(nat.keepalivesIgnored || 0) + ' ignored · proofs: '
+            + fmt(proofs.proof || 0) + ' accepted (' + fmt(proofs.proof_other_ip || 0) + ' from another IP), '
+            + fmt(proofs.proof_bad || 0) + ' bad, ' + fmt(proofs.proof_replay || 0) + ' replayed · 0xA6 callbacks: '
+            + fmt((cb.forwarded_tcp || 0) + (cb.forwarded_udp || 0)) + ' forwarded of ' + fmt(sum(cb)) + ' · hole punch: '
+            + fmt(hp.requests || 0) + ' requests, ' + fmt(hp.info || 0) + ' 0x61 pairs, ' + fmt(hp.bridge || 0) + ' bridged · cross-server: '
+            + fmt((xs.woken || 0) + (xs.woken_without_answer || 0)) + ' woken of ' + fmt(sum(xs) - (xs.answers || 0))}
+        />
         <Tile
           label="OFFERFILES v1"
           value={fmt(v.newFiles)}

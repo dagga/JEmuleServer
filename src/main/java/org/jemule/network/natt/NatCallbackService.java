@@ -195,6 +195,13 @@ public final class NatCallbackService {
     private final LongAdder proofsBad = new LongAdder();
     private final LongAdder proofsReplayed = new LongAdder();
     private final LongAdder tokenFormsIgnored = new LongAdder();
+    private final LongAdder keepalivesAccepted = new LongAdder();
+    private final LongAdder keepalivesIgnored = new LongAdder();
+    private final Map<Outcome, LongAdder> callbackOutcomes = new java.util.EnumMap<>(Outcome.class);
+
+    {
+        for (Outcome outcome : Outcome.values()) callbackOutcomes.put(outcome, new LongAdder());
+    }
     private final ConcurrentHashMap<Long, Session> sessions = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<HashKey, Session> byHash = new ConcurrentHashMap<>();
 
@@ -488,9 +495,11 @@ public final class NatCallbackService {
         }
         Session session = byHash.get(HashKey.of(payload, 0));
         if (session == null || !acceptKeepalive(session, payload, ip, obfuscated)) {
+            keepalivesIgnored.increment();
             log.debug("NAT keepalive from {}:{} ignored", ip.getHostAddress(), port);
             return false;
         }
+        keepalivesAccepted.increment();
         onKeepalive(session.lowId, ip, port);
         // An extension coordination waiting for this client's fresh port goes ahead
         holePunch.keepaliveAccepted(session);
@@ -573,6 +582,7 @@ public final class NatCallbackService {
     public Outcome handleCallbackRequest(byte[] payload, InetAddress ip, int port, boolean obfuscated,
                                          DatagramSocket socket) {
         Outcome outcome = callbackRequest(payload, ip, port, obfuscated, socket);
+        callbackOutcomes.get(outcome).increment();
         if (log.isDebugEnabled()) {
             log.debug("NAT callback request from {}:{}: {}", ip.getHostAddress(), port, outcome);
         }
@@ -668,6 +678,37 @@ public final class NatCallbackService {
         if (log.isDebugEnabled() && client != null) {
             log.debug("LowID hole punch request from {}: {}", client.clientId(), outcome);
         }
+    }
+
+    /**
+     * Everything the console ({@code nat}) and the admin panel show: the options, the sessions, the 0x9F keepalives and
+     * their proofs, the 0xA6 callback requests, the hole punch and the cross-server callback, by outcome, since the
+     * start.
+     */
+    public Map<String, Object> stats() {
+        Map<String, Object> stats = new LinkedHashMap<>();
+        stats.put("callbackEnabled", enabled.getAsBoolean());
+        stats.put("tokenEnabled", tokenEnabled.getAsBoolean());
+        stats.put("holePunchEnabled", holePunch.isEnabled());
+        stats.put("crossServerEnabled", crossServerEnabled.getAsBoolean());
+        stats.put("sessions", sessions.size());
+        stats.put("lugdunumSessions", sessions.values().stream().filter(s -> s.lugdunum).count());
+        stats.put("keepalivesAccepted", keepalivesAccepted.sum());
+        stats.put("keepalivesIgnored", keepalivesIgnored.sum());
+        stats.put("keepaliveProofs", keepaliveCounters());
+        Map<String, Long> requests = new LinkedHashMap<>();
+        for (Outcome outcome : Outcome.values()) {
+            requests.put(outcome.name().toLowerCase(java.util.Locale.ROOT), callbackOutcomes.get(outcome).sum());
+        }
+        stats.put("callbackRequests", requests);
+        stats.put("holePunch", holePunchCounters());
+        Map<String, Long> foreign = new LinkedHashMap<>();
+        for (CrossServerCallback.Outcome outcome : CrossServerCallback.Outcome.values()) {
+            foreign.put(outcome.name().toLowerCase(java.util.Locale.ROOT), crossServer.count(outcome));
+        }
+        foreign.put("answers", crossServer.answers());
+        stats.put("crossServer", foreign);
+        return stats;
     }
 
     /** The hole punch's counters ({@link LowIdHolePunch#counters}). */

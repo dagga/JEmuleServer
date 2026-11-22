@@ -557,6 +557,8 @@ final class AdminWebPanel implements AutoCloseable {
         overview.put("relay", relayStats);
         RelayFeed feed = server.getRelayFeed();
         overview.put("relayFeed", feed == null ? Map.of() : feed.stats());
+        org.jemule.network.natt.NatCallbackService nat = server.getNatCallbackService();
+        overview.put("natTraversal", nat == null ? Map.of() : nat.stats());
         RelayFeedReceiver receiver = server.getRelayFeedReceiver();
         Map<String, Object> received = receiver == null ? new java.util.LinkedHashMap<>()
                 : new java.util.LinkedHashMap<>(receiver.stats());
