@@ -280,4 +280,31 @@ class NatCallbackServiceTest {
         client(0xA, 0x08070605L, "5.6.7.8", NATT);
         assertEquals(0, service.sessionCount());
     }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void theStatsCountTheKeepalivesAndTheRequestsByOutcome() throws Exception {
+        client(0xA, 11, "5.6.7.8", NATT);
+        client(0xB, 13, "9.9.9.9", NATT);
+        assertTrue(service.handleKeepalive(hash(0xA), ip("5.6.7.8"), 40000, false));
+        assertFalse(service.handleKeepalive(hash(0xA), ip("1.1.1.1"), 40000, false), "another IP, no proof");
+        assertFalse(service.handleKeepalive(hash(0xC), ip("5.6.7.8"), 40000, false), "no such session");
+        assertEquals(Outcome.FORWARDED_TCP, ask(13, 11, "5.6.7.8", 40000, socketA));
+        assertEquals(Outcome.TARGET_NOT_CAPABLE, ask(99, 11, "5.6.7.8", 40000, socketA));
+
+        java.util.Map<String, Object> stats = service.stats();
+        assertEquals(true, stats.get("callbackEnabled"));
+        assertEquals(false, stats.get("holePunchEnabled"));
+        assertEquals(2, stats.get("sessions"));
+        assertEquals(2L, stats.get("lugdunumSessions"));
+        assertEquals(1L, stats.get("keepalivesAccepted"));
+        assertEquals(2L, stats.get("keepalivesIgnored"));
+        var requests = (java.util.Map<String, Long>) stats.get("callbackRequests");
+        assertEquals(1L, requests.get("forwarded_tcp"));
+        assertEquals(1L, requests.get("target_not_capable"));
+        assertEquals(0L, requests.get("forwarded_udp"));
+        assertTrue(((java.util.Map<String, Long>) stats.get("keepaliveProofs")).containsKey("proof_bad"));
+        assertTrue(((java.util.Map<String, Long>) stats.get("holePunch")).containsKey("bridge"));
+        assertTrue(((java.util.Map<String, Long>) stats.get("crossServer")).containsKey("woken"));
+    }
 }

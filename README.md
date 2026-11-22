@@ -902,6 +902,10 @@ Available commands:
 - `kad bootstrap <ip> <port>`: Sends a bootstrap request to a given Kademlia node.
 - `kad stats`: Shows the Kademlia counters (searches forked, results received, files ingested, illicit files blocked,
   bootstrap and maintenance activity).
+- `nat`: Shows the NAT traversal counters since the start: the options on, the LowID sessions, the `0x9F` keepalives
+  accepted and ignored and their proofs (accepted, from another IP, bad, replayed), the `0xA6` callback requests, the
+  `0x60` hole punch (`0x61` pairs, `0x62` failures, `0x37` bridges) and the cross-server callback, by outcome. The
+  dashboard's "NAT traversal" tile shows the same figures.
 - `help`: Shows the list of available commands.
 - `stop`: Shuts down the server. `exit` and `quit` close a remote admin session; in the server terminal they also stop
   the server.
