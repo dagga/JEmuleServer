@@ -81,7 +81,7 @@ class ObfuscationCompatibilityTest {
      * Performs the client handshake, sends an encrypted login and returns the decrypted OP_IDCHANGE.
      *
      * @param ga       forced g^a value (null for a random one)
-     * @param padding  number of unencrypted padding bytes after g^a (0..15)
+     * @param padding  number of unencrypted padding bytes after g^a and their length byte (0..15)
      */
     static Packet obfuscatedLogin(BigInteger a, int padding) throws Exception {
         try (Socket s = new Socket()) {
@@ -90,12 +90,15 @@ class ObfuscationCompatibilityTest {
             OutputStream out = s.getOutputStream();
             InputStream in = s.getInputStream();
 
-            // <marker><g^a 96><padding>
+            // <marker><g^a 96><padLen 1><padding>, as CEncryptedStreamSocket::StartNegotiation
             byte[] ga = fixed96(BigInteger.TWO.modPow(a, P));
             ByteArrayOutputStream hello = new ByteArrayOutputStream();
             hello.write(0x12);
             hello.writeBytes(ga);
-            hello.writeBytes(new byte[padding]);
+            hello.write(padding);
+            byte[] randomPadding = new byte[padding];
+            new SecureRandom().nextBytes(randomPadding);
+            hello.writeBytes(randomPadding);
             out.write(hello.toByteArray());
             out.flush();
 
@@ -138,7 +141,8 @@ class ObfuscationCompatibilityTest {
     @Timeout(20)
     void handshakeWithEveryPaddingLength() throws Exception {
         SecureRandom rnd = new SecureRandom();
-        for (int padding = 0; padding <= 15; padding += 5) {
+        // Every length eMule draws (GenerateByte() % 16): 15 failed before, one handshake in 16
+        for (int padding = 0; padding <= 15; padding++) {
             Packet idChange = obfuscatedLogin(new BigInteger(128, rnd), padding);
             assertTrue(idChange.data().length >= 20);
         }
