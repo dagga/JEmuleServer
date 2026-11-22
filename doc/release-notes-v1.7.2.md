@@ -17,6 +17,14 @@
   with `kadMinSourcesForIngest=0` brought Kad files without any source into the relay server's index, presented as
   having one. The dashboard tile "Files from relay servers" counts the files below the thresholds.
 
+### New features
+
+- **NAT traversal counters (#140).** The new `nat` console command and the dashboard's "NAT traversal" tile show,
+  since the start, the NAT options on, the LowID sessions, the `0x9F` keepalives accepted and ignored with their
+  proofs (accepted, from another IP, bad, replayed), the `0xA6` callback requests by outcome, the hole punch (`0x61`
+  pairs, `0x62` failures, `0x37` bridges) and the cross-server callback. They are also in the overview API
+  (`natTraversal`).
+
 ### Upgrade notes
 
 - No database change, no new parameter. The server version announced to clients stays 17.18.
