@@ -10,6 +10,13 @@ public class ClientRegistry {
     private final ConcurrentHashMap<Integer, ClientState> connections = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Integer, Consumer<Packet>> messengers = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Long, Set<Integer>> clientIdIndex = new ConcurrentHashMap<>();
+    /** The clients refused by nickname or for publishing made-up hashes (not the IP filter). */
+    private final ClientBans clientBans = new ClientBans();
+
+    /** The clients refused by nickname or for publishing made-up hashes. */
+    public ClientBans clientBans() {
+        return clientBans;
+    }
 
     /** Highest LowID: IDs below 2^24 are LowIDs for eMule (IsLowID). */
     static final long MAX_LOW_ID = 0x00FFFFFFL;

@@ -262,8 +262,10 @@ public class SearchHandler {
     private void sendSearchResults(ClientContext context, List<FileMetadata> results, boolean moreAvailable, OutputStream out) throws IOException {
         // Last check before the client: whatever channel a file came from, a name matching the child abuse filter
         // is never sent, and the others go with their name cleaned (Kad, server and relay results are not all
-        // ingested, and the files indexed before a cleaning rule keep their name until they are renamed)
+        // ingested, and the files indexed before a cleaning rule keep their name until they are renamed). A file whose
+        // hash a gateway made up (bannedHashPrefixes) exists on no network: it is left out too.
         results = results.stream().filter(m -> !context.getFileIndex().isChildAbuse(m.hash(), m.name()))
+                .filter(m -> !context.getFileIndex().isBannedHash(m.hash()))
                 .map(context.getFileIndex()::cleanedForClient).toList();
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         // <count 4> is little-endian like every ed2k integer (CSearchList::ProcessSearchAnswer)

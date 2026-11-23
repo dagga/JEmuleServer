@@ -224,8 +224,11 @@ class FileIndexTest {
             for (ClientState client : List.of(a, b, c)) index.removeSource(client);
             assertEquals(List.of(), index.searchComplex(complete, 10));
             assertEquals(List.of(), index.getSources("11111111111111111111111111111111", null, 10));
-            assertEquals(3, index.searchComplex(moreThanTwo, 10).getFirst().sourceCount(),
-                    "the count the online sources raised stays");
+            assertEquals(List.of(), index.searchComplex(moreThanTwo, 10),
+                    "the count the online sources raised leaves with them");
+            assertEquals(1, index.searchComplex(LINUX, 10).stream()
+                    .filter(f -> f.hash().equals("11111111111111111111111111111111")).findFirst().orElseThrow()
+                    .sourceCount(), "back to the reported count");
         }
     }
 

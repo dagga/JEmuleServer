@@ -411,8 +411,11 @@ public class Server {
         // this.config: the field, which a settings change replaces, not the constructor parameter
         this.fileIndex.setCapacity(() -> this.config.maxFiles(), () -> heapGuard.full() || diskGuard.full());
         this.metricsHistory = new org.jemule.core.MetricsHistory(db);
-        // this.config: the field, which a settings change replaces (fileRetentionDays is hot)
-        this.filePurgeJob = new org.jemule.core.FilePurgeJob(db, fileIndex, () -> this.config.fileRetentionDays());
+        // this.config: the field, which a settings change replaces (fileRetentionDays, sourceCountMaxAgeDays and
+        // bannedHashPrefixes are hot)
+        this.filePurgeJob = new org.jemule.core.FilePurgeJob(db, fileIndex, () -> this.config.fileRetentionDays(),
+                () -> this.config.sourceCountMaxAgeDays());
+        this.fileIndex.setBannedHashPrefixes(() -> this.config.bannedHashPrefixes());
         String heapWarning = heapWarning(Runtime.getRuntime().maxMemory(), heapGuard.maxBytes(), fileIndex.fileCount());
         if (heapWarning != null) {
             log.warn(heapWarning);
@@ -1225,6 +1228,12 @@ public class Server {
                         c.close();
                         continue;
                     }
+                    if (registry.clientBans().refuseConnection(c.getInetAddress(), System.currentTimeMillis())) {
+                        // Banned for a day for publishing files of a banned hash prefix (banClientsPublishingBannedHashes)
+                        log.debug("Connection refused from banned client {}", c.getInetAddress().getHostAddress());
+                        c.close();
+                        continue;
+                    }
                     c.setTcpNoDelay(true);
                     clientSockets.add(c);
                     executor.submit(() -> {
@@ -1614,6 +1623,7 @@ public class Server {
         for (FileMetadata m : results) {
             if (!largeFiles && m.size() > 0xFFFFFFFFL) continue; // the requester cannot handle files > 4 GB
             if (fileIndex.isChildAbuse(m.hash(), m.name())) continue; // indexed before a keyword reload
+            if (fileIndex.isBannedHash(m.hash())) continue; // indexed before its prefix was banned
             // Indexed before a name cleaning rule, perhaps
             byte[] item = org.jemule.network.handler.SearchHandler.encodeSearchResult(fileIndex.cleanedForClient(m));
             if (datagram.size() > 0 && datagram.size() + 2 + item.length > MAX_UDP_PAYLOAD) {

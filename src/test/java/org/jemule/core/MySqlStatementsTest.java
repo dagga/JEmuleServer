@@ -143,4 +143,33 @@ class MySqlStatementsTest {
             }
         }
     }
+
+    @Test
+    void theAgedSourceCountsAreTheCountsOfTheFilesNotSeenSince() throws Exception {
+        assertEquals("SELECT hash FROM files WHERE hash > ? AND hash <= ? AND source_count > 0 AND last_seen < ? "
+                + "ORDER BY hash", DatabaseManager.agedSourceCountsSql(true, MIGRATION_DAY, MIGRATION_DAY));
+        try (Connection c = mysqlMode("aged"); Statement stmt = c.createStatement()) {
+            stmt.execute(DatabaseManager.MYSQL_FILES.formatted("files"));
+            // 1: old with a count, 2: old without count, 3: old with 0, 4: seen lately, 5: null last_seen
+            String[] rows = {"7, " + (MIGRATION_DAY + 10), "NULL, " + (MIGRATION_DAY + 10), "0, " + (MIGRATION_DAY + 10),
+                    "7, " + (MIGRATION_DAY + 90), "7, NULL"};
+            for (int i = 1; i <= rows.length; i++) {
+                stmt.execute("INSERT INTO files (hash, name, size, type, source_count, last_seen) VALUES (X'"
+                        + String.format("%032x", i) + "', 'file " + i + "', " + i + ", 'Video', " + rows[i - 1] + ")");
+            }
+            int cutoff = MIGRATION_DAY + 60;
+            List<String> aged = new ArrayList<>();
+            try (PreparedStatement select = c.prepareStatement(
+                    DatabaseManager.agedSourceCountsSql(true, MIGRATION_DAY, cutoff))) {
+                select.setBytes(1, new byte[0]);
+                select.setBytes(2, hash(rows.length));
+                select.setInt(3, cutoff);
+                try (ResultSet rs = select.executeQuery()) {
+                    while (rs.next()) aged.add(HexFormat.of().formatHex(rs.getBytes(1)));
+                }
+            }
+            assertEquals(List.of("00000000000000000000000000000001", "00000000000000000000000000000005"), aged,
+                    "a null last_seen stands for the migration day");
+        }
+    }
 }

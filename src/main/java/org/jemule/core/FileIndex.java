@@ -198,6 +198,26 @@ public class FileIndex implements AutoCloseable {
      * stripe of the file, so that a file seen today is never purged. Null without database.
      */
     private final SeenToday seenToday;
+    /**
+     * The files whose source count was reported today (by Kad, another server, the index update or the relay feed):
+     * the first report of the day replaces the count reported before, which may have gone down since, and the next
+     * ones of the day only raise it, as they come from other networks. A file not remembered (the set is full)
+     * takes each report as the first one. Checked under the stripe of the file.
+     */
+    private final SeenToday countedToday;
+    /**
+     * The source count reported for the files with online sources here, by {@link #id}, when not 0: the index holds
+     * the higher of it and of the online sources, for the searches to sort and filter on, and comes back to it when
+     * the online sources leave ({@link #removeSource}). A file without online source has its reported count in the
+     * index. Written under the stripe of the file.
+     */
+    private final ConcurrentHashMap<String, Integer> remoteCounts = new ConcurrentHashMap<>();
+    /** The {@code bannedHashPrefixes} setting, read at every check (hot). */
+    private volatile java.util.function.Supplier<String> bannedHashPrefixes = () -> "";
+    /** The last setting parsed, with its filter. */
+    private volatile Map.Entry<String, HashPrefixFilter> parsedPrefixes = Map.entry("", HashPrefixFilter.NONE);
+    /** Files refused since the start because their hash starts with a banned prefix. */
+    private final LongAdder bannedHashRejected = new LongAdder();
     /** Runs the database writes: the caller's thread by default, the ingestion thread on a running server. */
     private volatile java.util.concurrent.Executor persistence = Runnable::run;
     private final EventManager eventManager;
@@ -254,6 +274,8 @@ public class FileIndex implements AutoCloseable {
         this.db = db;
         this.seenToday = db == null ? null
                 : new SeenToday(db::today, SeenToday.capacityFor(Runtime.getRuntime().maxMemory()));
+        this.countedToday = new SeenToday(db == null ? DatabaseManager::currentDay : db::today,
+                SeenToday.capacityFor(Runtime.getRuntime().maxMemory()));
         this.eventManager = eventManager;
         this.abuseFilter = abuseFilter;
         for (int i = 0; i < stripes.length; i++) stripes[i] = new Object();
@@ -572,6 +594,46 @@ public class FileIndex implements AutoCloseable {
     }
 
     /**
+     * Sets the {@code bannedHashPrefixes} setting ({@link HashPrefixFilter}), read at every check so that a change
+     * applies at once. An invalid value bans nothing (the settings validate it before it is saved).
+     */
+    public void setBannedHashPrefixes(java.util.function.Supplier<String> prefixes) {
+        this.bannedHashPrefixes = prefixes == null ? () -> "" : prefixes;
+    }
+
+    /** The banned hash prefixes of the current setting. */
+    public HashPrefixFilter bannedHashPrefixes() {
+        String value = bannedHashPrefixes.get();
+        if (value == null) value = "";
+        Map.Entry<String, HashPrefixFilter> parsed = parsedPrefixes;
+        if (parsed.getKey().equals(value)) return parsed.getValue();
+        HashPrefixFilter filter;
+        try {
+            filter = HashPrefixFilter.parse(value);
+        } catch (IllegalArgumentException e) {
+            log.warn("bannedHashPrefixes ignored: {}", e.getMessage());
+            filter = HashPrefixFilter.NONE;
+        }
+        parsedPrefixes = Map.entry(value, filter);
+        return filter;
+    }
+
+    /**
+     * Whether a file's hash starts with a banned prefix ({@code bannedHashPrefixes}): such a file is refused by every
+     * ingestion channel and never sent in a search result. Counted.
+     */
+    public boolean isBannedHash(String hash) {
+        if (!bannedHashPrefixes().matches(hash)) return false;
+        bannedHashRejected.increment();
+        return true;
+    }
+
+    /** Files refused or left out of the results since the start because of a banned hash prefix. */
+    public long bannedHashRejectedCount() {
+        return bannedHashRejected.sum();
+    }
+
+    /**
      * Records the name of a file the child abuse filter rejected among the banned names, in the database only: the
      * filter rejects that name anyway, and the names would fill the heap. Written by the persistence executor.
      */
@@ -668,11 +730,14 @@ public class FileIndex implements AutoCloseable {
             if (file == null || file.hash() == null) continue;
             feed.offer(file, source);
             if (!file.sources().isEmpty()) {
-                liveSources.compute(id(file.hash()), (k, sources) -> {
-                    if (sources == null) sources = new ConcurrentHashMap<>();
-                    sources.putAll(file.sources());
-                    return sources;
-                });
+                String id = id(file.hash());
+                synchronized (stripe(id)) { // as removeSource, which empties the sources
+                    liveSources.compute(id, (k, sources) -> {
+                        if (sources == null) sources = new ConcurrentHashMap<>();
+                        sources.putAll(file.sources());
+                        return sources;
+                    });
+                }
             }
             handed.add(file);
         }
@@ -756,6 +821,7 @@ public class FileIndex implements AutoCloseable {
      * Registers a published file, recording its ingestion channel for the monitoring counters.
      */
     public FileMetadata addFile(FileMetadata meta, FileSource source) {
+        if (meta == null || isBannedHash(meta.hash())) return null;
         NameCleaner cleaner = nameCleaner;
         meta = cleaner.cleanForIngestion(meta);
         RelayFeed feed = relayFeed;
@@ -783,7 +849,10 @@ public class FileIndex implements AutoCloseable {
         if (files == null || files.isEmpty()) return List.of();
         NameCleaner cleaner = nameCleaner;
         List<FileMetadata> cleaned = new ArrayList<>(files.size());
-        for (FileMetadata file : files) cleaned.add(file == null ? null : cleaner.cleanForIngestion(file));
+        for (FileMetadata file : files) {
+            if (file == null || isBannedHash(file.hash())) continue; // a file made up by a gateway: no such file
+            cleaned.add(cleaner.cleanForIngestion(file));
+        }
         files = cleaned;
         RelayFeed feed = relayFeed;
         if (feed != null && feed.relayMode()) return relay(feed, files, source);
@@ -815,9 +884,9 @@ public class FileIndex implements AutoCloseable {
         String id = id(incoming.hash());
         boolean isNew = false;
         boolean isNewHash = false;
-        boolean sourceCountChanged = false;
+        boolean remoteChanged;
         boolean firstSeenToday = false;
-        FileMetadata replaced = null;
+        int remote;
         FileMetadata stored;
         synchronized (stripe(id)) {
             long stamp = lock.readLock();
@@ -830,21 +899,29 @@ public class FileIndex implements AutoCloseable {
                 // Under the stripe, where the purge checks it: a file seen today is not purged
                 firstSeenToday = seenToday != null && seenToday.mark(id);
                 ConcurrentHashMap<String, ClientState> live = liveSources.get(id);
+                // The count reported by Kad, another server, the index update or the relay feed: the first report of
+                // the day replaces the one before, which may have gone down since; the next ones of the day come from
+                // other networks and only raise it. The online sources here are never part of it.
+                int reported = incoming.reportedSourceCount();
+                int known = existing == null ? 0 : reportedCount(id, existing, live);
+                if (reported < 0) remote = known;
+                else remote = countedToday.mark(id) ? reported : Math.max(known, reported);
+                remoteChanged = existing == null ? remote > 0 : remote != known;
                 if (existing == null || (live == null && !incoming.sources().isEmpty())) {
                     // unknown file, or a file without online source (e.g. loaded from the database) published by a
                     // client: take the new metadata, under the hash the database knows. A search result of a known
                     // hash keeps the entry below.
                     FileMetadata selected = existing == null ? incoming : withHash(incoming, existing.hash());
-                    int knownSources = existing == null ? 0 : existing.sourceCount();
-                    if (selected.sourceCount() < knownSources) {
-                        selected = selected.withSourceCount(knownSources);
-                    }
                     isNew = true;
                     isNewHash = existing == null;
-                    replaced = existing;
-                    stored = selected;
-                    if (!stored.sources().isEmpty()) liveSources.put(id, stored.sources());
-                    int count = stored.sourceCount();
+                    if (!selected.sources().isEmpty()) {
+                        live = selected.sources();
+                        liveSources.put(id, live);
+                    }
+                    int count = indexedCount(remote, live);
+                    keepReportedCount(id, live, remote);
+                    int tagged = selected.reportedSourceCount();
+                    stored = tagged == count || count == 0 && tagged < 0 ? selected : selected.withSourceCount(count);
                     if (existing == null) {
                         writer.addDocument(document(stored, count));
                         indexedFiles.incrementAndGet();
@@ -868,16 +945,15 @@ public class FileIndex implements AutoCloseable {
                         });
                     }
                     int indexedCount = existing.sourceCount();
-                    int knownCount = Math.max(indexedCount, live == null ? 0 : live.size());
-                    int mergedSourceCount = Math.max(knownCount, incoming.sourceCount());
-                    sourceCountChanged = mergedSourceCount > knownCount;
                     // The count of the index is raised to the online sources too, so that the searches sort and
                     // filter on it as on the files they return
-                    if (mergedSourceCount != indexedCount) {
-                        writer.updateNumericDocValue(new Term(ID, id), SOURCES, mergedSourceCount);
-                        pending.put(id, withoutSources(existing, mergedSourceCount));
+                    int count = indexedCount(remote, live);
+                    keepReportedCount(id, live, remote);
+                    if (count != indexedCount) {
+                        writer.updateNumericDocValue(new Term(ID, id), SOURCES, count);
+                        pending.put(id, withoutSources(existing, count));
                     }
-                    stored = withSources(withoutSources(existing, mergedSourceCount), live);
+                    stored = withSources(withoutSources(existing, count), live);
                 }
             } catch (IOException e) {
                 throw new UncheckedIOException(e);
@@ -886,28 +962,40 @@ public class FileIndex implements AutoCloseable {
             }
         }
         if (pending.size() > MAX_UNREFRESHED) refresh();
-        if (isNew) {
-            if (isNewHash) {
-                newFilesBySource.computeIfAbsent(source, k -> new LongAdder()).increment();
-            }
+        // The database keeps the reported count only: the online sources leave with their clients
+        if (isNewHash) {
+            newFilesBySource.computeIfAbsent(source, k -> new LongAdder()).increment();
             // No search cache emptying here: the refresh making the new document visible does it, the searches until
             // then read the index without it anyway.
-            // The index holds every hash of the database: an unknown hash is written whole, a known one only when
-            // its source count rose
-            if (isNewHash) {
-                writes.files().add(stored);
-            } else if (stored.sourceCount() > replaced.sourceCount()) {
-                writes.sourceCounts().add(stored);
-            }
-            if (eventManager != null) {
-                eventManager.broadcast(new FileEvent(FileEvent.PUBLISHED, stored.name(), stored.hash(), "File published: " + stored.name()));
-            }
-        } else if (sourceCountChanged) {
-            writes.sourceCounts().add(stored); // the hash is already stored: only its count is written
+            writes.files().add(withoutSources(stored, remote));
+        } else if (remoteChanged) {
+            writes.sourceCounts().add(withoutSources(stored, remote)); // the hash is already stored: only its count
+        }
+        if (isNew && eventManager != null) {
+            eventManager.broadcast(new FileEvent(FileEvent.PUBLISHED, stored.name(), stored.hash(), "File published: " + stored.name()));
         }
         // A new hash is saved with today as its last_seen day; a known one gets it once a day
         if (firstSeenToday && !isNewHash) writes.touched().add(stored.hash());
         return stored;
+    }
+
+    /**
+     * The count reported for an indexed file: the count of the index when it has no online source, else the count
+     * kept aside ({@link #remoteCounts}). Called under the stripe of the file.
+     */
+    private int reportedCount(String id, FileMetadata existing, ConcurrentHashMap<String, ClientState> live) {
+        return live == null ? existing.sourceCount() : remoteCounts.getOrDefault(id, 0);
+    }
+
+    /** The count of the index: the higher of the reported count and of the online sources. */
+    private static int indexedCount(int reported, ConcurrentHashMap<String, ClientState> live) {
+        return Math.max(reported, live == null ? 0 : live.size());
+    }
+
+    /** Keeps aside the reported count of a file with online sources ({@link #remoteCounts}). Under the stripe. */
+    private void keepReportedCount(String id, ConcurrentHashMap<String, ClientState> live, int reported) {
+        if (live == null || reported <= 0) remoteCounts.remove(id);
+        else remoteCounts.put(id, reported);
     }
 
     private static FileMetadata withHash(FileMetadata meta, String hash) {
@@ -939,13 +1027,45 @@ public class FileIndex implements AutoCloseable {
      */
     public void removeSource(ClientState client) {
         String key = sourceKey(client);
+        boolean indexed = !relaying(); // relay mode: the index is not written, only the online sources are kept
+        boolean lowered = false;
         for (String hash : client.publishedHashes()) {
-            liveSources.computeIfPresent(id(hash), (k, sources) -> {
-                sources.remove(key);
-                return sources.isEmpty() ? null : sources;
-            });
+            String id = id(hash);
+            synchronized (stripe(id)) {
+                ConcurrentHashMap<String, ClientState> live = liveSources.get(id);
+                if (live == null || live.remove(key) == null) continue;
+                int reported = remoteCounts.getOrDefault(id, 0);
+                int before = live.size() + 1;
+                if (live.isEmpty()) {
+                    liveSources.remove(id, live);
+                    remoteCounts.remove(id);
+                }
+                // The online sources raised the count of the index above the reported one: it comes down with them
+                if (indexed && before > reported) lowered |= lowerIndexedCount(id, Math.max(reported, live.size()));
+            }
         }
         client.publishedHashes().clear();
+        if (lowered && pending.size() > MAX_UNREFRESHED) refresh();
+    }
+
+    /**
+     * Sets the count of the index of a file whose online sources left. Called under the stripe of the file.
+     *
+     * @return whether the count changed
+     */
+    private boolean lowerIndexedCount(String id, int count) {
+        long stamp = lock.readLock();
+        try {
+            FileMetadata existing = stored(id);
+            if (existing == null || existing.sourceCount() == count) return false;
+            writer.updateNumericDocValue(new Term(ID, id), SOURCES, count);
+            pending.put(id, withoutSources(existing, count));
+            return true;
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        } finally {
+            lock.unlockRead(stamp);
+        }
     }
 
     /**
@@ -968,6 +1088,7 @@ public class FileIndex implements AutoCloseable {
                 pending.put(id, REMOVED);
                 pendingDocuments = true;
                 liveSources.remove(id);
+                remoteCounts.remove(id);
                 indexedFiles.decrementAndGet();
             } catch (IOException e) {
                 throw new UncheckedIOException(e);
@@ -1089,6 +1210,118 @@ public class FileIndex implements AutoCloseable {
             done.completeExceptionally(e); // the executor is closed
         }
         return new Purge(removed, forgotten, done);
+    }
+
+    /**
+     * Forgets the reported source count of files nobody reported it for since {@code sourceCountMaxAgeDays} days, as
+     * the database found them ({@link FilePurgeJob}): a count is the number of sources a network saw at one time, not
+     * a fact to keep. The index keeps the online sources here, the database 0. A file seen or reported today (its
+     * day may not be written yet) keeps its count.
+     *
+     * @param hashes the files as the database holds them
+     * @return the number of files whose count was reset
+     */
+    public int resetSourceCounts(Collection<String> hashes) {
+        Writes writes = new Writes(0);
+        int reset = 0;
+        for (String hash : hashes) {
+            if (hash == null) continue;
+            String id = id(hash);
+            synchronized (stripe(id)) {
+                if (seenToday != null && seenToday.contains(id) || countedToday.contains(id)) continue;
+                long stamp = lock.readLock();
+                try {
+                    FileMetadata existing = stored(id);
+                    if (existing == null) {
+                        // Not indexed (an incomplete index): the database count only. A file deleted meanwhile has
+                        // no row left to update.
+                        writes.sourceCounts().add(FileMetadata.withoutSources(hash, null, 0, null, null));
+                    } else {
+                        ConcurrentHashMap<String, ClientState> live = liveSources.get(id);
+                        remoteCounts.remove(id);
+                        int count = indexedCount(0, live);
+                        if (existing.sourceCount() != count) {
+                            writer.updateNumericDocValue(new Term(ID, id), SOURCES, count);
+                            pending.put(id, withoutSources(existing, count));
+                        }
+                        writes.sourceCounts().add(withoutSources(existing, 0));
+                    }
+                    reset++;
+                } catch (IOException e) {
+                    throw new UncheckedIOException(e);
+                } finally {
+                    lock.unlockRead(stamp);
+                }
+            }
+        }
+        if (pending.size() > MAX_UNREFRESHED) refresh();
+        persist(writes);
+        return reset;
+    }
+
+    /** Files removed per batch by {@link #removeFilesWithHashPrefix}. */
+    static final int PREFIX_PURGE_BATCH = 1_000;
+
+    /**
+     * Removes every indexed file whose hash starts with {@code prefix} ({@link HashPrefixFilter}): from the index,
+     * then from the database, by batches of {@link #PREFIX_PURGE_BATCH} files, each deleted from the database in one
+     * transaction on the persistence executor. The words of their names left without any file leave the dictionary.
+     *
+     * @param prefix hexadecimal digits, any case ({@link HashPrefixFilter#normalizePrefix})
+     * @return the number of files removed from the index
+     * @throws IllegalArgumentException when the prefix is not valid
+     */
+    public int removeFilesWithHashPrefix(String prefix) {
+        String wanted = HashPrefixFilter.normalizePrefix(prefix);
+        List<String> hashes = new ArrayList<>();
+        refresh(); // the files written lately too
+        IndexSearcher searcher = acquire();
+        try {
+            forEachMatch(searcher, new PrefixQuery(new Term(ID, wanted)),
+                    (stored, doc, count) -> hashes.add(stored.document(doc, Set.of(HASH)).get(HASH)));
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        } finally {
+            release(searcher);
+        }
+        int removed = 0;
+        for (int from = 0; from < hashes.size(); from += PREFIX_PURGE_BATCH) {
+            List<String> batch = hashes.subList(from, Math.min(hashes.size(), from + PREFIX_PURGE_BATCH));
+            List<String> deleted = new ArrayList<>(batch.size());
+            Set<String> words = new HashSet<>();
+            for (String hash : batch) {
+                String id = id(hash);
+                synchronized (stripe(id)) {
+                    long stamp = lock.readLock();
+                    try {
+                        FileMetadata existing = stored(id);
+                        if (existing == null) continue;
+                        writer.deleteDocuments(new Term(ID, id));
+                        pending.put(id, REMOVED);
+                        liveSources.remove(id);
+                        remoteCounts.remove(id);
+                        indexedFiles.decrementAndGet();
+                        if (existing.name() != null) Collections.addAll(words, Keywords.split(existing.name()));
+                        deleted.add(existing.hash());
+                    } catch (IOException e) {
+                        throw new UncheckedIOException(e);
+                    } finally {
+                        lock.unlockRead(stamp);
+                    }
+                }
+            }
+            if (deleted.isEmpty()) continue;
+            removed += deleted.size();
+            refresh();
+            invalidateSearchCache();
+            forgetUnusedWords(words);
+            if (db != null) {
+                sealPendingWrites();
+                persistence.execute(() -> db.deleteFiles(deleted)); // after any queued write of these files
+            }
+        }
+        if (removed > 0) log.info("{} files with the hash prefix {} removed", removed, wanted.toUpperCase(Locale.ROOT));
+        return removed;
     }
 
     /**
