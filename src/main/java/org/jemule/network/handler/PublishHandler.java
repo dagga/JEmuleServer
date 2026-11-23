@@ -32,6 +32,9 @@ public class PublishHandler {
     /** ST_HARDFILES: an OP_OFFERFILES declaring this many files or more is refused and the connection closed. */
     public static final int HARD_FILES = 2_000_000;
 
+    /** One file of an offer, as read. */
+    private record Offered(String hash, List<Tag> tags, boolean partial) {}
+
     /** What became of one offered file. */
     private enum Outcome { INDEXED, IGNORED, REJECTED, OVER_SOFT_LIMIT }
 
@@ -89,8 +92,8 @@ public class PublishHandler {
             }
         }
 
-        int rejected = 0;
-        int overSoftLimit = 0;
+        // The whole offer is read first: a client publishing a made-up hash gets none of its files indexed
+        List<Offered> offered = new java.util.ArrayList<>();
         for (long i = 0; i < count; i++) {
             if (buf.remaining() < 16) {
                 log.warn("Truncated {}: file {}/{} has no hash (remaining {} bytes)", op, i + 1, count, buf.remaining());
@@ -120,7 +123,30 @@ public class PublishHandler {
                 break;
             }
 
-            switch (publishFile(context, HandlerUtils.bytesToHashString(hashBytes), tags, partial)) {
+            offered.add(new Offered(HandlerUtils.bytesToHashString(hashBytes), tags, partial));
+        }
+
+        if (context.getConfig().banClientsPublishingBannedHashes()) {
+            org.jemule.core.HashPrefixFilter banned = context.getFileIndex().bannedHashPrefixes();
+            for (Offered file : offered) {
+                if (!banned.matches(file.hash())) continue;
+                // An eMule-Qt client sharing the downloads of its bridges: its files are not indexed, it is
+                // disconnected and its IP refused for a day (in memory: the IP filter is rewritten by its update)
+                context.getFileIndex().isBannedHash(file.hash()); // counted
+                java.net.InetAddress ip = context.getSocket().getInetAddress();
+                context.getRegistry().clientBans().banPublisher(ip, System.currentTimeMillis());
+                log.info("Client {} ({}, '{}') published a file of a banned hash prefix ({}): disconnected, IP refused"
+                                + " for 24 h", Long.toUnsignedString(state.clientId()),
+                        ip == null ? "?" : ip.getHostAddress(), HandlerUtils.sanitize(state.nickname()), file.hash());
+                context.disconnect();
+                return;
+            }
+        }
+
+        int rejected = 0;
+        int overSoftLimit = 0;
+        for (Offered file : offered) {
+            switch (publishFile(context, file.hash(), file.tags(), file.partial())) {
                 case REJECTED -> rejected++;
                 case OVER_SOFT_LIMIT -> overSoftLimit++;
                 default -> { }
@@ -188,8 +214,8 @@ public class PublishHandler {
             return Outcome.IGNORED;
         }
         // A hash made up by a gateway (bannedHashPrefixes), as eMule-Qt clients share their torrent, usenet and web
-        // downloads: no eD2K client can download it. Skipped silently, out of the client's quota: the client is not at
-        // fault, and gets no warning for it.
+        // downloads: no eD2K client can download it. With banClientsPublishingBannedHashes off, skipped silently, out
+        // of the client's quota.
         if (context.getFileIndex().isBannedHash(hash)) {
             log.debug("File of a banned hash prefix skipped from client {} (hash={})", context.getState().clientId(), hash);
             return Outcome.IGNORED;

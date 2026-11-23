@@ -51,6 +51,30 @@ class SourceCountConfigTest {
     }
 
     @Test
+    void theClientBansAreReadWrittenAndKept() {
+        assertEquals("", ServerConfig.DEFAULT.bannedClientNicks(), "no nickname banned by default");
+        assertTrue(ServerConfig.DEFAULT.banClientsPublishingBannedHashes(), "on by default");
+        Properties props = new Properties();
+        props.setProperty("bannedClientNicks", " https://emule-qt.org ");
+        props.setProperty("banClientsPublishingBannedHashes", "false");
+        ServerConfig config = ServerConfig.fromProperties(props);
+        assertEquals("https://emule-qt.org", config.bannedClientNicks());
+        assertFalse(config.banClientsPublishingBannedHashes());
+        assertEquals("https://emule-qt.org", config.value(ConfigParameter.BANNED_CLIENT_NICKS));
+        assertEquals("false", config.value(ConfigParameter.BAN_CLIENTS_PUBLISHING_BANNED_HASHES));
+        ServerConfig other = config.withSourceCountSettings(7, "abcdef").withPort(4662);
+        assertEquals("https://emule-qt.org", other.bannedClientNicks());
+        assertFalse(other.banClientsPublishingBannedHashes());
+
+        assertEquals(ConfigParameter.Scope.HOT, ConfigParameter.BANNED_CLIENT_NICKS.scope());
+        assertEquals(ConfigParameter.Scope.HOT, ConfigParameter.BAN_CLIENTS_PUBLISHING_BANNED_HASHES.scope());
+        ConfigParameter.BANNED_CLIENT_NICKS.validate("https://emule-qt.org, other");
+        assertThrows(IllegalArgumentException.class, () -> ConfigParameter.BANNED_CLIENT_NICKS.validate("a\u0001b"));
+        assertThrows(IllegalArgumentException.class,
+                () -> ConfigParameter.BAN_CLIENTS_PUBLISHING_BANNED_HASHES.validate("maybe"));
+    }
+
+    @Test
     void areKeptByTheWithers() {
         ServerConfig config = ServerConfig.DEFAULT.withSourceCountSettings(0, "abcdef");
         assertEquals(0, config.sourceCountMaxAgeDays());

@@ -1228,6 +1228,12 @@ public class Server {
                         c.close();
                         continue;
                     }
+                    if (registry.clientBans().refuseConnection(c.getInetAddress(), System.currentTimeMillis())) {
+                        // Banned for a day for publishing files of a banned hash prefix (banClientsPublishingBannedHashes)
+                        log.debug("Connection refused from banned client {}", c.getInetAddress().getHostAddress());
+                        c.close();
+                        continue;
+                    }
                     c.setTcpNoDelay(true);
                     clientSockets.add(c);
                     executor.submit(() -> {

@@ -20,7 +20,6 @@ import java.nio.file.Path;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -133,23 +132,6 @@ class PublishValidationTest {
         assertEquals(0, index.fileCount());
         assertEquals(0, state.publishedFilesCount().get());
         assertEquals(1, index.childAbuseRejectedCount());
-    }
-
-    @Test
-    void aFileOfABannedHashPrefixIsSkippedSilently() throws Exception {
-        index.setBannedHashPrefixes(() -> org.jemule.core.HashPrefixFilter.DEFAULT);
-        // An eMule-Qt client sharing a torrent download, then a real file in the same offer
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        byte[] payload = EmuleTestSupport.offerFiles(
-                EmuleTestSupport.completeFile(EmuleTestSupport.hash("ED2B011200008A8F033CDCEF7349E8EB"), "torrent.mp4", 2048),
-                EmuleTestSupport.completeFile(HASH, "test.txt", 1024));
-        new org.jemule.network.handler.PublishHandler().handlePublish(handler, org.jemule.protocol.OpCode.OFFER_FILES,
-                payload, out);
-        assertEquals(1, index.fileCount(), "the real file only");
-        assertFalse(index.contains("ED2B011200008A8F033CDCEF7349E8EB"));
-        assertEquals(1, state.publishedFilesCount().get(), "out of the client's quota");
-        assertEquals(1, index.bannedHashRejectedCount());
-        assertEquals(0, out.size(), "no warning sent to the client");
     }
 
     @Test

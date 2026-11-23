@@ -424,7 +424,16 @@ final class AdminWebPanel implements AutoCloseable {
         DatabaseManager database = server.getDatabaseManager();
         org.jemule.core.FilePurgeJob purge = server.getFilePurgeJob();
         org.jemule.core.FilePurgeJob.Status purged = purge == null ? null : purge.status();
+        org.jemule.core.ClientBans found = server.getClientRegistry().clientBans();
+        org.jemule.core.ClientBans bans = found != null ? found : new org.jemule.core.ClientBans();
         return Map.ofEntries(
+                // Logins refused for their nickname (bannedClientNicks), clients banned for publishing made-up hashes,
+                // connections refused from their IPs, and the IPs banned now
+                Map.entry("clientNickLoginsRefused", bans.nickLoginsRefused()),
+                Map.entry("clientPublishersBanned", bans.publishersBanned()),
+                Map.entry("clientConnectionsRefused", bans.connectionsRefused()),
+                Map.entry("clientIpsBanned", bans.bannedIpCount(System.currentTimeMillis())),
+                Map.entry("bannedHashFilesRefused", server.getFileIndex().bannedHashRejectedCount()),
                 Map.entry("version", Main.VERSION),
                 // Last complete purge of the files not seen for fileRetentionDays (epoch ms, 0: never)
                 Map.entry("lastFilePurgeAt", purged == null ? 0L : purged.lastRunAt()),

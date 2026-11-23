@@ -57,6 +57,10 @@ public enum ConfigParameter {
             "Days a file nobody published nor found is kept before the daily purge removes it (0 = never purged)"),
     SOURCE_COUNT_MAX_AGE_DAYS("sourceCountMaxAgeDays", Type.INTEGER, Scope.HOT, 0, ServerConfig.MAX_FILE_RETENTION_DAYS,
             "Days the source count reported by Kad or another server is kept when nobody reports it again: the daily purge then resets it to 0 (0 = kept)"),
+    BANNED_CLIENT_NICKS("bannedClientNicks", Type.STRING, Scope.HOT, 0, 0,
+            "Login nicknames refused, comma-separated, each compared whole without case (empty = none), e.g. https://emule-qt.org"),
+    BAN_CLIENTS_PUBLISHING_BANNED_HASHES("banClientsPublishingBannedHashes", Type.BOOLEAN, Scope.HOT, 0, 0,
+            "Disconnect a client publishing a file of a banned hash prefix and refuse its IP for 24 hours (off = the file is only skipped)"),
     BANNED_HASH_PREFIXES("bannedHashPrefixes", Type.STRING, Scope.HOT, 0, 0,
             "Hash prefixes (hexadecimal, comma-separated, 6 digits at least) of files made up by gateways: refused by every channel and left out of the results (empty = none)"),
     DATABASE_PATH("databasePath", Type.STRING, Scope.RESTART, 0, 0,
@@ -346,6 +350,11 @@ public enum ConfigParameter {
             }
             case "databaseType" -> DatabaseConfig.parseType(value);
             case "bannedHashPrefixes" -> org.jemule.core.HashPrefixFilter.parse(value);
+            case "bannedClientNicks" -> {
+                if (value.chars().anyMatch(Character::isISOControl)) {
+                    throw new IllegalArgumentException(key + " must not contain control characters");
+                }
+            }
             case "adminAllowedMacs" -> {
                 for (String token : splitList(value)) {
                     String normalized = org.jemule.security.AdminAccessFilter.normalizeMac(token);

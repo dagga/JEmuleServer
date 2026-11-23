@@ -593,10 +593,27 @@ now and of the count the other networks reported (Kad, other eD2K servers, the i
   (`ED2B0153`) downloads a hash starting with `ED2B01`, which its eNode server announces with 99 sources and the
   eMule-Qt clients publish. The files whose hash starts with a prefix of `bannedHashPrefixes` (default `ED2B01`, 6 to
   32 hexadecimal digits each, comma-separated, hot) are refused by every channel and never sent in a search result;
-  a client offering one is neither warned nor disconnected, the file is skipped and does not count in its quota. The
+  a client offering one is banned for a day (see [Client bans](#client-bans)). The
   files indexed before are removed with the console `files purge-prefix <hex>` or `POST /api/files/purge-prefix`
   with `prefix=<hex>` (answer `{"prefix":"ED2B01","filesRemoved":<n>}`), from the index and the database, 1,000
   files per transaction.
+
+## Client bans
+
+Besides the IP filter, which its daily update rewrites, two hot settings refuse clients:
+
+- **By nickname.** `bannedClientNicks` (comma-separated, each nickname compared whole and without case; empty by
+  default) refuses the logins of these nicknames: the connection is closed before anything is sent, and logged at
+  INFO with the nickname and the IP. eMule-Qt clients log in as `https://emule-qt.org` and share the made-up hashes of
+  the emule-qt.org bridges.
+- **By behaviour.** With `banClientsPublishingBannedHashes` (on by default), a client offering a file of a
+  [banned hash prefix](#source-counts) gets none of the files of that offer indexed, is disconnected and its IP is
+  refused for 24 hours, at the connection and at the login; the ban is kept in memory only, a restart lifts it. Off,
+  the file is only skipped, out of the client's quota.
+
+`/api/status` counts the logins refused for their nickname (`clientNickLoginsRefused`), the clients banned for
+their files (`clientPublishersBanned`), the connections refused from their IPs (`clientConnectionsRefused`), the IPs
+banned now (`clientIpsBanned`) and the files of a banned hash prefix refused (`bannedHashFilesRefused`).
 
 ## HighID / LowID
 
