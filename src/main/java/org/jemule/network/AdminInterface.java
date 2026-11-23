@@ -102,7 +102,7 @@ public class AdminInterface implements Runnable {
             case "status" -> showStatus();
             case "clients" -> showClients(parts.length > 2 ? parts[1] + " " + parts[2]
                     : parts.length > 1 ? parts[1] : "");
-            case "files" -> showFiles();
+            case "files" -> handleFiles(parts);
             case "ingestion" -> showIngestion();
             case "searches" -> showSearches();
             case "ban" -> handleBan(line.trim().substring(parts[0].length()).strip());
@@ -211,10 +211,33 @@ public class AdminInterface implements Runnable {
         out().println("---------------------------------------------------------------");
     }
 
+    private void handleFiles(String[] parts) {
+        if (parts.length < 2) {
+            showFiles();
+            return;
+        }
+        if (!parts[1].equalsIgnoreCase("purge-prefix") || parts.length < 3) {
+            out().println("Usage: files | files purge-prefix <hex>");
+            return;
+        }
+        try {
+            String prefix = org.jemule.core.HashPrefixFilter.normalizePrefix(parts[2].strip());
+            int removed = fileIndex.removeFilesWithHashPrefix(prefix);
+            out().println(removed + " file(s) with the hash prefix " + prefix.toUpperCase(Locale.ROOT)
+                    + " removed from the index and the database.");
+        } catch (IllegalArgumentException e) {
+            out().println(e.getMessage());
+        }
+    }
+
     private void showFiles() {
         out().println("--- File Statistics ---");
         out().println("Total files indexed: " + fileIndex.fileCount());
         out().println("Fake file detection: " + (fakeFileDetector.isEnabled() ? "ENABLED" : "DISABLED"));
+        org.jemule.core.HashPrefixFilter banned = fileIndex.bannedHashPrefixes();
+        String prefixes = banned == null ? "" : banned.toString();
+        out().println("Banned hash prefixes: " + (prefixes.isEmpty() ? "none" : prefixes.toUpperCase(Locale.ROOT))
+                + " (" + fileIndex.bannedHashRejectedCount() + " file(s) refused since start)");
         out().println("------------------------");
     }
 
@@ -710,6 +733,7 @@ public class AdminInterface implements Runnable {
         out().println("  clients         - Show connected clients count");
         out().println("  clients <text>  - Search clients by nickname, IP, or client ID");
         out().println("  files           - Show file indexing stats");
+        out().println("  files purge-prefix <hex> - Remove the files whose hash starts with <hex> (6 digits at least)");
         out().println("  ingestion       - New files inserted into the database by channel (client push, Kad, servers)");
         out().println("  searches        - Kad and eD2K server search queries and results returned");
         out().println("  ban <name>      - Ban a file name (any case) and remove the files indexed under it");

@@ -42,6 +42,22 @@ public class LoginHandler {
 
         parseLoginRequest(state, data);
 
+        // Refused before anything is sent or registered: an IP banned for publishing made-up hashes (also refused at
+        // the accept, but a connection may predate the ban), and the banned nicknames (bannedClientNicks)
+        org.jemule.core.ClientBans bans = context.getRegistry().clientBans();
+        if (bans.refuseConnection(clientIp, System.currentTimeMillis())) {
+            log.info("Login refused: {} is banned for publishing files of a banned hash prefix", clientIp.getHostAddress());
+            context.disconnect();
+            return;
+        }
+        if (org.jemule.core.ClientBans.nickBanned(state.nickname(), context.getConfig().bannedClientNicks())) {
+            bans.nickLoginRefused();
+            log.info("Login refused: banned nickname '{}' from {}", HandlerUtils.sanitize(state.nickname()),
+                    clientIp.getHostAddress());
+            context.disconnect();
+            return;
+        }
+
         // maxUsers: refused before the HighID test, which opens a connection to the client
         int maxUsers = context.getConfig().maxUsers();
         if (context.getRegistry().size() >= maxUsers) {

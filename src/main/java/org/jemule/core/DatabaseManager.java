@@ -1552,8 +1552,27 @@ public class DatabaseManager implements AutoCloseable {
                 + ") AND " + staleCondition(migrationDay, cutoffDay);
     }
 
-    /** A window of the files table read by {@link #staleFiles}: the stale files of the window, as {@link NameWindow}. */
-    public record StaleWindow(List<String> hashes, String last, int scanned) {}
+    /**
+     * SQL of the files of a window holding a source count not reported since before a day ({@link #staleFiles}):
+     * after, last, cutoff day. MySQL keeps the counts in files, H2 in file_sources.
+     */
+    static String agedSourceCountsSql(boolean mysql, int migrationDay, int cutoffDay) {
+        return mysql
+                ? "SELECT hash FROM files WHERE hash > ? AND hash <= ? AND source_count > 0 AND "
+                        + staleCondition(migrationDay, cutoffDay) + " ORDER BY hash"
+                : "SELECT f.hash FROM files f JOIN file_sources s ON s.hash = f.hash WHERE f.hash > ? AND f.hash <= ?"
+                        + " AND s.source_count > 0 AND " + staleCondition(migrationDay, cutoffDay) + " ORDER BY f.hash";
+    }
+
+    /**
+     * A window of the files table read by {@link #staleFiles}: the stale files of the window, as {@link NameWindow},
+     * and the files of the window whose source count is too old ({@code agedCounts}, empty when not asked).
+     */
+    public record StaleWindow(List<String> hashes, String last, int scanned, List<String> agedCounts) {
+        public StaleWindow(List<String> hashes, String last, int scanned) {
+            this(hashes, last, scanned, List.of());
+        }
+    }
 
     /**
      * The files not seen since before {@code cutoffDay} among the {@code window} files following {@code after} in
@@ -1564,6 +1583,16 @@ public class DatabaseManager implements AutoCloseable {
      * @return null if the read failed
      */
     public StaleWindow staleFiles(String after, int window, int cutoffDay) {
+        return staleFiles(after, window, cutoffDay, Integer.MIN_VALUE);
+    }
+
+    /**
+     * As {@link #staleFiles(String, int, int)}, with the files of the window holding a source count but not seen since
+     * before {@code countCutoffDay} too ({@link StaleWindow#agedCounts}): the last_seen day of a file is the last
+     * day a channel brought it, a search result of Kad or of a server with its count. No stale file when
+     * {@code cutoffDay} is {@link Integer#MIN_VALUE}, no aged count when {@code countCutoffDay} is.
+     */
+    public StaleWindow staleFiles(String after, int window, int cutoffDay, int countCutoffDay) {
         try {
             return locked(() -> {
                 int scanned;
@@ -1580,16 +1609,30 @@ public class DatabaseManager implements AutoCloseable {
                 }
                 if (last == null) return new StaleWindow(List.of(), null, 0);
                 List<String> stale = new ArrayList<>();
-                try (PreparedStatement select = connection.prepareStatement(
-                        staleFilesSql(lastSeenMigrationDay, cutoffDay))) {
-                    bindAfter(select, 1, after);
-                    setHash(select, 2, last);
-                    select.setInt(3, cutoffDay);
-                    try (ResultSet rs = select.executeQuery()) {
-                        while (rs.next()) stale.add(hash(rs, 1));
+                if (cutoffDay != Integer.MIN_VALUE) {
+                    try (PreparedStatement select = connection.prepareStatement(
+                            staleFilesSql(lastSeenMigrationDay, cutoffDay))) {
+                        bindAfter(select, 1, after);
+                        setHash(select, 2, last);
+                        select.setInt(3, cutoffDay);
+                        try (ResultSet rs = select.executeQuery()) {
+                            while (rs.next()) stale.add(hash(rs, 1));
+                        }
                     }
                 }
-                return new StaleWindow(stale, last, scanned);
+                List<String> aged = new ArrayList<>();
+                if (countCutoffDay != Integer.MIN_VALUE) {
+                    try (PreparedStatement select = connection.prepareStatement(
+                            agedSourceCountsSql(mysql, lastSeenMigrationDay, countCutoffDay))) {
+                        bindAfter(select, 1, after);
+                        setHash(select, 2, last);
+                        select.setInt(3, countCutoffDay);
+                        try (ResultSet rs = select.executeQuery()) {
+                            while (rs.next()) aged.add(hash(rs, 1));
+                        }
+                    }
+                }
+                return new StaleWindow(stale, last, scanned, aged);
             });
         } catch (Throwable e) {
             logger.error("Circuit breaker prevented or caught error during staleFiles: {}", e.getMessage());
@@ -1621,6 +1664,34 @@ public class DatabaseManager implements AutoCloseable {
             });
         } catch (Throwable e) {
             logger.error("Circuit breaker prevented or caught error during deleteStaleFiles ({} files): {}",
+                    kept.size(), e.getMessage());
+            return -1;
+        }
+    }
+
+    /**
+     * Deletes files with their tags and source count (ON DELETE CASCADE), in one transaction, whatever their last
+     * day ({@link FileIndex#removeFilesWithHashPrefix}).
+     *
+     * @return the number of files deleted, -1 if the delete failed
+     */
+    public int deleteFiles(Collection<String> hashes) {
+        List<String> kept = new ArrayList<>(hashes.size());
+        for (String hash : hashes) {
+            if (hash != null && (!mysql || hashBytes(hash) != null)) kept.add(hash);
+        }
+        if (kept.isEmpty()) return 0;
+        try {
+            return locked(() -> {
+                try (PreparedStatement delete = connection.prepareStatement("DELETE FROM files WHERE hash IN ("
+                        + String.join(", ", java.util.Collections.nCopies(kept.size(), "?")) + ")")) {
+                    int i = 1;
+                    for (String hash : kept) setHash(delete, i++, hash);
+                    return delete.executeUpdate();
+                }
+            });
+        } catch (Throwable e) {
+            logger.error("Circuit breaker prevented or caught error during deleteFiles ({} files): {}",
                     kept.size(), e.getMessage());
             return -1;
         }
@@ -1749,7 +1820,10 @@ public class DatabaseManager implements AutoCloseable {
         if (ofSavedFile) ps.setString(3, hash);
     }
 
-    /** A file read from the database, its source count taken from its column when higher than its old tag. */
+    /**
+     * A file read from the database, its source count taken from its column when it has one, rather than from an old
+     * tag: a count lowered or reset since ({@link FileIndex#resetSourceCounts}) must not come back.
+     */
     private static FileMetadata loaded(String hash, String name, long size, String type, List<Tag> tags,
                                        int sourceCount) {
         if (sourceCount >= 0) {
@@ -1759,7 +1833,7 @@ public class DatabaseManager implements AutoCloseable {
             }
             if (tagIndex < 0) {
                 tags.add(new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, sourceCount));
-            } else if (tags.get(tagIndex).unsignedValue() < sourceCount) {
+            } else {
                 tags.set(tagIndex, new Tag(Tag.TYPE_INTEGER, Tag.NAME_SOURCES, sourceCount));
             }
         }

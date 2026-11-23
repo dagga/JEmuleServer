@@ -37,6 +37,10 @@ import java.util.function.IntSupplier;
  * index, then out of the database in one transaction with their tags), with a pause after every query so that the
  * clients, the searches and the ingestion keep the database and the index.
  * <p>
+ * The same windows give the files kept whose source count nobody reported for {@code sourceCountMaxAgeDays} days
+ * (their last_seen day, written by every channel bringing the file with its count): their count is reset to 0
+ * ({@link FileIndex#resetSourceCounts}), by the same batches. A run happens when either setting is not 0.
+ * <p>
  * Never while the database is failing ({@link DatabaseManager#isAvailable}), nor in relay mode, where the local index
  * is no longer written and its files no longer seen. It stops by a flag checked between two batches, never by an
  * interrupt: an interrupted thread reading H2 closes the file channel of the whole database. A run stopped (server
@@ -66,7 +70,8 @@ public final class FilePurgeJob implements AutoCloseable {
      * run (start in epoch ms, 0: never; files purged; duration in ms).
      */
     public record Status(State state, int retentionDays, long scanned, long purged, long lastRunAt, long lastRunFiles,
-                         long lastRunMillis, long purgedSinceStart) {
+                         long lastRunMillis, long purgedSinceStart, int sourceCountMaxAgeDays, long countsReset,
+                         long countsResetSinceStart) {
         /** The state as the admin API writes it. */
         public String stateName() {
             return state.name().toLowerCase(Locale.ROOT);
@@ -83,6 +88,9 @@ public final class FilePurgeJob implements AutoCloseable {
             map.put("lastRunFiles", lastRunFiles);
             map.put("lastRunSeconds", lastRunMillis / 1000);
             map.put("purgedSinceStart", purgedSinceStart);
+            map.put("sourceCountMaxAgeDays", sourceCountMaxAgeDays);
+            map.put("countsReset", countsReset);
+            map.put("countsResetSinceStart", countsResetSinceStart);
             return map;
         }
     }
@@ -90,6 +98,7 @@ public final class FilePurgeJob implements AutoCloseable {
     private final DatabaseManager db;
     private final FileIndex index;
     private final IntSupplier retentionDays;
+    private final IntSupplier sourceCountMaxAgeDays;
     private final int window;
     private final int batch;
     private final long pauseMs;
@@ -100,6 +109,8 @@ public final class FilePurgeJob implements AutoCloseable {
     private final AtomicLong scanned = new AtomicLong();
     private final AtomicLong purged = new AtomicLong();
     private final AtomicLong purgedSinceStart = new AtomicLong();
+    private final AtomicLong countsReset = new AtomicLong();
+    private final AtomicLong countsResetSinceStart = new AtomicLong();
     private volatile long lastRunAt;
     private volatile long lastRunFiles;
     private volatile long lastRunMillis;
@@ -109,13 +120,29 @@ public final class FilePurgeJob implements AutoCloseable {
      * @param retentionDays days a file not seen is kept, read at every check (hot): 0 never purges
      */
     public FilePurgeJob(DatabaseManager db, FileIndex index, IntSupplier retentionDays) {
-        this(db, index, retentionDays, WINDOW_FILES, BATCH_FILES, PAUSE_MS);
+        this(db, index, retentionDays, () -> 0);
+    }
+
+    /**
+     * @param retentionDays         days a file not seen is kept, read at every check (hot): 0 never purges
+     * @param sourceCountMaxAgeDays days the source count of a file not seen is kept, read at every check (hot): 0
+     *                              keeps it until the file is purged
+     */
+    public FilePurgeJob(DatabaseManager db, FileIndex index, IntSupplier retentionDays,
+                        IntSupplier sourceCountMaxAgeDays) {
+        this(db, index, retentionDays, sourceCountMaxAgeDays, WINDOW_FILES, BATCH_FILES, PAUSE_MS);
     }
 
     FilePurgeJob(DatabaseManager db, FileIndex index, IntSupplier retentionDays, int window, int batch, long pauseMs) {
+        this(db, index, retentionDays, () -> 0, window, batch, pauseMs);
+    }
+
+    FilePurgeJob(DatabaseManager db, FileIndex index, IntSupplier retentionDays, IntSupplier sourceCountMaxAgeDays,
+                 int window, int batch, long pauseMs) {
         this.db = db;
         this.index = index;
         this.retentionDays = retentionDays;
+        this.sourceCountMaxAgeDays = sourceCountMaxAgeDays;
         this.window = window;
         this.batch = batch;
         this.pauseMs = pauseMs;
@@ -128,7 +155,8 @@ public final class FilePurgeJob implements AutoCloseable {
     }
 
     /**
-     * Starts a run if the last complete one is a day old or more, the retention is not 0, the database works and
+     * Starts a run if the last complete one is a day old or more, the retention or the source count age is not 0,
+     * the database works and
      * the server is not in relay mode. Called regularly by the maintenance scheduler; never reads the database.
      *
      * @return true if a run was started
@@ -139,7 +167,8 @@ public final class FilePurgeJob implements AutoCloseable {
 
     boolean runIfDue(long now) {
         if (now - lastRunAt < INTERVAL_MS) return false;
-        if (retentionDays.getAsInt() <= 0 || db == null || index == null) return false;
+        if (retentionDays.getAsInt() <= 0 && sourceCountMaxAgeDays.getAsInt() <= 0) return false;
+        if (db == null || index == null) return false;
         if (!db.isAvailable()) {
             log.debug("File purge postponed: the database is failing");
             return false;
@@ -158,6 +187,7 @@ public final class FilePurgeJob implements AutoCloseable {
         stopRequested = false;
         scanned.set(0);
         purged.set(0);
+        countsReset.set(0);
         state = State.RUNNING;
         thread = ServerThreads.start(ServerThreads.Tier.MAINTENANCE, "file-purge", this::run);
         return true;
@@ -173,7 +203,8 @@ public final class FilePurgeJob implements AutoCloseable {
 
     public Status status() {
         return new Status(state, retentionDays.getAsInt(), scanned.get(), purged.get(), lastRunAt, lastRunFiles,
-                lastRunMillis, purgedSinceStart.get());
+                lastRunMillis, purgedSinceStart.get(), sourceCountMaxAgeDays.getAsInt(), countsReset.get(),
+                countsResetSinceStart.get());
     }
 
     /** Waits for the run under way to end, for the tests. */
@@ -191,7 +222,7 @@ public final class FilePurgeJob implements AutoCloseable {
         int days = retentionDays.getAsInt();
         State end;
         try {
-            end = purgeAll(days);
+            end = purgeAll();
         } catch (RuntimeException e) {
             log.error("File purge failed", e);
             end = State.FAILED;
@@ -207,13 +238,15 @@ public final class FilePurgeJob implements AutoCloseable {
         }
         if (purged.get() > 0) index.compactWordDictionary();
         state = end;
-        log.info("File purge {}: {} files not seen for {} days purged ({} files read) in {} s",
+        log.info("File purge {}: {} files not seen for {} days purged, {} source counts not reported for {} days reset"
+                        + " ({} files read) in {} s",
                 end.name().toLowerCase(Locale.ROOT), String.format("%,d", purged.get()), days,
+                String.format("%,d", countsReset.get()), sourceCountMaxAgeDays.getAsInt(),
                 String.format("%,d", scanned.get()), millis / 1000);
     }
 
-    private State purgeAll(int days) {
-        if (days <= 0) return State.DONE;
+    private State purgeAll() {
+        if (retentionDays.getAsInt() <= 0 && sourceCountMaxAgeDays.getAsInt() <= 0) return State.DONE;
         String after = "";
         while (true) {
             if (stopRequested) return State.STOPPED;
@@ -221,11 +254,14 @@ public final class FilePurgeJob implements AutoCloseable {
                 log.warn("File purge stopped: the database is failing");
                 return State.STOPPED;
             }
-            // Read at every window: a retention changed meanwhile applies at once, 0 stops the run
-            days = retentionDays.getAsInt();
-            if (days <= 0) return State.STOPPED;
-            int cutoff = db.today() - days;
-            DatabaseManager.StaleWindow files = db.staleFiles(after, window, cutoff);
+            // Read at every window: a setting changed meanwhile applies at once, both at 0 stop the run
+            int days = retentionDays.getAsInt();
+            int countDays = sourceCountMaxAgeDays.getAsInt();
+            if (days <= 0 && countDays <= 0) return State.STOPPED;
+            int today = db.today();
+            int cutoff = days > 0 ? today - days : Integer.MIN_VALUE;
+            int countCutoff = countDays > 0 ? today - countDays : Integer.MIN_VALUE;
+            DatabaseManager.StaleWindow files = db.staleFiles(after, window, cutoff, countCutoff);
             if (files == null) return State.FAILED; // the database logged why
             if (files.last() == null) return State.DONE;
             List<String> stale = files.hashes();
@@ -242,6 +278,16 @@ public final class FilePurgeJob implements AutoCloseable {
                 if (deleted < 0) return State.FAILED; // the database logged why
                 purged.addAndGet(deleted);
                 purgedSinceStart.addAndGet(deleted);
+                pause();
+            }
+            // The source counts nobody reported for countDays days, of the files kept
+            java.util.Set<String> purgedHashes = new java.util.HashSet<>(stale);
+            List<String> aged = files.agedCounts().stream().filter(h -> !purgedHashes.contains(h)).toList();
+            for (int from = 0; from < aged.size(); from += batch) {
+                if (stopRequested) return State.STOPPED;
+                int reset = index.resetSourceCounts(aged.subList(from, Math.min(aged.size(), from + batch)));
+                countsReset.addAndGet(reset);
+                countsResetSinceStart.addAndGet(reset);
                 pause();
             }
             scanned.addAndGet(files.scanned());

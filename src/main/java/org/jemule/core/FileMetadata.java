@@ -149,6 +149,21 @@ public record FileMetadata(
         return count;
     }
 
+    /**
+     * The source count this file was reported with (its FT_SOURCES tag): by Kad, another server, the relay server or
+     * the index, never its online sources here. -1 when it carries none, as the files the clients publish.
+     */
+    public int reportedSourceCount() {
+        if (tags instanceof CompactTags compactTags) return (int) Math.min(compactTags.sourceCount(), Integer.MAX_VALUE);
+        if (tags == null) return -1;
+        for (Tag tag : tags) {
+            if (Tag.NAME_SOURCES.equals(tag.name()) && tag.isInt()) {
+                return (int) Math.min(tag.unsignedValue(), Integer.MAX_VALUE);
+            }
+        }
+        return -1;
+    }
+
     /** This file under another name, with the same tags and sources ({@link NameCleaner}). */
     public FileMetadata withName(String newName) {
         return java.util.Objects.equals(newName, name) ? this
