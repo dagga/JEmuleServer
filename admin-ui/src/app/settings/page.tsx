@@ -108,7 +108,7 @@ export default function SettingsPage() {
               const id = 'set_' + p.key;
               return (
                 <div key={p.key} className={'settingRow' + (dirty ? ' dirty' : '')} role="row">
-                  <label htmlFor={id} className="settingKey mono" role="rowheader" title={p.key}>{p.key}</label>
+                  <label htmlFor={id} className="settingKey" role="rowheader" title={p.key}>{p.key}</label>
                   <div className="settingValue" role="cell">
                     {p.type === 'BOOLEAN' ? (
                       <input
