@@ -234,11 +234,11 @@ table.kv td.num { white-space: nowrap; text-align: left; }
 .facts dd { margin: 2px 0 0; font-size: 16px; font-weight: 600; text-align: left; }
 
 /* Forms */
-input, select {
+input, select, textarea {
   background: var(--page); color: var(--ink); border: 1px solid var(--border); border-radius: 7px;
   padding: 7px 9px; font: inherit; min-width: 0; max-width: 100%;
 }
-input:focus-visible, button:focus-visible, a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+input:focus-visible, textarea:focus-visible, button:focus-visible, a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 input[type="search"] { width: 240px; }
 input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--accent); }
 .btn {
@@ -274,7 +274,8 @@ input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--accent);
 .settingRow.dirty { background: var(--accentSoft); }
 .settingKey { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; cursor: pointer; }
 .settingValue { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.settingValue input:not([type="checkbox"]) { width: 100%; font-family: var(--mono); font-size: 12.5px; }
+.settingValue input:not([type="checkbox"]), .settingValue textarea { width: 100%; font-family: var(--mono); font-size: 12.5px; }
+.settingValue textarea { resize: vertical; line-height: 1.45; }
 .pending { color: var(--s2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .settingDesc { font-size: 12.5px; }
 @media (max-width: 760px) {
