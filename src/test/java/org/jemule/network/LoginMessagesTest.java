@@ -167,7 +167,8 @@ class LoginMessagesTest {
             assertEquals("1. No fakes\n2. Be nice\n\nhttps://example.org", messages.get(2));
 
             // One escaped line in the file, read back unchanged
-            String written = java.nio.file.Files.readString(file);
+            // The file's own line breaks are the platform's (\r\n on Windows); the message's are escaped text
+            String written = java.nio.file.Files.readString(file).replace(System.lineSeparator(), "\n");
             assertTrue(written.contains("\nloginMessage=1. No fakes\\r\\n2. Be nice\\n\\nhttps://example.org\n"), written);
             Properties reloaded = new org.jemule.config.ConfigFile(file).load();
             assertEquals("1. No fakes\r\n2. Be nice\n\nhttps://example.org", reloaded.getProperty("loginMessage"));
