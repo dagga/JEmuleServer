@@ -172,6 +172,13 @@ public class FileIndex implements AutoCloseable {
     private final Map<String, Set<String>> tagValues = new ConcurrentHashMap<>();
     /** Fields of the string tags too long to be indexed on some file. */
     private final Set<String> longTags = ConcurrentHashMap.newKeySet();
+    /**
+     * False while {@link #words}, {@link #dictionary}, {@link #tagValues} and {@link #longTags} are released
+     * ({@link #releaseDictionaries}): they are read again from the index at their first use
+     * ({@link #ensureDictionaries}). Written under {@link #dictionariesLock}.
+     */
+    private volatile boolean dictionariesLoaded = true;
+    private final Object dictionariesLock = new Object();
     /** Refreshes the index on a running server; null when the searches refresh it. */
     private volatile ScheduledExecutorService refresher;
     /**
@@ -723,6 +730,58 @@ public class FileIndex implements AutoCloseable {
         return feed != null && feed.relayMode();
     }
 
+    /**
+     * Relay mode: releases the dictionaries of the words and of the media tag values, which only the searches of this
+     * index use. In relay mode the relay server answers the searches, and this index is searched only when it does not
+     * answer in time: the dictionaries are read again from the index at that first local search
+     * ({@link #ensureDictionaries}). On a small server, they are a third of the heap (a word dictionary of an index of
+     * millions of files holds about a million words).
+     *
+     * @return false when the server is not in relay mode or the dictionaries are already released
+     */
+    public boolean releaseDictionaries() {
+        if (!relaying()) return false;
+        synchronized (dictionariesLock) {
+            if (!dictionariesLoaded) return false;
+            dictionariesLoaded = false;
+            int count = words.size();
+            words.clear();
+            dictionary.rebuildNow(List.of());
+            tagValues.clear();
+            longTags.clear();
+            log.info("Relay mode: the dictionary of the fallback index ({} words) is released, read again at its first"
+                    + " local search", String.format("%,d", count));
+            return true;
+        }
+    }
+
+    /** Whether the dictionaries are in the heap ({@link #releaseDictionaries}). */
+    public boolean dictionariesLoaded() {
+        return dictionariesLoaded;
+    }
+
+    /**
+     * Reads the dictionaries again from the index when they were released ({@link #releaseDictionaries}): before a
+     * search of this index, and before a file is written to it (the relay mode ended). Not called under a stripe or
+     * the index lock.
+     */
+    private void ensureDictionaries() {
+        if (dictionariesLoaded) return;
+        synchronized (dictionariesLock) {
+            if (dictionariesLoaded) return;
+            long start = System.nanoTime();
+            refresh(); // the files written before the release, not visible yet, have their words read too
+            try {
+                readDictionaries();
+            } catch (IOException e) {
+                throw new UncheckedIOException("Cannot read the dictionaries of the file index", e);
+            }
+            dictionariesLoaded = true;
+            log.info("Dictionary of the file index read again: {} words, {} ms", String.format("%,d", words.size()),
+                    (System.nanoTime() - start) / 1_000_000);
+        }
+    }
+
     /** Relay mode: the files go to the feed, only the clients' online sources stay here. */
     private List<FileMetadata> relay(RelayFeed feed, Collection<FileMetadata> files, FileSource source) {
         List<FileMetadata> handed = new ArrayList<>(files.size());
@@ -776,6 +835,7 @@ public class FileIndex implements AutoCloseable {
      */
     public String renameToCleanName(String hash) {
         if (hash == null) return null;
+        ensureDictionaries(); // the new name's words go to the whole dictionary
         String id = id(hash);
         String renamed;
         synchronized (stripe(id)) {
@@ -829,6 +889,7 @@ public class FileIndex implements AutoCloseable {
             List<FileMetadata> handed = relay(feed, java.util.Collections.singletonList(meta), source);
             return handed.isEmpty() ? null : handed.getFirst();
         }
+        ensureDictionaries(); // the relay mode ended: the words of the new files go to the whole dictionary
         Writes writes = new Writes(1);
         FileMetadata stored = addFileInternal(meta, writes, source);
         persist(writes);
@@ -856,6 +917,7 @@ public class FileIndex implements AutoCloseable {
         files = cleaned;
         RelayFeed feed = relayFeed;
         if (feed != null && feed.relayMode()) return relay(feed, files, source);
+        ensureDictionaries(); // the relay mode ended: the words of the new files go to the whole dictionary
         Writes writes = new Writes(files.size());
         List<FileMetadata> stored = new ArrayList<>(files.size());
         for (FileMetadata file : files) {
@@ -1571,6 +1633,7 @@ public class FileIndex implements AutoCloseable {
             eventManager.broadcast(new FileEvent(FileEvent.SEARCHED, query.toString(), "", "Complex search executed"));
         }
         if (limit <= 0) return List.of();
+        ensureDictionaries(); // relay mode: the first local search reads them again
         refreshForSearch();
         IndexSearcher searcher = acquire();
         try {
@@ -1667,6 +1730,7 @@ public class FileIndex implements AutoCloseable {
 
     /** Whether {@code query} is answered by Lucene alone, no file tested (for the comparison with the heap index). */
     boolean isExact(SearchQuery query) {
+        ensureDictionaries();
         return translate(query).exact();
     }
 
@@ -1838,6 +1902,7 @@ public class FileIndex implements AutoCloseable {
             eventManager.broadcast(new FileEvent(FileEvent.SEARCHED, query, "", "Search executed: " + query));
         }
         if (limit <= 0) return List.of();
+        ensureDictionaries(); // relay mode: the first local search reads them again
         refreshForSearch();
         if (query == null || query.trim().isEmpty()) {
             return inIndexOrder(new MatchAllDocsQuery(), limit);

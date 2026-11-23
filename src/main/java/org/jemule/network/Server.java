@@ -1152,6 +1152,9 @@ public class Server {
      */
     public void start() throws IOException {
         relayFeed.start();
+        // Relay mode: the relay server answers the searches, the fallback index needs its dictionary only when it does
+        // not answer in time; read again then
+        fileIndex.releaseDictionaries();
         if (ServerThreads.prioritiesApplied()) {
             boolean linuxUser = System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("linux")
                     && !"root".equals(System.getProperty("user.name"));
