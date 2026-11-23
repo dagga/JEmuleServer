@@ -283,6 +283,37 @@ class AdminWebPanelTest {
         }
     }
 
+    @Test
+    void sameOriginCanPurgeTheFilesOfAHashPrefix() throws Exception {
+        FileIndex index = new FileIndex(null);
+        index.addFile(new FileMetadata("ED2B011200008A8F033CDCEF7349E8EB", "fake.mp4", 100, "Video"),
+                FileSource.SERVER_SEARCH);
+        index.addFile(new FileMetadata("ED2B01120000A1A621497529CCDBDAAA", "fake two.mp4", 100, "Video"),
+                FileSource.SERVER_SEARCH);
+        index.addFile(new FileMetadata("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "real.avi", 100, "Video"),
+                FileSource.KAD_SEARCH);
+        Server server = mock(Server.class);
+        when(server.getFileIndex()).thenReturn(index);
+
+        try (AdminWebPanel panel = new AdminWebPanel(server)) {
+            panel.start(0);
+            String origin = "http://127.0.0.1:" + panel.port();
+            assertEquals(403, post(panel, "/api/files/purge-prefix", "prefix=ED2B01120000", null).statusCode());
+            assertEquals(400, post(panel, "/api/files/purge-prefix", "prefix=ED2B", origin).statusCode(), "too short");
+            assertEquals(400, post(panel, "/api/files/purge-prefix", "", origin).statusCode());
+            assertEquals(3, index.fileCount());
+
+            HttpResponse<String> purged = post(panel, "/api/files/purge-prefix", "prefix=ed2b01120000", origin);
+            assertEquals(200, purged.statusCode(), purged.body());
+            assertTrue(purged.body().contains("\"filesRemoved\":2"), purged.body());
+            assertTrue(purged.body().contains("\"prefix\":\"ED2B01120000\""), purged.body());
+            assertEquals(1, index.fileCount());
+            assertTrue(index.contains("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"));
+        } finally {
+            index.close();
+        }
+    }
+
     /** A form POST of {@code origin} (null: no Origin header). */
     private static HttpResponse<String> post(AdminWebPanel panel, String path, String form, String origin)
             throws Exception {

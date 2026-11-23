@@ -119,6 +119,24 @@ class SearchFanOutTest {
     }
 
     @Test
+    void aFileOfABannedHashPrefixNeverReachesTheClientWhateverItsChannel() throws Exception {
+        String gatewayLocal = "ED2B011200008A8F033CDCEF7349E8EB";
+        String gatewayKad = "ED2B01120000A1A621497529CCDBDAAA";
+        index.addFile(new FileMetadata(gatewayLocal, "collection 1.avi", 100, "Video")); // indexed before the ban
+        index.addFile(new FileMetadata("44444444444444444444444444444444", "collection 2.avi", 100, "Video"));
+        index.setBannedHashPrefixes(() -> "ED2B01120000");
+        when(kad.forkSearch(any(SearchQuery.class))).thenReturn(CompletableFuture.completedFuture(
+                List.of(FileMetadata.withoutSources(gatewayKad, "collection 3.avi", 200, "Video", List.of()))));
+        when(servers.forkSearch(any(SearchQuery.class), any(byte[].class))).thenReturn(CompletableFuture.completedFuture(
+                List.of(FileMetadata.withoutSources(FROM_SERVERS, "collection 4.avi", 300, "Video", List.of()))));
+
+        SearchAnswer answer = search(client(), new SearchTree().keyword("collection").toBytes());
+
+        assertEquals(List.of(FROM_SERVERS, "44444444444444444444444444444444"), hashes(answer),
+                "neither the local file nor the Kad file of the banned prefix");
+    }
+
+    @Test
     void inRelayModeTheRelayServerIndexAnswersInsteadOfTheLocalOne() throws Exception {
         String fromRelay = "44444444444444444444444444444444";
         String onlyLocal = "55555555555555555555555555555555";

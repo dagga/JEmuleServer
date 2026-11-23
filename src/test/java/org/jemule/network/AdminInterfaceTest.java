@@ -356,6 +356,21 @@ public class AdminInterfaceTest {
     }
 
     @Test
+    void filesPurgePrefixRemovesTheFilesOfAHashPrefix() {
+        org.mockito.Mockito.when(fileIndex.removeFilesWithHashPrefix("ed2b01120000")).thenReturn(2136);
+        admin.handleCommand("files purge-prefix ED2B01120000");
+        verify(fileIndex).removeFilesWithHashPrefix("ed2b01120000");
+        assertTrue(outContent.toString().contains("2136 file(s) with the hash prefix ED2B01120000 removed"),
+                outContent.toString());
+
+        admin.handleCommand("files purge-prefix ED2B");
+        assertTrue(outContent.toString().contains("6 to 32 hexadecimal digits"), outContent.toString());
+        admin.handleCommand("files");
+        assertTrue(outContent.toString().contains("Banned hash prefixes: none"), outContent.toString());
+        verify(fileIndex, org.mockito.Mockito.times(1)).removeFilesWithHashPrefix(org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
     void unbanRemovesABannedName() {
         org.mockito.Mockito.when(fakeFileDetector.unban("Spam File.avi")).thenReturn(true);
 

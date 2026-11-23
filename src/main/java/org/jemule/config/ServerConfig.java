@@ -71,6 +71,12 @@ import java.util.Properties;
  *                                  {@code \n} starts a new line.
  * @param loginMessage              Further OP_SERVERMESSAGE sent right after the welcome message (empty: none), with
  *                                  the same placeholders.
+ * @param sourceCountMaxAgeDays     Days the source count reported for a file (by Kad, another server, the relay
+ *                                  server) is kept when nobody reports it again: the daily file purge then resets it
+ *                                  to 0, the online sources here still counting (0: kept until the file is purged).
+ * @param bannedHashPrefixes        Hexadecimal hash prefixes of files that do not exist on eD2K, made up by a gateway
+ *                                  ({@link org.jemule.core.HashPrefixFilter}): refused by every ingestion channel and
+ *                                  never sent in a search result (null: the default, empty: none).
  */
 public record ServerConfig(
         int port,
@@ -177,7 +183,13 @@ public record ServerConfig(
         String welcomeMessage,
 
         // Further OP_SERVERMESSAGE right after the welcome message (rules, announcements); empty means none
-        String loginMessage
+        String loginMessage,
+
+        // Days a source count nobody reported again is kept before the daily purge resets it to 0 (0 = kept)
+        int sourceCountMaxAgeDays,
+
+        // Hash prefixes of files made up by gateways, refused by every channel (null = the default, empty = none)
+        String bannedHashPrefixes
 ) {
     /**
      * Default time allowed for the HighID test, in seconds.
@@ -202,6 +214,8 @@ public record ServerConfig(
     public static final int DEFAULT_FILE_RETENTION_DAYS = 180;
     /** Longest time a file nobody published nor found is kept, in days (about a hundred years). */
     public static final int MAX_FILE_RETENTION_DAYS = 36_500;
+    /** Default time a source count nobody reported again is kept, in days. */
+    public static final int DEFAULT_SOURCE_COUNT_MAX_AGE_DAYS = 30;
     /** Name shown in the clients' server list when serverName is empty. */
     public static final String DEFAULT_SERVER_NAME = org.jemule.Main.SERVER_NAME;
     /** Description shown in the clients' server list when serverDescription is empty. */
@@ -496,7 +510,8 @@ public record ServerConfig(
                 publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad, serverPeers, adminWebPort,
                 serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources,
                 serverIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds,
-                fileRetentionDays, null, null, NatTraversalConfig.DEFAULT, false, true, "", "");
+                fileRetentionDays, null, null, NatTraversalConfig.DEFAULT, false, true, "", "",
+                DEFAULT_SOURCE_COUNT_MAX_AGE_DAYS, null);
     }
 
     /**
@@ -520,7 +535,8 @@ public record ServerConfig(
                 publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad, serverPeers, adminWebPort,
                 serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources,
                 serverIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds,
-                fileRetentionDays, serverName, serverDescription, NatTraversalConfig.DEFAULT, false, true, "", "");
+                fileRetentionDays, serverName, serverDescription, NatTraversalConfig.DEFAULT, false, true, "", "",
+                DEFAULT_SOURCE_COUNT_MAX_AGE_DAYS, null);
     }
 
     /**
@@ -544,7 +560,8 @@ public record ServerConfig(
                 publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad, serverPeers, adminWebPort,
                 serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources,
                 serverIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds,
-                fileRetentionDays, serverName, serverDescription, natTraversal, false, true, "", "");
+                fileRetentionDays, serverName, serverDescription, natTraversal, false, true, "", "",
+                DEFAULT_SOURCE_COUNT_MAX_AGE_DAYS, null);
     }
 
     /**
@@ -569,7 +586,8 @@ public record ServerConfig(
                 publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad, serverPeers, adminWebPort,
                 serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources,
                 serverIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds,
-                fileRetentionDays, serverName, serverDescription, natTraversal, ipv6Sources, true, "", "");
+                fileRetentionDays, serverName, serverDescription, natTraversal, ipv6Sources, true, "", "",
+                DEFAULT_SOURCE_COUNT_MAX_AGE_DAYS, null);
     }
 
     /**
@@ -595,10 +613,44 @@ public record ServerConfig(
                 serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources,
                 serverIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds,
                 fileRetentionDays, serverName, serverDescription, natTraversal, ipv6Sources, obfuscatedFirewallCheck,
-                "", "");
+                "", "", DEFAULT_SOURCE_COUNT_MAX_AGE_DAYS, null);
+    }
+
+    /**
+     * Constructor retaining source compatibility for callers that do not provide the source count settings
+     * ({@link #DEFAULT_SOURCE_COUNT_MAX_AGE_DAYS}, {@link org.jemule.core.HashPrefixFilter#DEFAULT}).
+     */
+    public ServerConfig(int port, int maxPacketSize, int maxSearchResults, int floodMaxRequestsPerSecond, int maxUsers,
+                        int maxFiles, int maxFilesPerUser, int maxSourcesPerFile, String databasePath, String ipFilterPath,
+                        boolean fakeFileDetectionEnabled, float cbFailureRateThreshold, int cbMinimumNumberOfCalls,
+                        int cbWaitDurationInSeconds, int tcpKeepAliveTimeoutInSeconds, int heartbeatIntervalSeconds,
+                        String publicIp, int lowIdCheckTimeoutSeconds, String childAbuseKeywordsPath, int adminPort,
+                        KadConfig kad, String serverPeers, int adminWebPort, String serverMetUrl,
+                        String adminBindAddress, String adminAllowedIps, String adminAllowedMacs,
+                        OfferFilesConfig offerFiles, KadSourcesConfig kadSources,
+                        ServerIndexUpdateConfig serverIndexUpdate, String relayServer, DatabaseConfig database,
+                        RelayFeedConfig relayFeed, int remoteSearchCacheMinutes, int indexRefreshSeconds,
+                        int fileRetentionDays, String serverName, String serverDescription,
+                        NatTraversalConfig natTraversal, boolean ipv6Sources, boolean obfuscatedFirewallCheck,
+                        String welcomeMessage, String loginMessage) {
+        this(port, maxPacketSize, maxSearchResults, floodMaxRequestsPerSecond, maxUsers, maxFiles, maxFilesPerUser,
+                maxSourcesPerFile, databasePath, ipFilterPath, fakeFileDetectionEnabled, cbFailureRateThreshold,
+                cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds, heartbeatIntervalSeconds,
+                publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad, serverPeers, adminWebPort,
+                serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources,
+                serverIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds,
+                fileRetentionDays, serverName, serverDescription, natTraversal, ipv6Sources, obfuscatedFirewallCheck,
+                welcomeMessage, loginMessage, DEFAULT_SOURCE_COUNT_MAX_AGE_DAYS, null);
     }
 
     public ServerConfig {
+        bannedHashPrefixes = bannedHashPrefixes == null ? org.jemule.core.HashPrefixFilter.DEFAULT
+                : bannedHashPrefixes.strip();
+        org.jemule.core.HashPrefixFilter.parse(bannedHashPrefixes); // throws when invalid
+        if (sourceCountMaxAgeDays < 0 || sourceCountMaxAgeDays > MAX_FILE_RETENTION_DAYS) {
+            throw new IllegalArgumentException("sourceCountMaxAgeDays must be between 0 (kept) and "
+                    + MAX_FILE_RETENTION_DAYS);
+        }
         welcomeMessage = welcomeMessage == null ? "" : welcomeMessage.strip();
         loginMessage = loginMessage == null ? "" : loginMessage.strip();
         serverName = serverName == null || serverName.isBlank() ? DEFAULT_SERVER_NAME : serverName.trim();
@@ -701,7 +753,8 @@ public record ServerConfig(
                 maxFilesPerUser, maxSourcesPerFile, databasePath, ipFilterPath, fakeFileDetectionEnabled,
                 cbFailureRateThreshold, cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds,
                 heartbeatIntervalSeconds, publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad,
-                serverPeers, adminWebPort, serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources, serverIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription, natTraversal, ipv6Sources, obfuscatedFirewallCheck, welcomeMessage, loginMessage);
+                serverPeers, adminWebPort, serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources, serverIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription, natTraversal, ipv6Sources, obfuscatedFirewallCheck, welcomeMessage, loginMessage, sourceCountMaxAgeDays,
+                bannedHashPrefixes);
     }
 
     /**
@@ -712,7 +765,8 @@ public record ServerConfig(
                 maxFilesPerUser, maxSourcesPerFile, databasePath, ipFilterPath, fakeFileDetectionEnabled,
                 cbFailureRateThreshold, cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds,
                 heartbeatIntervalSeconds, publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, newKad,
-                serverPeers, adminWebPort, serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources, serverIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription, natTraversal, ipv6Sources, obfuscatedFirewallCheck, welcomeMessage, loginMessage);
+                serverPeers, adminWebPort, serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources, serverIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription, natTraversal, ipv6Sources, obfuscatedFirewallCheck, welcomeMessage, loginMessage, sourceCountMaxAgeDays,
+                bannedHashPrefixes);
     }
 
     /**
@@ -724,7 +778,8 @@ public record ServerConfig(
                 fakeFileDetectionEnabled, cbFailureRateThreshold, cbMinimumNumberOfCalls, cbWaitDurationInSeconds,
                 tcpKeepAliveTimeoutInSeconds, heartbeatIntervalSeconds, publicIp, lowIdCheckTimeoutSeconds,
                 resolve(baseDir, childAbuseKeywordsPath), adminPort, kad, serverPeers, adminWebPort, serverMetUrl,
-                adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources, serverIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription, natTraversal, ipv6Sources, obfuscatedFirewallCheck, welcomeMessage, loginMessage);
+                adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources, serverIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription, natTraversal, ipv6Sources, obfuscatedFirewallCheck, welcomeMessage, loginMessage, sourceCountMaxAgeDays,
+                bannedHashPrefixes);
     }
 
     public ServerConfig withAdminPort(int newAdminPort) {
@@ -732,7 +787,8 @@ public record ServerConfig(
                 maxFilesPerUser, maxSourcesPerFile, databasePath, ipFilterPath, fakeFileDetectionEnabled,
                 cbFailureRateThreshold, cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds,
                 heartbeatIntervalSeconds, publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, newAdminPort, kad,
-                serverPeers, adminWebPort, serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources, serverIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription, natTraversal, ipv6Sources, obfuscatedFirewallCheck, welcomeMessage, loginMessage);
+                serverPeers, adminWebPort, serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources, serverIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription, natTraversal, ipv6Sources, obfuscatedFirewallCheck, welcomeMessage, loginMessage, sourceCountMaxAgeDays,
+                bannedHashPrefixes);
     }
 
     public ServerConfig withAdminWebPort(int newAdminWebPort) {
@@ -740,7 +796,8 @@ public record ServerConfig(
                 maxFilesPerUser, maxSourcesPerFile, databasePath, ipFilterPath, fakeFileDetectionEnabled,
                 cbFailureRateThreshold, cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds,
                 heartbeatIntervalSeconds, publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad,
-                serverPeers, newAdminWebPort, serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources, serverIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription, natTraversal, ipv6Sources, obfuscatedFirewallCheck, welcomeMessage, loginMessage);
+                serverPeers, newAdminWebPort, serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources, serverIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription, natTraversal, ipv6Sources, obfuscatedFirewallCheck, welcomeMessage, loginMessage, sourceCountMaxAgeDays,
+                bannedHashPrefixes);
     }
 
     public ServerConfig withServerMetUrl(String newServerMetUrl) {
@@ -748,7 +805,8 @@ public record ServerConfig(
                 maxFilesPerUser, maxSourcesPerFile, databasePath, ipFilterPath, fakeFileDetectionEnabled, cbFailureRateThreshold,
                 cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds, heartbeatIntervalSeconds,
                 publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad, serverPeers, adminWebPort,
-                newServerMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources, serverIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription, natTraversal, ipv6Sources, obfuscatedFirewallCheck, welcomeMessage, loginMessage);
+                newServerMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources, serverIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription, natTraversal, ipv6Sources, obfuscatedFirewallCheck, welcomeMessage, loginMessage, sourceCountMaxAgeDays,
+                bannedHashPrefixes);
     }
 
     public ServerConfig withAdminBindAddress(String newAdminBindAddress) {
@@ -756,7 +814,8 @@ public record ServerConfig(
                 maxFilesPerUser, maxSourcesPerFile, databasePath, ipFilterPath, fakeFileDetectionEnabled, cbFailureRateThreshold,
                 cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds, heartbeatIntervalSeconds,
                 publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad, serverPeers, adminWebPort,
-                serverMetUrl, newAdminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources, serverIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription, natTraversal, ipv6Sources, obfuscatedFirewallCheck, welcomeMessage, loginMessage);
+                serverMetUrl, newAdminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources, serverIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription, natTraversal, ipv6Sources, obfuscatedFirewallCheck, welcomeMessage, loginMessage, sourceCountMaxAgeDays,
+                bannedHashPrefixes);
     }
 
     public ServerConfig withAdminAllowedIps(String newAdminAllowedIps) {
@@ -764,7 +823,8 @@ public record ServerConfig(
                 maxFilesPerUser, maxSourcesPerFile, databasePath, ipFilterPath, fakeFileDetectionEnabled, cbFailureRateThreshold,
                 cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds, heartbeatIntervalSeconds,
                 publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad, serverPeers, adminWebPort,
-                serverMetUrl, adminBindAddress, newAdminAllowedIps, adminAllowedMacs, offerFiles, kadSources, serverIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription, natTraversal, ipv6Sources, obfuscatedFirewallCheck, welcomeMessage, loginMessage);
+                serverMetUrl, adminBindAddress, newAdminAllowedIps, adminAllowedMacs, offerFiles, kadSources, serverIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription, natTraversal, ipv6Sources, obfuscatedFirewallCheck, welcomeMessage, loginMessage, sourceCountMaxAgeDays,
+                bannedHashPrefixes);
     }
 
     public ServerConfig withAdminAllowedMacs(String newAdminAllowedMacs) {
@@ -772,7 +832,8 @@ public record ServerConfig(
                 maxFilesPerUser, maxSourcesPerFile, databasePath, ipFilterPath, fakeFileDetectionEnabled, cbFailureRateThreshold,
                 cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds, heartbeatIntervalSeconds,
                 publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad, serverPeers, adminWebPort,
-                serverMetUrl, adminBindAddress, adminAllowedIps, newAdminAllowedMacs, offerFiles, kadSources, serverIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription, natTraversal, ipv6Sources, obfuscatedFirewallCheck, welcomeMessage, loginMessage);
+                serverMetUrl, adminBindAddress, adminAllowedIps, newAdminAllowedMacs, offerFiles, kadSources, serverIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription, natTraversal, ipv6Sources, obfuscatedFirewallCheck, welcomeMessage, loginMessage, sourceCountMaxAgeDays,
+                bannedHashPrefixes);
     }
 
     public ServerConfig withKadSources(KadSourcesConfig newKadSources) {
@@ -780,7 +841,8 @@ public record ServerConfig(
                 maxFilesPerUser, maxSourcesPerFile, databasePath, ipFilterPath, fakeFileDetectionEnabled, cbFailureRateThreshold,
                 cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds, heartbeatIntervalSeconds,
                 publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad, serverPeers, adminWebPort,
-                serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, newKadSources, serverIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription, natTraversal, ipv6Sources, obfuscatedFirewallCheck, welcomeMessage, loginMessage);
+                serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, newKadSources, serverIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription, natTraversal, ipv6Sources, obfuscatedFirewallCheck, welcomeMessage, loginMessage, sourceCountMaxAgeDays,
+                bannedHashPrefixes);
     }
 
     public ServerConfig withServerIndexUpdate(ServerIndexUpdateConfig newServerIndexUpdate) {
@@ -789,7 +851,8 @@ public record ServerConfig(
                 cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds, heartbeatIntervalSeconds,
                 publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad, serverPeers, adminWebPort,
                 serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources,
-                newServerIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription, natTraversal, ipv6Sources, obfuscatedFirewallCheck, welcomeMessage, loginMessage);
+                newServerIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription, natTraversal, ipv6Sources, obfuscatedFirewallCheck, welcomeMessage, loginMessage, sourceCountMaxAgeDays,
+                bannedHashPrefixes);
     }
 
     public ServerConfig withOfferFiles(OfferFilesConfig newOfferFiles) {
@@ -797,7 +860,8 @@ public record ServerConfig(
                 maxFilesPerUser, maxSourcesPerFile, databasePath, ipFilterPath, fakeFileDetectionEnabled, cbFailureRateThreshold,
                 cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds, heartbeatIntervalSeconds,
                 publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad, serverPeers, adminWebPort,
-                serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, newOfferFiles, kadSources, serverIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription, natTraversal, ipv6Sources, obfuscatedFirewallCheck, welcomeMessage, loginMessage);
+                serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, newOfferFiles, kadSources, serverIndexUpdate, relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription, natTraversal, ipv6Sources, obfuscatedFirewallCheck, welcomeMessage, loginMessage, sourceCountMaxAgeDays,
+                bannedHashPrefixes);
     }
 
     /** Same configuration in relay mode for {@code newRelayServer} (empty: no relay mode). */
@@ -807,7 +871,8 @@ public record ServerConfig(
                 cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds, heartbeatIntervalSeconds,
                 publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad, serverPeers, adminWebPort,
                 serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources, serverIndexUpdate,
-                newRelayServer, database, newRelayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription, natTraversal, ipv6Sources, obfuscatedFirewallCheck, welcomeMessage, loginMessage);
+                newRelayServer, database, newRelayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription, natTraversal, ipv6Sources, obfuscatedFirewallCheck, welcomeMessage, loginMessage, sourceCountMaxAgeDays,
+                bannedHashPrefixes);
     }
 
     /** Same configuration reusing the results of a remote search for {@code minutes} minutes (0: never). */
@@ -817,7 +882,8 @@ public record ServerConfig(
                 cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds, heartbeatIntervalSeconds,
                 publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad, serverPeers, adminWebPort,
                 serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources, serverIndexUpdate,
-                relayServer, database, relayFeed, minutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription, natTraversal, ipv6Sources, obfuscatedFirewallCheck, welcomeMessage, loginMessage);
+                relayServer, database, relayFeed, minutes, indexRefreshSeconds, fileRetentionDays, serverName, serverDescription, natTraversal, ipv6Sources, obfuscatedFirewallCheck, welcomeMessage, loginMessage, sourceCountMaxAgeDays,
+                bannedHashPrefixes);
     }
 
     /** Same configuration refreshing the file index every {@code seconds} seconds. */
@@ -827,7 +893,8 @@ public record ServerConfig(
                 cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds, heartbeatIntervalSeconds,
                 publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad, serverPeers, adminWebPort,
                 serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources, serverIndexUpdate,
-                relayServer, database, relayFeed, remoteSearchCacheMinutes, seconds, fileRetentionDays, serverName, serverDescription, natTraversal, ipv6Sources, obfuscatedFirewallCheck, welcomeMessage, loginMessage);
+                relayServer, database, relayFeed, remoteSearchCacheMinutes, seconds, fileRetentionDays, serverName, serverDescription, natTraversal, ipv6Sources, obfuscatedFirewallCheck, welcomeMessage, loginMessage, sourceCountMaxAgeDays,
+                bannedHashPrefixes);
     }
 
     /** Same configuration keeping a file nobody published nor found for {@code days} days (0: never purged). */
@@ -838,7 +905,8 @@ public record ServerConfig(
                 publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad, serverPeers, adminWebPort,
                 serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources, serverIndexUpdate,
                 relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, days, serverName,
-                serverDescription, natTraversal, ipv6Sources, obfuscatedFirewallCheck, welcomeMessage, loginMessage);
+                serverDescription, natTraversal, ipv6Sources, obfuscatedFirewallCheck, welcomeMessage, loginMessage, sourceCountMaxAgeDays,
+                bannedHashPrefixes);
     }
 
     /** Same configuration with another name and description in the clients' server list (empty: the defaults). */
@@ -849,7 +917,8 @@ public record ServerConfig(
                 publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad, serverPeers, adminWebPort,
                 serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources, serverIndexUpdate,
                 relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays, name,
-                description, natTraversal, ipv6Sources, obfuscatedFirewallCheck, welcomeMessage, loginMessage);
+                description, natTraversal, ipv6Sources, obfuscatedFirewallCheck, welcomeMessage, loginMessage, sourceCountMaxAgeDays,
+                bannedHashPrefixes);
     }
 
     /** Same configuration with other NAT traversal settings. */
@@ -860,7 +929,8 @@ public record ServerConfig(
                 publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad, serverPeers, adminWebPort,
                 serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources, serverIndexUpdate,
                 relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays,
-                serverName, serverDescription, newNatTraversal, ipv6Sources, obfuscatedFirewallCheck, welcomeMessage, loginMessage);
+                serverName, serverDescription, newNatTraversal, ipv6Sources, obfuscatedFirewallCheck, welcomeMessage, loginMessage, sourceCountMaxAgeDays,
+                bannedHashPrefixes);
     }
 
     /** Same configuration publishing the proved IPv6 addresses of the clients as sources, or not. */
@@ -871,7 +941,8 @@ public record ServerConfig(
                 publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad, serverPeers, adminWebPort,
                 serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources, serverIndexUpdate,
                 relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays,
-                serverName, serverDescription, natTraversal, enabled, obfuscatedFirewallCheck, welcomeMessage, loginMessage);
+                serverName, serverDescription, natTraversal, enabled, obfuscatedFirewallCheck, welcomeMessage, loginMessage, sourceCountMaxAgeDays,
+                bannedHashPrefixes);
     }
 
     /** Same configuration with the HighID test and the IPv6 dial-back obfuscated first, or plain only. */
@@ -882,7 +953,23 @@ public record ServerConfig(
                 publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad, serverPeers, adminWebPort,
                 serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources, serverIndexUpdate,
                 relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays,
-                serverName, serverDescription, natTraversal, ipv6Sources, enabled, welcomeMessage, loginMessage);
+                serverName, serverDescription, natTraversal, ipv6Sources, enabled, welcomeMessage, loginMessage, sourceCountMaxAgeDays,
+                bannedHashPrefixes);
+    }
+
+    /**
+     * Same configuration resetting the source counts not reported for {@code maxAgeDays} days (0: kept), and refusing
+     * the files whose hash starts with one of {@code prefixes} (empty: none).
+     */
+    public ServerConfig withSourceCountSettings(int maxAgeDays, String prefixes) {
+        return new ServerConfig(port, maxPacketSize, maxSearchResults, floodMaxRequestsPerSecond, maxUsers, maxFiles,
+                maxFilesPerUser, maxSourcesPerFile, databasePath, ipFilterPath, fakeFileDetectionEnabled, cbFailureRateThreshold,
+                cbMinimumNumberOfCalls, cbWaitDurationInSeconds, tcpKeepAliveTimeoutInSeconds, heartbeatIntervalSeconds,
+                publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad, serverPeers, adminWebPort,
+                serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources, serverIndexUpdate,
+                relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays,
+                serverName, serverDescription, natTraversal, ipv6Sources, obfuscatedFirewallCheck, welcomeMessage,
+                loginMessage, maxAgeDays, prefixes == null ? "" : prefixes);
     }
 
     /** Same configuration with other login messages (empty welcome: the default one; empty login: none). */
@@ -893,7 +980,8 @@ public record ServerConfig(
                 publicIp, lowIdCheckTimeoutSeconds, childAbuseKeywordsPath, adminPort, kad, serverPeers, adminWebPort,
                 serverMetUrl, adminBindAddress, adminAllowedIps, adminAllowedMacs, offerFiles, kadSources, serverIndexUpdate,
                 relayServer, database, relayFeed, remoteSearchCacheMinutes, indexRefreshSeconds, fileRetentionDays,
-                serverName, serverDescription, natTraversal, ipv6Sources, obfuscatedFirewallCheck, welcome, login);
+                serverName, serverDescription, natTraversal, ipv6Sources, obfuscatedFirewallCheck, welcome, login,
+                sourceCountMaxAgeDays, bannedHashPrefixes);
     }
 
     /**
@@ -981,6 +1069,8 @@ public record ServerConfig(
         props.put("obfuscatedFirewallCheck", String.valueOf(obfuscatedFirewallCheck));
         props.put("welcomeMessage", welcomeMessage);
         props.put("loginMessage", loginMessage);
+        props.put("sourceCountMaxAgeDays", String.valueOf(sourceCountMaxAgeDays));
+        props.put("bannedHashPrefixes", bannedHashPrefixes);
         return props;
     }
 
@@ -1041,7 +1131,10 @@ public record ServerConfig(
                 Boolean.parseBoolean(props.getProperty("ipv6Sources", "false").trim()),
                 Boolean.parseBoolean(props.getProperty("obfuscatedFirewallCheck", "true").trim()),
                 props.getProperty("welcomeMessage", ""),
-                props.getProperty("loginMessage", "")
+                props.getProperty("loginMessage", ""),
+                Integer.parseInt(props.getProperty("sourceCountMaxAgeDays",
+                        String.valueOf(DEFAULT_SOURCE_COUNT_MAX_AGE_DAYS)).trim()),
+                props.getProperty("bannedHashPrefixes", org.jemule.core.HashPrefixFilter.DEFAULT)
         );
     }
 }

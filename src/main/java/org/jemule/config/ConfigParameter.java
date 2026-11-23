@@ -55,6 +55,10 @@ public enum ConfigParameter {
             "Sources returned per file request"),
     FILE_RETENTION_DAYS("fileRetentionDays", Type.INTEGER, Scope.HOT, 0, ServerConfig.MAX_FILE_RETENTION_DAYS,
             "Days a file nobody published nor found is kept before the daily purge removes it (0 = never purged)"),
+    SOURCE_COUNT_MAX_AGE_DAYS("sourceCountMaxAgeDays", Type.INTEGER, Scope.HOT, 0, ServerConfig.MAX_FILE_RETENTION_DAYS,
+            "Days the source count reported by Kad or another server is kept when nobody reports it again: the daily purge then resets it to 0 (0 = kept)"),
+    BANNED_HASH_PREFIXES("bannedHashPrefixes", Type.STRING, Scope.HOT, 0, 0,
+            "Hash prefixes (hexadecimal, comma-separated, 6 digits at least) of files made up by gateways: refused by every channel and left out of the results (empty = none)"),
     DATABASE_PATH("databasePath", Type.STRING, Scope.RESTART, 0, 0,
             "H2 database path (with MySQL: the H2 database imported at the first start)"),
     DATABASE_TYPE("databaseType", Type.STRING, Scope.RESTART, 0, 0, "Database: h2 (file at databasePath) or mysql"),
@@ -341,6 +345,7 @@ public enum ConfigParameter {
                 }
             }
             case "databaseType" -> DatabaseConfig.parseType(value);
+            case "bannedHashPrefixes" -> org.jemule.core.HashPrefixFilter.parse(value);
             case "adminAllowedMacs" -> {
                 for (String token : splitList(value)) {
                     String normalized = org.jemule.security.AdminAccessFilter.normalizeMac(token);

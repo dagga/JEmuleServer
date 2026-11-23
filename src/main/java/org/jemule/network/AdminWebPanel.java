@@ -197,6 +197,11 @@ final class AdminWebPanel implements AutoCloseable {
                 boolean wasBanned = server.getFakeFileDetector().unban(name);
                 json(exchange, 200, Map.of("unbanned", FakeFileDetector.normalize(name), "wasBanned", wasBanned));
             }
+            case "/api/files/purge-prefix" -> {
+                String prefix = org.jemule.core.HashPrefixFilter.normalizePrefix(form.getOrDefault("prefix", ""));
+                int removed = server.getFileIndex().removeFilesWithHashPrefix(prefix);
+                json(exchange, 200, Map.of("prefix", prefix.toUpperCase(java.util.Locale.ROOT), "filesRemoved", removed));
+            }
             case "/api/servers/ban" -> {
                 java.net.Inet4Address address = serverAddress(form);
                 String reason = form.getOrDefault("reason", "").trim();

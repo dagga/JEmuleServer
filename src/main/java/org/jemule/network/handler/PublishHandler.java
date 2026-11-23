@@ -153,7 +153,7 @@ public class PublishHandler {
      * Validates and indexes one offered file.
      *
      * @return REJECTED by the child abuse filter or the fake file detector, OVER_SOFT_LIMIT if a new file would exceed
-     *         the client's quota, IGNORED if invalid or the index is full, INDEXED otherwise
+     *         the client's quota, IGNORED if invalid, of a banned hash prefix or the index is full, INDEXED otherwise
      */
     private Outcome publishFile(ClientContext context, String hash, List<Tag> tags, boolean partial) {
         String name = "";
@@ -185,6 +185,13 @@ public class PublishHandler {
         }
         if (size <= 0 || size > MAX_EMULE_FILE_SIZE) {
             log.warn("Invalid file size for '{}': {}", HandlerUtils.sanitize(name), size);
+            return Outcome.IGNORED;
+        }
+        // A hash made up by a gateway (bannedHashPrefixes), as eMule-Qt clients share their torrent, usenet and web
+        // downloads: no eD2K client can download it. Skipped silently, out of the client's quota: the client is not at
+        // fault, and gets no warning for it.
+        if (context.getFileIndex().isBannedHash(hash)) {
+            log.debug("File of a banned hash prefix skipped from client {} (hash={})", context.getState().clientId(), hash);
             return Outcome.IGNORED;
         }
         if (context.getFileIndex().isChildAbuse(hash, name)) {
