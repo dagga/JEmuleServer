@@ -3,7 +3,8 @@
 import { useMemo, useState } from 'react';
 import { Card, LoadState, Notice, PageHeader } from '@/components/ui';
 import { message, post, summarize, type ConfigResult } from '@/lib/api';
-import { useApi } from '@/lib/hooks';
+import { useApi, useHash } from '@/lib/hooks';
+import { sectionsOf } from '@/components/Shell';
 
 interface Parameter {
   key: string;
@@ -11,6 +12,9 @@ interface Parameter {
   type: 'INTEGER' | 'FLOAT' | 'BOOLEAN' | 'STRING' | string;
   scope: string;
   scopeLabel?: string;
+  /** The group of the Settings sub-menu (ConfigParameter.Category). */
+  category?: string;
+  categoryLabel?: string;
   description: string;
   pending: string;
   /** A text that may span several lines (login messages): edited in a text area. */
@@ -38,11 +42,28 @@ export default function SettingsPage() {
   }, [data, edits]);
   const changes = Object.keys(changed).length;
 
+  // The group chosen in the sub-menu (#kad...); a filter searches every group
+  const hash = useHash();
+  const sections = useMemo(() => sectionsOf(data ?? []), [data]);
+  const section = sections.find((x) => x.id === hash) ?? null;
+
   const shown = useMemo(() => {
     const q = filter.trim().toLowerCase();
-    if (!q) return data ?? [];
-    return (data ?? []).filter((p) => (p.key + ' ' + p.description + ' ' + p.scope).toLowerCase().includes(q));
-  }, [data, filter]);
+    if (q) return (data ?? []).filter((p) => (p.key + ' ' + p.description + ' ' + p.scope + ' ' + (p.categoryLabel ?? '')).toLowerCase().includes(q));
+    return (data ?? []).filter((p) => !section || p.category === section.id);
+  }, [data, filter, section]);
+
+  // The parameters shown, by group, in the order of the sub-menu
+  const groups = useMemo(() => {
+    const out: { id: string; label: string; parameters: Parameter[] }[] = [];
+    for (const p of shown) {
+      const id = p.category ?? 'other';
+      let group = out.find((g) => g.id === id);
+      if (!group) out.push(group = { id, label: p.categoryLabel ?? 'Other', parameters: [] });
+      group.parameters.push(p);
+    }
+    return out;
+  }, [shown]);
 
   async function save() {
     if (!changes) {
@@ -80,10 +101,50 @@ export default function SettingsPage() {
     }
   }
 
+  function row(p: Parameter) {
+    const value = p.key in edits ? edits[p.key] : original(p);
+    const dirty = p.key in changed;
+    const id = 'set_' + p.key;
+    return (
+      <div key={p.key} className={'settingRow' + (dirty ? ' dirty' : '')} role="row">
+        <label htmlFor={id} className="settingKey" role="rowheader" title={p.key}>{p.key}</label>
+        <div className="settingValue" role="cell">
+          {p.type === 'BOOLEAN' ? (
+            <input
+              type="checkbox"
+              id={id}
+              checked={value === 'true'}
+              onChange={(e) => setEdits((x) => ({ ...x, [p.key]: String(e.target.checked) }))}
+            />
+          ) : p.multiline ? (
+            <textarea
+              id={id}
+              value={value}
+              rows={rows(value)}
+              spellCheck={false}
+              onChange={(e) => setEdits((x) => ({ ...x, [p.key]: e.target.value }))}
+            />
+          ) : (
+            <input
+              id={id}
+              value={value}
+              inputMode={p.type === 'INTEGER' ? 'numeric' : p.type === 'FLOAT' ? 'decimal' : undefined}
+              spellCheck={false}
+              onChange={(e) => setEdits((x) => ({ ...x, [p.key]: e.target.value }))}
+            />
+          )}
+          {p.pending !== '' && p.pending != null && <small className="pending" title={p.pending}>After restart: {p.pending}</small>}
+        </div>
+        <div role="cell"><span className={'badge scope-' + p.scope} title={p.scopeLabel}>{p.scope}</span></div>
+        <div className="settingDesc sub" role="cell">{p.description}</div>
+      </div>
+    );
+  }
+
   return (
     <>
       <PageHeader
-        title="Settings"
+        title={section && !filter.trim() ? 'Settings · ' + section.label : 'Settings'}
         description="Every server.properties parameter. Hot values apply at once, admin values rebuild the admin interfaces, restart values wait for the next restart."
       >
         <input type="search" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter" aria-label="Filter settings" />
@@ -94,56 +155,22 @@ export default function SettingsPage() {
       </PageHeader>
       <Notice text={notice?.text ?? null} error={notice?.error} />
       {data ? (
-        <Card>
-          <div className="settings" role="table" aria-label="Settings">
-            <div className="settingsHead" role="row">
-              <span role="columnheader">Key</span>
-              <span role="columnheader">Value</span>
-              <span role="columnheader">Scope</span>
-              <span role="columnheader">Description</span>
-            </div>
-            {shown.map((p) => {
-              const value = p.key in edits ? edits[p.key] : original(p);
-              const dirty = p.key in changed;
-              const id = 'set_' + p.key;
-              return (
-                <div key={p.key} className={'settingRow' + (dirty ? ' dirty' : '')} role="row">
-                  <label htmlFor={id} className="settingKey" role="rowheader" title={p.key}>{p.key}</label>
-                  <div className="settingValue" role="cell">
-                    {p.type === 'BOOLEAN' ? (
-                      <input
-                        type="checkbox"
-                        id={id}
-                        checked={value === 'true'}
-                        onChange={(e) => setEdits((x) => ({ ...x, [p.key]: String(e.target.checked) }))}
-                      />
-                    ) : p.multiline ? (
-                      <textarea
-                        id={id}
-                        value={value}
-                        rows={rows(value)}
-                        spellCheck={false}
-                        onChange={(e) => setEdits((x) => ({ ...x, [p.key]: e.target.value }))}
-                      />
-                    ) : (
-                      <input
-                        id={id}
-                        value={value}
-                        inputMode={p.type === 'INTEGER' ? 'numeric' : p.type === 'FLOAT' ? 'decimal' : undefined}
-                        spellCheck={false}
-                        onChange={(e) => setEdits((x) => ({ ...x, [p.key]: e.target.value }))}
-                      />
-                    )}
-                    {p.pending !== '' && p.pending != null && <small className="pending" title={p.pending}>After restart: {p.pending}</small>}
-                  </div>
-                  <div role="cell"><span className={'badge scope-' + p.scope} title={p.scopeLabel}>{p.scope}</span></div>
-                  <div className="settingDesc sub" role="cell">{p.description}</div>
+        groups.length ? groups.map((g) => {
+          const dirty = g.parameters.filter((p) => p.key in changed).length;
+          return (
+            <Card key={g.id} title={g.label} aside={<span className="sectionCount">{g.parameters.length} settings{dirty ? ' · ' + dirty + ' changed' : ''}</span>}>
+              <div className="settings" role="table" aria-label={g.label}>
+                <div className="settingsHead" role="row">
+                  <span role="columnheader">Key</span>
+                  <span role="columnheader">Value</span>
+                  <span role="columnheader">Scope</span>
+                  <span role="columnheader">Description</span>
                 </div>
-              );
-            })}
-            {!shown.length && <div className="empty">No matching setting.</div>}
-          </div>
-        </Card>
+                {g.parameters.map(row)}
+              </div>
+            </Card>
+          );
+        }) : <Card><div className="empty">No matching setting.</div></Card>
       ) : <LoadState loading={loading} error={error} />}
     </>
   );

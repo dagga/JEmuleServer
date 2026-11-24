@@ -48,6 +48,12 @@ function buckets(pts: Point[], k: number, interval: number, width: number): Buck
 
 const H = 240, L = 64, R = 16, T = 12, B = 28;
 
+/** The sampling interval in words: "minute", "5 minutes". */
+const every = (interval: number) => {
+  const minutes = Math.round(interval / 60000);
+  return minutes <= 1 ? 'minute' : minutes + ' minutes';
+};
+
 export function LineChart({ points, k, series, name, interval }: { points: Point[]; k: number; series: 1 | 2; name: string; interval: number }) {
   const [ref, measured] = useWidth<HTMLDivElement>();
   const [cur, setCur] = useState<number | null>(null);
@@ -73,7 +79,7 @@ export function LineChart({ points, k, series, name, interval }: { points: Point
     return (
       <div className="plot" ref={ref}>
         <div className="empty">
-          {points.length ? 'One sample so far: ' + fmt(points[0][k]) + '. ' : ''}The curve appears after the next samples (every 5 minutes).
+          {points.length ? 'One sample so far: ' + fmt(points[0][k]) + '. ' : ''}The curve appears after the next samples (every {every(interval)}).
         </div>
       </div>
     );
@@ -150,7 +156,7 @@ export function LineChart({ points, k, series, name, interval }: { points: Point
       </svg>
       {active && (
         <div className="tip" ref={tipRef} style={tipStyle}>
-          <strong>{fmt(Math.round(active.v))}</strong>
+          <strong>{fmt(Math.round(active.v * 100) / 100)}</strong>
           {active.n > 1
             ? name + ' · average of ' + active.n + ' samples · ' + stamp(active.a) + ' to ' + clock(active.b)
             : name + ' · ' + stamp(active.a)}

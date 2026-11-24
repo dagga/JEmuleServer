@@ -89,6 +89,8 @@ public class Server {
     private final java.util.Set<Socket> clientSockets = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private final FileIndex fileIndex;
     private final org.jemule.core.MetricsHistory metricsHistory;
+    /** The curves of the Status view: the last day, a sample a minute, in memory. */
+    private final org.jemule.core.StatusHistory statusHistory = new org.jemule.core.StatusHistory();
     private volatile KadSourceService kadSourceService;
     /** Timers of the LowID hole punch: short (3 s at most), so kept apart from the maintenance tasks. */
     private final java.util.concurrent.ScheduledExecutorService natTimers = ServerThreads.maintenanceScheduler("nat-traversal");
@@ -411,6 +413,7 @@ public class Server {
         // this.config: the field, which a settings change replaces, not the constructor parameter
         this.fileIndex.setCapacity(() -> this.config.maxFiles(), () -> heapGuard.full() || diskGuard.full());
         this.metricsHistory = new org.jemule.core.MetricsHistory(db);
+        registerStatusMetrics();
         // this.config: the field, which a settings change replaces (fileRetentionDays, sourceCountMaxAgeDays and
         // bannedHashPrefixes are hot)
         this.filePurgeJob = new org.jemule.core.FilePurgeJob(db, fileIndex, () -> this.config.fileRetentionDays(),
@@ -1200,6 +1203,14 @@ public class Server {
             // Curves of the admin panel: one sample now, then every 5 minutes (maintenance tier)
             maintenance.scheduleAtFixedRate(this::recordMetrics, 0, org.jemule.core.MetricsHistory.INTERVAL_MS,
                     TimeUnit.MILLISECONDS);
+            // Curves of the Status view: one sample now, then every minute
+            maintenance.scheduleAtFixedRate(() -> {
+                try {
+                    statusHistory.record(System.currentTimeMillis());
+                } catch (RuntimeException e) {
+                    log.warn("Could not record the status sample: {}", e.getMessage());
+                }
+            }, 0, org.jemule.core.StatusHistory.INTERVAL_MS, TimeUnit.MILLISECONDS);
             // The startup load is over (FileIndex reads the database in its constructor): the database file is now
             // compacted while the server runs, or the writes make it grow by about a gigabyte a day (maintenance tier)
             if (db != null) {
@@ -1811,6 +1822,45 @@ public class Server {
     /** Samples of the index size and of the connected clients, for the curves of the admin panel. */
     org.jemule.core.MetricsHistory getMetricsHistory() {
         return metricsHistory;
+    }
+
+    /** The curves of the Status view (the figures of /api/status that change over time). */
+    org.jemule.core.StatusHistory getStatusHistory() {
+        return statusHistory;
+    }
+
+    /**
+     * The figures of the Status view drawn over time: the levels as they are, the counts since the start as their
+     * increase per sample. The other figures of /api/status (version, uptime, last purge, maximum heap, IP filter
+     * ranges) stay in its table: a curve of them would say nothing.
+     */
+    private void registerStatusMetrics() {
+        org.jemule.core.StatusHistory.Kind gauge = org.jemule.core.StatusHistory.Kind.GAUGE;
+        org.jemule.core.StatusHistory.Kind counter = org.jemule.core.StatusHistory.Kind.COUNTER;
+        Runtime runtime = Runtime.getRuntime();
+        java.lang.management.OperatingSystemMXBean os = java.lang.management.ManagementFactory.getOperatingSystemMXBean();
+        statusHistory
+                .add("connectedClients", "Connected clients", "clients", gauge, registry::size)
+                .add("lowIdClients", "LowID clients", "clients", gauge, registry::lowIdCount)
+                .add("indexedFiles", "Indexed files", "files", gauge, fileIndex::fileCount)
+                .add("heapUsedMb", "Heap used", "MB", gauge,
+                        () -> (runtime.totalMemory() - runtime.freeMemory()) / 1024.0 / 1024.0)
+                .add("systemLoad", "System load", "", gauge, () -> {
+                    double load = os.getSystemLoadAverage();
+                    return load < 0 ? Double.NaN : load; // negative: not available on this system
+                })
+                .add("clientIpsBanned", "Client IPs banned", "IPs", gauge,
+                        () -> registry.clientBans().bannedIpCount(System.currentTimeMillis()))
+                .add("clientConnectionsRefused", "Connections refused from banned IPs", "connections", counter,
+                        () -> registry.clientBans().connectionsRefused())
+                .add("clientNickLoginsRefused", "Logins refused for their nickname", "logins", counter,
+                        () -> registry.clientBans().nickLoginsRefused())
+                .add("clientPublishersBanned", "Clients banned for made-up hashes", "clients", counter,
+                        () -> registry.clientBans().publishersBanned())
+                .add("bannedHashFilesRefused", "Files of a banned hash prefix refused", "files", counter,
+                        fileIndex::bannedHashRejectedCount)
+                .add("databaseReopens", "Database reopens", "reopens", counter,
+                        () -> db == null ? 0 : db.getReopenCount());
     }
 
     public org.jemule.core.OfferFilesV1 getOfferFilesV1() {

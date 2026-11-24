@@ -117,6 +117,13 @@ export function Empty({ children }: { children: ReactNode }) {
 /** Loading, failure or nothing: the placeholder of a view whose data is not there yet. */
 export function LoadState({ loading, error }: { loading: boolean; error: string | null }) {
   if (error) return <div className="card empty errorText">Request failed: {error}</div>;
-  if (loading) return <div className="card empty">Loading…</div>;
+  if (loading) {
+    return (
+      <div className="card skeleton" aria-busy="true">
+        <span className="visuallyHidden">Loading…</span>
+        <i /><i /><i /><i />
+      </div>
+    );
+  }
   return null;
 }

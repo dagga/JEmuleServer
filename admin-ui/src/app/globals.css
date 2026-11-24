@@ -1,54 +1,88 @@
-/* JEmuleServer admin panel: one stylesheet, system fonts, light and dark themes from the system. */
+/* JEmuleServer admin panel: one stylesheet, system fonts, light and dark themes from the system, the colors of the JEmuleServer logo. */
 
 :root {
   color-scheme: light;
-  --page: #f7f8fa;
+  /* The colors of the JEmuleServer logo: the blue bubble of eMule's "e" (#6fb6ff, #2a78d6, #174f9e), the caramel of
+     the mule (#c97a3a, #9c5524), the grey of its muzzle; the word mark in bold italic blue (#1f63b8) */
+  --page: #eef1f5;
   --surface: #ffffff;
-  --raised: #f1f3f6;
-  --ink: #1d2025;
-  --ink2: #555b64;
-  --muted: #868c95;
-  --grid: #eef0f3;
-  --axis: #d9dde3;
-  --border: rgba(29, 32, 37, 0.07);
-  --accent: #2a78d6;
+  --raised: #f1f4f8;
+  --ink: #142030;
+  --ink2: #44505f;
+  --muted: #6a7686;
+  --grid: #e5eaf0;
+  --axis: #c8d1dc;
+  --border: rgba(23, 79, 158, 0.12);
+  --accent: #1f63b8;
   --accentInk: #ffffff;
   --accentSoft: #e3eefc;
+  --brand: #9c5524;
+  --brandBright: #c97a3a;
+  --bubble: radial-gradient(circle at 35% 30%, #6fb6ff 0%, #2a78d6 55%, #174f9e 100%);
+  --band: linear-gradient(180deg, #3f8ae0 0%, #2a6fc9 100%);
+  --bandInk: #ffffff;
+  --bandLine: #174f9e;
+  --strip: linear-gradient(90deg, #6fb6ff 0%, #2a78d6 55%, #c97a3a 100%);
+  --sideBg: linear-gradient(180deg, #e6ebf1 0%, #eef1f5 100%);
+  --wordStrong: #1f63b8;
+  --wordThin: #4f4e4a;
   --s1: #2a78d6;
-  --s2: #eb6834;
+  --s2: #c97a3a;
   --track: #d7e6fa;
-  --goodText: #006300;
-  --good: #0ca30c;
-  --warning: #e8a20b;
+  --goodText: #1d6b1d;
+  --good: #2e9e3a;
+  --warning: #d9910b;
   --critical: #d03b3b;
   --criticalText: #b42323;
   --criticalSoft: #fbe9e9;
-  --shadow: 0 1px 2px rgba(29, 32, 37, 0.03), 0 4px 16px rgba(29, 32, 37, 0.04);
-  --radius: 14px;
+  --shadow: 0 1px 2px rgba(20, 40, 80, 0.06), 0 6px 20px rgba(20, 40, 80, 0.06);
+  --shadowHover: 0 2px 4px rgba(20, 40, 80, 0.08), 0 14px 32px rgba(23, 79, 158, 0.14);
+  --bandSoft: #e2ebf6;
+  --zebra: #f6f8fb;
+  --glow: rgba(111, 182, 255, 0.28);
+  --glow2: rgba(201, 122, 58, 0.12);
+  --radius: 12px;
+  --brandFont: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
     color-scheme: dark;
-    --page: #121417;
-    --surface: #1a1d21;
-    --raised: #24282d;
-    --ink: #eceef1;
-    --ink2: #b9bec6;
-    --muted: #868c95;
-    --grid: #262a2f;
-    --axis: #353a41;
-    --border: rgba(255, 255, 255, 0.06);
-    --accent: #3987e5;
-    --accentSoft: #1c2f48;
-    --s1: #3987e5;
-    --s2: #d95926;
-    --track: #243241;
-    --goodText: #3ccb3c;
+    /* The dark logo: the word mark in #4f9cf0 and #c3c2b7, the bubble and the mule over a night blue */
+    --page: #0f141b;
+    --surface: #17202b;
+    --raised: #202b38;
+    --ink: #e9eef4;
+    --ink2: #b6c1cd;
+    --muted: #8592a1;
+    --grid: #222d3a;
+    --axis: #334152;
+    --border: rgba(255, 255, 255, 0.07);
+    --accent: #4f9cf0;
+    --accentInk: #0f141b;
+    --accentSoft: #16314f;
+    --brand: #e7a978;
+    --brandBright: #e7a978;
+    --band: linear-gradient(180deg, #2a6fc9 0%, #1d56a8 100%);
+    --bandInk: #f2f7fd;
+    --bandLine: #174f9e;
+    --strip: linear-gradient(90deg, #6fb6ff 0%, #2a78d6 55%, #e7a978 100%);
+    --sideBg: linear-gradient(180deg, #141b25 0%, #0f141b 100%);
+    --wordStrong: #4f9cf0;
+    --wordThin: #c3c2b7;
+    --s1: #4f9cf0;
+    --s2: #e7a978;
+    --track: #1d3350;
+    --goodText: #5fd16a;
     --criticalText: #f07a7a;
     --criticalSoft: #3a1d1d;
-    --shadow: none;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+    --shadowHover: 0 2px 6px rgba(0, 0, 0, 0.35), 0 14px 32px rgba(0, 0, 0, 0.35);
+    --bandSoft: #1b2735;
+    --zebra: #1a2430;
+    --glow: rgba(42, 120, 214, 0.22);
+    --glow2: rgba(201, 122, 58, 0.1);
   }
 }
 
@@ -59,7 +93,12 @@ html { -webkit-text-size-adjust: 100%; }
 body {
   margin: 0;
   font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  background: var(--page);
+  /* The sky of the eMule banner, as a faint glow above the page */
+  background:
+    radial-gradient(1100px 420px at 78% -140px, var(--glow), transparent 70%),
+    radial-gradient(800px 360px at 18% -160px, var(--glow2), transparent 70%),
+    var(--page);
+  background-attachment: fixed;
   color: var(--ink);
   overflow-x: hidden;
 }
@@ -77,22 +116,38 @@ h1, h2 { margin: 0; }
 .side {
   position: sticky; top: 0; height: 100vh; overflow-y: auto;
   display: flex; flex-direction: column; gap: 14px;
-  padding: 22px 14px; background: var(--page);
+  padding: 18px 14px; background: var(--sideBg); border-right: 1px solid var(--border);
 }
-.brand { display: flex; align-items: center; gap: 10px; padding: 0 6px; min-width: 0; }
+/* The logo: the mule and its word mark, "JEmule" bold italic in blue, "Server" thin italic */
+.brand {
+  display: flex; align-items: center; gap: 10px; padding: 10px 12px 10px 8px; min-width: 0;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow);
+}
 .brand > div { min-width: 0; }
-.logo rect { fill: var(--accent); }
-.logo path { stroke: var(--accentInk); }
-.logo circle { fill: var(--accentInk); }
-.brandName { font-weight: 650; font-size: 15px; }
+.logo { flex: none; display: block; filter: drop-shadow(0 2px 3px rgba(23, 79, 158, 0.18)); transition: transform 0.35s cubic-bezier(0.3, 1.5, 0.5, 1); }
+.brand:hover .logo { transform: rotate(-6deg) scale(1.06); }
+.brandName { font-family: var(--brandFont); font-style: italic; font-size: 17px; letter-spacing: -0.02em; line-height: 1.15; white-space: nowrap; }
+.brandStrong { font-weight: 800; color: var(--wordStrong); }
+.brandThin { font-weight: 400; color: var(--wordThin); }
+.meta { color: rgba(255, 255, 255, 0.82); }
 .meta { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .side nav { display: flex; flex-direction: column; gap: 2px; }
 .navLink {
-  display: block; padding: 7px 12px; border-radius: 9px; color: var(--ink2); text-decoration: none; white-space: nowrap;
+  display: flex; align-items: center; gap: 10px; padding: 7px 12px; border-radius: 9px; color: var(--ink2); text-decoration: none; white-space: nowrap;
   transition: background 0.15s, color 0.15s;
 }
 .navLink:hover { background: var(--raised); color: var(--ink); }
-.navLink[aria-current="page"] { background: var(--surface); color: var(--accent); font-weight: 600; box-shadow: var(--shadow); }
+.navLink[aria-current="page"] {
+  background: var(--surface); color: var(--accent); font-weight: 600; box-shadow: var(--shadow), inset 3px 0 0 var(--brandBright);
+}
+/* The Settings sub-menu: its groups, under the Settings entry */
+.navSub { display: flex; flex-direction: column; gap: 1px; margin: 4px 0 6px 12px; padding-left: 10px; border-left: 2px solid var(--axis); }
+.navSubLink {
+  display: block; padding: 4px 10px; border-radius: 7px; color: var(--ink2); text-decoration: none; font-size: 13px;
+  white-space: nowrap; transition: background 0.15s, color 0.15s;
+}
+.navSubLink:hover { background: var(--raised); color: var(--ink); }
+.navSubLink[aria-current="location"] { color: var(--brand); font-weight: 600; background: var(--surface); }
 .sideNote { margin: auto 6px 0; color: var(--muted); font-size: 12px; }
 .main { min-width: 0; padding: 28px 32px 64px; max-width: 1440px; width: 100%; }
 
@@ -105,7 +160,12 @@ h1, h2 { margin: 0; }
   .side nav { flex-direction: row; overflow-x: auto; scrollbar-width: none; margin: 0 -16px; padding: 0 12px; }
   .side nav::-webkit-scrollbar { display: none; }
   .navLink { border-radius: 0; padding: 8px 10px 9px; }
-  .navLink[aria-current="page"] { background: none; box-shadow: inset 0 -2px 0 var(--accent); }
+  .navLink[aria-current="page"] { background: none; box-shadow: inset 0 -2px 0 var(--brandBright); }
+  .navItem { display: contents; }
+  .navSub { display: contents; }
+  .navSubLink { padding: 8px 10px 9px; border-radius: 0; font-size: 13px; }
+  .navSubLink[aria-current="location"] { background: none; box-shadow: inset 0 -2px 0 var(--accent); }
+  .brand { padding: 8px 10px; }
   .side { background: var(--surface); }
   .sideNote { display: none; }
   .main { padding: 16px 16px 48px; }
@@ -114,7 +174,9 @@ h1, h2 { margin: 0; }
 /* Page header and toolbars */
 .pageHeader { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
 .pageTitle { min-width: 0; flex: 1 1 320px; }
-.pageTitle h1 { font-size: 24px; font-weight: 600; letter-spacing: -0.015em; }
+/* Titles in the voice of the word mark: bold italic, underlined by the bubble running into the mule */
+.pageTitle h1 { font-family: var(--brandFont); font-style: italic; font-size: 24px; font-weight: 800; letter-spacing: -0.025em; }
+.pageTitle h1::after { content: ""; display: block; width: 44px; height: 3px; margin-top: 6px; border-radius: 2px; background: var(--strip); }
 .pageTitle .sub { margin: 3px 0 0; max-width: 80ch; }
 .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .toolbar form { margin: 0; }
@@ -130,7 +192,14 @@ h1, h2 { margin: 0; }
 .card + .card, .grid + .card, .card + .grid { margin-top: 16px; }
 .grid > .card { margin-top: 0; }
 .cardHead { display: flex; align-items: baseline; justify-content: space-between; gap: 8px 16px; flex-wrap: wrap; margin-bottom: 10px; }
-.cardHead h2 { font-size: 15px; font-weight: 600; }
+/* The title bars of the cards: a band in the blue of the logo's bubble, as the boxes of the eMule site */
+.card > .cardHead {
+  margin: -18px -20px 14px; padding: 9px 20px; background: var(--band); color: var(--bandInk);
+  border-radius: var(--radius) var(--radius) 0 0; border-bottom: 1px solid var(--bandLine); align-items: center;
+}
+.card > .cardHead .label, .card > .cardHead .muted, .card > .cardHead .sub, .card > .cardHead .sectionCount { color: rgba(255, 255, 255, 0.85); }
+.cardHead h2 { font-family: var(--brandFont); font-style: italic; font-size: 14px; font-weight: 700; letter-spacing: -0.005em; }
+.sectionCount { font-size: 12.5px; }
 .cardAside { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .grid { display: grid; gap: 16px; }
 .hero { grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); margin-bottom: 16px; }
@@ -309,3 +378,151 @@ input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--accent);
 .dialogActions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 
 .notFoundTitle { font-size: 20px; color: var(--ink); margin-bottom: 8px; }
+
+/* ---------------------------------------------------------------------------------------------------------------
+   Motion and depth in the spirit of the logo. Every movement stops with prefers-reduced-motion.
+   --------------------------------------------------------------------------------------------------------------- */
+
+/* Navigation: icons, a slide on hover, counts in the Settings sub-menu */
+.navIcon { flex: none; opacity: 0.75; transition: transform 0.2s, opacity 0.2s, color 0.2s; }
+.navLink:hover .navIcon { opacity: 1; transform: translateX(2px); color: var(--accent); }
+.navLink[aria-current="page"] .navIcon { opacity: 1; color: var(--brand); }
+.navSubLink { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding-right: 6px; }
+.navSubLink > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.navCount { flex: none; }
+.navCount {
+  min-width: 22px; padding: 0 6px; border-radius: 999px; background: var(--bandSoft); color: var(--muted);
+  font-size: 11px; line-height: 18px; text-align: center; font-variant-numeric: tabular-nums;
+}
+.navSubLink[aria-current="location"] .navCount { background: var(--brandBright); color: #fff; }
+
+/* The banner: a sheen crossing the sky on hover, a live dot while the figures refresh */
+.brand { position: relative; overflow: hidden; }
+.brand::after {
+  content: ""; position: absolute; inset: -40% auto -40% -60%; width: 45%; transform: skewX(-20deg);
+  background: linear-gradient(90deg, transparent, rgba(111, 182, 255, 0.22), transparent); transition: left 0.8s ease;
+  left: -60%;
+}
+.brand:hover::after { left: 130%; }
+.liveDot {
+  display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; vertical-align: 1px;
+  background: #6ee07a; box-shadow: 0 0 0 0 rgba(110, 224, 122, 0.7); animation: live 2s ease-out infinite;
+}
+@keyframes live { 0% { box-shadow: 0 0 0 0 rgba(110, 224, 122, 0.7); } 70%, 100% { box-shadow: 0 0 0 7px rgba(110, 224, 122, 0); } }
+
+/* Views come up gently, their cards one after the other */
+@keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.main > * { animation: rise 0.45s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+.main > *:nth-child(2) { animation-delay: 40ms; }
+.main > *:nth-child(3) { animation-delay: 80ms; }
+.main > *:nth-child(4) { animation-delay: 120ms; }
+.main > *:nth-child(n + 5) { animation-delay: 160ms; }
+.grid > .card { animation: rise 0.5s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+.grid > .card:nth-child(2) { animation-delay: 50ms; }
+.grid > .card:nth-child(3) { animation-delay: 100ms; }
+.grid > .card:nth-child(4) { animation-delay: 150ms; }
+.grid > .card:nth-child(5) { animation-delay: 200ms; }
+.grid > .card:nth-child(6) { animation-delay: 250ms; }
+.grid > .card:nth-child(n + 7) { animation-delay: 300ms; }
+
+/* Tiles: a strip from the bubble to the mule on top, lifted under the pointer, figures in a blue gradient */
+.card { transition: transform 0.22s ease, box-shadow 0.22s ease, border-color 0.22s ease; }
+.tile, .heroCard { position: relative; overflow: hidden; }
+.tile:not(.tileOff)::before, .heroCard::before {
+  content: ""; position: absolute; inset: 0 0 auto 0; height: 3px;
+  background: var(--strip);
+}
+.grid > .card:not(.tileOff):hover { transform: translateY(-3px); box-shadow: var(--shadowHover); border-color: var(--axis); }
+.tileOff:hover { border-color: var(--accent); }
+.big, .tile:not(.tileOff) .value {
+  background: linear-gradient(115deg, var(--ink) 15%, var(--accent) 100%);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.big { font-weight: 600; }
+/* Meters: the blue of the bubble with a light running along it */
+.meter { height: 7px; border-radius: 4px; }
+.meter > i { position: relative; overflow: hidden; background: linear-gradient(90deg, #6fb6ff, #2a78d6); transition: width 0.8s cubic-bezier(0.2, 0.7, 0.2, 1); }
+.meter > i::after {
+  content: ""; position: absolute; inset: 0; transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.45), transparent); animation: sheen 2.6s ease-in-out infinite;
+}
+@keyframes sheen { 60%, 100% { transform: translateX(100%); } }
+.meter-warning > i { background: linear-gradient(90deg, #f0c060, var(--warning)); }
+.meter-critical > i { background: linear-gradient(90deg, #e98a80, var(--critical)); }
+.shareBar > i { background: linear-gradient(90deg, #6fb6ff, #2a78d6); }
+
+/* Loading: skeleton lines with a sweeping light, instead of a word */
+.skeleton { display: flex; flex-direction: column; gap: 12px; padding: 22px 20px; }
+.skeleton i {
+  display: block; height: 12px; border-radius: 6px; background: linear-gradient(90deg, var(--raised) 0%, var(--bandSoft) 40%, var(--raised) 80%);
+  background-size: 300% 100%; animation: shimmer 1.4s ease-in-out infinite;
+}
+.skeleton i:nth-child(2) { width: 92%; } .skeleton i:nth-child(3) { width: 76%; } .skeleton i:nth-child(4) { width: 58%; }
+@keyframes shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+
+/* Tables: soft blue headers, alternate rows, a blue line under the pointer */
+thead th, .settingsHead {
+  background: var(--bandSoft); color: var(--ink2); font-weight: 600; font-size: 12px; letter-spacing: 0.02em;
+  border-bottom: 1px solid var(--axis);
+}
+thead th:first-child { border-top-left-radius: 8px; }
+thead th:last-child { border-top-right-radius: 8px; }
+.settingsHead { border-radius: 8px; border-bottom: 0; margin-bottom: 4px; }
+tbody tr:nth-child(even) { background: var(--zebra); }
+tbody tr, .settingRow { transition: background 0.15s, box-shadow 0.15s; }
+tbody tr:hover, .settingRow:hover { background: var(--accentSoft); box-shadow: inset 3px 0 0 var(--accent); }
+.settingRow.dirty { box-shadow: inset 3px 0 0 var(--brandBright); }
+
+/* Buttons that lift, press down */
+.btn { transition: border-color 0.15s, filter 0.15s, transform 0.15s, box-shadow 0.15s; }
+.btn:not(:disabled):hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(60, 68, 130, 0.15); }
+.btn:not(:disabled):active { transform: translateY(0); box-shadow: none; }
+/* The primary action has the look of the logo's bubble */
+.btnPrimary {
+  background: radial-gradient(120% 140% at 30% 0%, #6fb6ff 0%, #2a78d6 55%, #174f9e 100%); color: #fff; border-color: #1d5fb3;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3), 0 1px 2px rgba(23, 79, 158, 0.3);
+}
+.btnDanger { background: linear-gradient(180deg, #d4554e 0%, var(--critical) 100%); }
+input:focus-visible, textarea:focus-visible, select:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accentSoft); }
+
+/* Switches instead of check boxes, in the colors of the site */
+input[type="checkbox"] {
+  appearance: none; -webkit-appearance: none; position: relative; flex: none; width: 36px; height: 20px; margin: 0;
+  padding: 0; border: 0; border-radius: 999px; background: var(--axis); cursor: pointer; transition: background 0.2s;
+}
+input[type="checkbox"]::before {
+  content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 3px rgba(20, 25, 60, 0.35); transition: transform 0.22s cubic-bezier(0.3, 1.4, 0.5, 1);
+}
+input[type="checkbox"]:checked { background: linear-gradient(90deg, #6fb6ff, #2a78d6); }
+input[type="checkbox"]:checked::before { transform: translateX(16px); }
+input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Scope badges: colored pills */
+.badge { font-weight: 500; }
+.scope-hot { background: rgba(46, 158, 58, 0.12); }
+.scope-restart { background: rgba(192, 57, 43, 0.1); }
+.scope-admin { background: var(--accentSoft); color: var(--accent); }
+
+/* Charts: the bubble's blue and the mule's caramel over a faint grid */
+.seg { border-radius: 999px; padding: 2px; gap: 2px; background: var(--bandSoft); border: 0; }
+.seg button { border-radius: 999px; transition: background 0.2s, color 0.2s; }
+.seg button + button { border-left: 0; }
+.seg button[aria-pressed="true"] { background: var(--surface); color: var(--accent); box-shadow: var(--shadow); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+  .grid > .card:not(.tileOff):hover, .btn:not(:disabled):hover { transform: none; }
+}
+
+/* Status: one curve chosen in a list, its current value beside it */
+.chartControls { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px 16px; flex-wrap: wrap; margin-bottom: 6px; }
+.chartControls .field { max-width: 420px; }
+.chartControls select { width: 100%; font-size: 14px; padding-right: 30px; }
+.chartNow { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin: 8px 0 0; }
+.chartNow .big { font-size: clamp(30px, 5vw, 42px); margin: 0; }
+select {
+  appearance: none; -webkit-appearance: none; cursor: pointer;
+  background-image: linear-gradient(45deg, transparent 50%, var(--accent) 50%), linear-gradient(135deg, var(--accent) 50%, transparent 50%);
+  background-position: calc(100% - 16px) 55%, calc(100% - 11px) 55%; background-size: 5px 5px; background-repeat: no-repeat;
+}

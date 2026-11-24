@@ -228,6 +228,63 @@ public enum ConfigParameter {
         return this == WELCOME_MESSAGE || this == LOGIN_MESSAGE;
     }
 
+    /** The group of settings the web panel shows a parameter in, one entry of its Settings menu each. */
+    public enum Category {
+        SERVER("server", "Server"),
+        CLIENTS("clients", "Clients & network"),
+        NAT("nat", "NAT traversal"),
+        FILES("files", "Files & index"),
+        SEARCHES("searches", "Searches"),
+        PROTECTION("protection", "Protection"),
+        KAD("kad", "Kad"),
+        SERVERS("servers", "Other servers & relay"),
+        DATABASE("database", "Database"),
+        ADMIN("admin", "Administration");
+
+        private final String id;
+        private final String label;
+
+        Category(String id, String label) {
+            this.id = id;
+            this.label = label;
+        }
+
+        public String id() {
+            return id;
+        }
+
+        public String label() {
+            return label;
+        }
+    }
+
+    /** The group of settings of this parameter: a switch without default, so that a new parameter must get one. */
+    public Category category() {
+        return switch (this) {
+            case SERVER_NAME, SERVER_DESCRIPTION, WELCOME_MESSAGE, LOGIN_MESSAGE -> Category.SERVER;
+            case PORT, PUBLIC_IP, MAX_USERS, MAX_PACKET_SIZE, FLOOD_MAX_REQUESTS_PER_SECOND,
+                 TCP_KEEP_ALIVE_TIMEOUT_IN_SECONDS, HEARTBEAT_INTERVAL_SECONDS, LOW_ID_CHECK_TIMEOUT_SECONDS,
+                 OBFUSCATED_FIREWALL_CHECK, IPV6_SOURCES -> Category.CLIENTS;
+            case NAT_CALLBACK, NAT_CALLBACK_TOKEN, NAT_HOLE_PUNCH, NAT_CALLBACK_CROSS_SERVER -> Category.NAT;
+            case MAX_FILES, MAX_FILES_PER_USER, MAX_SOURCES_PER_FILE, FILE_RETENTION_DAYS, SOURCE_COUNT_MAX_AGE_DAYS,
+                 INDEX_REFRESH_SECONDS, OFFER_FILES_V1_ENABLED, OFFER_FILES_BATCH_MAX, OFFER_FILES_MIN_INTERVAL_MS,
+                 OFFER_FILES_GLOBAL_RECORDS_PER_SEC -> Category.FILES;
+            case MAX_SEARCH_RESULTS, REMOTE_SEARCH_CACHE_MINUTES -> Category.SEARCHES;
+            case IP_FILTER_PATH, FAKE_FILE_DETECTION_ENABLED, CHILD_ABUSE_KEYWORDS_PATH, BANNED_HASH_PREFIXES,
+                 BANNED_CLIENT_NICKS, BAN_CLIENTS_PUBLISHING_BANNED_HASHES -> Category.PROTECTION;
+            case KAD_ENABLED, KAD_PORT, KAD_BOOTSTRAP_FROM_CLIENTS, KAD_MAX_ROUTING_CONTACTS, KAD_FORK_SEARCH_ENABLED,
+                 KAD_SEARCH_TIMEOUT_SECONDS, KAD_AUTO_INGEST_TO_H2, KAD_MIN_SOURCES_FOR_INGEST, KAD_NODES_URLS,
+                 KAD_FORK_GLOBAL_SEARCHES, KAD_SOURCE_SEARCH_ENABLED, KAD_SOURCE_SEARCH_MIN_LOCAL,
+                 KAD_SOURCE_SEARCHES_PER_MINUTE -> Category.KAD;
+            case SERVER_PEERS, SERVER_MET_URL, SERVER_INDEX_UPDATE_ENABLED, SERVER_INDEX_UPDATE_MAX_PER_HOUR,
+                 SERVER_INDEX_UPDATE_MAX_PER_DAY, SERVER_INDEX_UPDATE_MIN_SOURCES, RELAY_SERVER, RELAY_FEED_PORT,
+                 RELAY_CLIENTS -> Category.SERVERS;
+            case DATABASE_PATH, DATABASE_TYPE, DATABASE_URL, DATABASE_USER, DATABASE_IMPORT_FROM_H2,
+                 CB_FAILURE_RATE_THRESHOLD, CB_MINIMUM_NUMBER_OF_CALLS, CB_WAIT_DURATION_IN_SECONDS -> Category.DATABASE;
+            case ADMIN_PORT, ADMIN_WEB_PORT, ADMIN_BIND_ADDRESS, ADMIN_ALLOWED_IPS, ADMIN_ALLOWED_MACS -> Category.ADMIN;
+        };
+    }
+
     public double min() {
         return min;
     }
