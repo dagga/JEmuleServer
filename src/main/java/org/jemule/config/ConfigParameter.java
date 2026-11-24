@@ -33,9 +33,9 @@ public enum ConfigParameter {
     SERVER_DESCRIPTION("serverDescription", Type.STRING, Scope.HOT, 0, 0,
             "Server description shown in the clients' server list (empty = default description)"),
     WELCOME_MESSAGE("welcomeMessage", Type.STRING, Scope.HOT, 0, 0,
-            "Welcome message shown in the client's server info at login (empty = default; {version}, {id}; \\n = new line)"),
+            "Welcome message shown in the client's server info at login, one or more lines (empty = default; {version}, {id}; \\n also starts a new line)"),
     LOGIN_MESSAGE("loginMessage", Type.STRING, Scope.HOT, 0, 0,
-            "Further message sent at login after the welcome message, e.g. rules (empty = none; {version}, {id}; \\n = new line)"),
+            "Further message sent at login after the welcome message, e.g. rules, one or more lines (empty = none; {version}, {id}; \\n also starts a new line)"),
     PORT("port", Type.INTEGER, Scope.RESTART, 1, 65535, "TCP/UDP port to listen on"),
     MAX_PACKET_SIZE("maxPacketSize", Type.INTEGER, Scope.HOT, 512, 64 * 1024 * 1024,
             "Maximum incoming packet size in bytes"),
@@ -221,6 +221,11 @@ public enum ConfigParameter {
 
     public String description() {
         return description;
+    }
+
+    /** True for a text that may span several lines: the web panel edits it in a multi-line text area. */
+    public boolean multiline() {
+        return this == WELCOME_MESSAGE || this == LOGIN_MESSAGE;
     }
 
     public double min() {

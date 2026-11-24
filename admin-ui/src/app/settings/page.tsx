@@ -13,9 +13,15 @@ interface Parameter {
   scopeLabel?: string;
   description: string;
   pending: string;
+  /** A text that may span several lines (login messages): edited in a text area. */
+  multiline?: boolean;
 }
 
-const original = (p: Parameter) => String(p.value);
+// A multi-line text shows the \n typed before the text area existed as the line break it stands for
+const original = (p: Parameter) =>
+  p.multiline ? String(p.value).replace(/\r\n/g, '\n').replace(/\\n/g, '\n') : String(p.value);
+
+const rows = (text: string) => Math.min(12, Math.max(3, text.split('\n').length + 1));
 
 export default function SettingsPage() {
   const { data, error, loading, reload } = useApi<Parameter[]>('/api/settings');
@@ -110,6 +116,14 @@ export default function SettingsPage() {
                         id={id}
                         checked={value === 'true'}
                         onChange={(e) => setEdits((x) => ({ ...x, [p.key]: String(e.target.checked) }))}
+                      />
+                    ) : p.multiline ? (
+                      <textarea
+                        id={id}
+                        value={value}
+                        rows={rows(value)}
+                        spellCheck={false}
+                        onChange={(e) => setEdits((x) => ({ ...x, [p.key]: e.target.value }))}
                       />
                     ) : (
                       <input

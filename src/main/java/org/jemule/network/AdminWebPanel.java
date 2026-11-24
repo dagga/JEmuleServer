@@ -934,6 +934,7 @@ final class AdminWebPanel implements AutoCloseable {
             entry.put("scope", parameter.scope().id());
             entry.put("scopeLabel", parameter.scope().label());
             entry.put("description", parameter.description());
+            entry.put("multiline", parameter.multiline());
             entry.put("pending", pending.getOrDefault(parameter.key(), ""));
             parameters.add(entry);
         }

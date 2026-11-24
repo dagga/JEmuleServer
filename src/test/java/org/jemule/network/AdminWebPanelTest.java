@@ -220,6 +220,14 @@ class AdminWebPanelTest {
         }
     }
 
+    /** The JSON of one parameter in the settings list: from its key to the next one. */
+    private static String entry(String settings, String key) {
+        int start = settings.indexOf("\"key\":\"" + key + "\"");
+        assertTrue(start >= 0, key);
+        int end = settings.indexOf("\"key\":", start + 1);
+        return settings.substring(start, end < 0 ? settings.length() : end);
+    }
+
     @Test
     void settingsListsEveryEditableParameter() throws Exception {
         Server server = mock(Server.class);
@@ -238,6 +246,10 @@ class AdminWebPanelTest {
                 assertTrue(response.body().contains("\"key\":\"" + parameter.key() + "\""), parameter.key());
             }
             assertTrue(response.body().contains("\"scope\":\"hot\""), response.body());
+            // The login messages are edited in a text area, the other texts in a one-line field
+            assertTrue(entry(response.body(), "welcomeMessage").contains("\"multiline\":true"), response.body());
+            assertTrue(entry(response.body(), "loginMessage").contains("\"multiline\":true"), response.body());
+            assertTrue(entry(response.body(), "serverName").contains("\"multiline\":false"), response.body());
         }
     }
 

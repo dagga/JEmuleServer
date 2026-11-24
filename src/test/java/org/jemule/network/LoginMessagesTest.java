@@ -143,4 +143,38 @@ class LoginMessagesTest {
             server.stop();
         }
     }
+
+    @Test
+    void multiLineMessagesFromTheWebPanelTextAreaSurviveTheFileAndReachTheClient(
+            @org.junit.jupiter.api.io.TempDir java.nio.file.Path tempDir) throws Exception {
+        ServerConfig config = new ServerConfig(14662, 1000000, 300, 50, 50000, 100000, 100, 200,
+                tempDir.resolve("db").toString(), "", false, 50f, 10, 60, 1800, 120, null);
+        java.nio.file.Path file = tempDir.resolve("server.properties");
+        java.nio.file.Files.writeString(file, "# comment\nport=14662\n");
+        Server server = new Server(config, new org.jemule.core.ClientFactory());
+        server.setConfigFile(new org.jemule.config.ConfigFile(file));
+        try {
+            assertTrue(ConfigParameter.WELCOME_MESSAGE.multiline());
+            assertTrue(ConfigParameter.LOGIN_MESSAGE.multiline());
+            assertFalse(ConfigParameter.SERVER_NAME.multiline(), "one line in OP_EMULEINFOACK");
+            // A text area posts its line breaks as typed: \n, or \r\n from some browsers
+            var result = server.updateConfig(java.util.Map.of(
+                    "welcomeMessage", "Welcome {id}\nRules below",
+                    "loginMessage", "1. No fakes\r\n2. Be nice\n\nhttps://example.org"));
+            assertTrue(result.success(), result.summary());
+            List<String> messages = serverMessages(server.getConfig());
+            assertTrue(messages.get(1).matches("Welcome \\d+\nRules below"), messages.get(1));
+            assertEquals("1. No fakes\n2. Be nice\n\nhttps://example.org", messages.get(2));
+
+            // One escaped line in the file, read back unchanged
+            // The file's own line breaks are the platform's (\r\n on Windows); the message's are escaped text
+            String written = java.nio.file.Files.readString(file).replace(System.lineSeparator(), "\n");
+            assertTrue(written.contains("\nloginMessage=1. No fakes\\r\\n2. Be nice\\n\\nhttps://example.org\n"), written);
+            Properties reloaded = new org.jemule.config.ConfigFile(file).load();
+            assertEquals("1. No fakes\r\n2. Be nice\n\nhttps://example.org", reloaded.getProperty("loginMessage"));
+            assertEquals("Welcome {id}\nRules below", reloaded.getProperty("welcomeMessage"));
+        } finally {
+            server.stop();
+        }
+    }
 }
