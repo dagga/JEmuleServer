@@ -75,7 +75,16 @@ final class ServerGossip {
         }
     }
 
-    record VerifiedPeer(Endpoint endpoint, String name, int udpKey, long verifiedAtMillis) {
+    /** @param version the server software version it gave in its description (ST_VERSION), or null */
+    record VerifiedPeer(Endpoint endpoint, String name, String version, int udpKey, long verifiedAtMillis) {
+        /** A peer whose version is not known. */
+        VerifiedPeer(Endpoint endpoint, String name, int udpKey, long verifiedAtMillis) {
+            this(endpoint, name, null, udpKey, verifiedAtMillis);
+        }
+    }
+
+    /** What a server says of itself in OP_SERVER_DESC_RES: its name and, when given, its version (ST_VERSION). */
+    record Description(String name, String version) {
     }
 
     /** Where a monitored server was discovered. */
@@ -94,7 +103,7 @@ final class ServerGossip {
     public record ServerView(String name, String state, ServerSource source, Endpoint endpoint,
                              Long users, Long files, Long softFiles, Long hardFiles, Long maxUsers,
                              Long lowIdUsers, boolean hasUdpKey, Long latencyMillis, Long lastStatusAtMillis,
-                             Long verifiedAtMillis, int missedStatusProbes) {
+                             Long verifiedAtMillis, int missedStatusProbes, String version) {
     }
 
     private enum Stage {STATUS, DESCRIPTION, LIST}
@@ -276,7 +285,8 @@ final class ServerGossip {
                     status == null ? null : status.latencyMillis(),
                     status == null ? null : status.observedAtMillis(),
                     peer == null ? null : peer.verifiedAtMillis(),
-                    missedStatusProbes.getOrDefault(endpoint, 0)));
+                    missedStatusProbes.getOrDefault(endpoint, 0),
+                    peer == null ? null : peer.version()));
         }
         return views;
     }
@@ -535,13 +545,14 @@ final class ServerGossip {
         }
         if (opcode == OP_SERVER_DESC_RES && transaction.stage() == Stage.DESCRIPTION) {
             if (!hasChallenge(packet, transaction.challenge())) return true; // late, as above
-            String name = validateDescription(packet, transaction.challenge());
-            if (name == null) {
+            Description description = parseDescription(packet, transaction.challenge());
+            if (description == null) {
                 reject(endpoint, "invalid, junk, or MLDonkey server description", now);
                 return true;
             }
             int remoteKey = extractStatusKey(endpoint);
-            verified.put(endpoint, new VerifiedPeer(endpoint, name, remoteKey, now));
+            verified.put(endpoint, new VerifiedPeer(endpoint, description.name(), description.version(), remoteKey,
+                    now));
             pending.remove(endpoint);
             int challenge = nextChallenge();
             pending.put(endpoint, new Pending(Stage.LIST, challenge, now));
@@ -756,6 +767,12 @@ final class ServerGossip {
     }
 
     static String validateDescription(byte[] packet, int challenge) {
+        Description description = parseDescription(packet, challenge);
+        return description == null ? null : description.name();
+    }
+
+    /** The name and version of a well-formed description answering {@code challenge}; null if it is not one. */
+    static Description parseDescription(byte[] packet, int challenge) {
         if (packet.length < 6 || (packet[0] & 0xFF) != PROTOCOL || (packet[1] & 0xFF) != OP_SERVER_DESC_RES)
             return null;
         ByteBuffer data = ByteBuffer.wrap(packet).order(ByteOrder.LITTLE_ENDIAN);
@@ -770,14 +787,36 @@ final class ServerGossip {
         if (data.hasRemaining() || tags.isEmpty()) return null;
         String name = null;
         String description = "";
+        String version = null;
         for (Tag tag : tags) {
             if (tag.name().equals(Tag.NAME_SERVERNAME)) name = String.valueOf(tag.value()).trim();
             if (tag.name().equals(Tag.NAME_DESCRIPTION)) description = String.valueOf(tag.value()).trim();
+            if (tag.name().equals(Tag.NAME_VERSION)) version = version(tag.value());
         }
         if (name == null || name.isBlank()) return null;
         String identity = (name + " " + description).toLowerCase(Locale.ROOT);
         if (identity.contains("mldonkey") || identity.contains("ml donkey")) return null;
-        return name;
+        return new Description(name, version);
+    }
+
+    /** Longest version string kept: the field is free text on some servers. */
+    private static final int MAX_VERSION_LENGTH = 32;
+
+    /**
+     * ST_VERSION as eMule shows it: an integer is (major &lt;&lt; 16) | minor, printed "%u.%02u"; a string (eMule-Nordic,
+     * for one) as it is. Null when absent, empty or of another type.
+     */
+    static String version(Object value) {
+        if (value instanceof Number number) {
+            long v = number.longValue() & 0xFFFF_FFFFL;
+            return String.format(Locale.ROOT, "%d.%02d", v >>> 16, v & 0xFFFF);
+        }
+        if (value instanceof String text) {
+            String trimmed = text.strip().replaceAll("\\p{Cntrl}", "");
+            if (trimmed.isEmpty()) return null;
+            return trimmed.length() > MAX_VERSION_LENGTH ? trimmed.substring(0, MAX_VERSION_LENGTH) : trimmed;
+        }
+        return null;
     }
 
     static List<Endpoint> decodeServerList(byte[] packet) {

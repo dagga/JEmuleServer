@@ -101,6 +101,8 @@ public enum ConfigParameter {
     ADMIN_BIND_ADDRESS("adminBindAddress", Type.STRING, Scope.ADMIN, 0, 0, "Admin interfaces bind address"),
     ADMIN_ALLOWED_IPS("adminAllowedIps", Type.STRING, Scope.ADMIN, 0, 0, "Admin allowed IPs / CIDR blocks"),
     ADMIN_ALLOWED_MACS("adminAllowedMacs", Type.STRING, Scope.ADMIN, 0, 0, "Admin allowed MAC addresses"),
+    GEO_IP_URL("geoIpUrl", Type.STRING, Scope.RESTART, 0, 0,
+            "Country database of IP addresses shown by the web panel ({month} = yyyy-MM, empty = no country)"),
     SERVER_PEERS("serverPeers", Type.STRING, Scope.RESTART, 0, 0, "eD2K server seeds (host:port,...)"),
     SERVER_MET_URL("serverMetUrl", Type.STRING, Scope.RESTART, 0, 0, "HTTPS server.met source (empty = disabled)"),
     KAD_ENABLED("kadEnabled", Type.BOOLEAN, Scope.RESTART, 0, 0, "Embedded Kademlia node"),
@@ -121,6 +123,10 @@ public enum ConfigParameter {
             "nodes.dat sources used to bootstrap Kad (comma-separated, empty = disabled)"),
     KAD_FORK_GLOBAL_SEARCHES("kadForkGlobalSearches", Type.BOOLEAN, Scope.RESTART, 0, 0,
             "Search the UDP global searches of other servers' clients on Kad to populate the database"),
+    KAD_WORD_SEARCH_MIN_BYTES("kadWordSearchMinBytes", Type.INTEGER, Scope.RESTART, KadConfig.MIN_WORD_SEARCH_BYTES,
+            KadConfig.MAX_WORD_SEARCH_MIN_BYTES,
+            "UTF-8 bytes a word of a multi-word search needs to be searched alone on Kad in the background"
+                    + " (3 = Kad's own rule)"),
     OFFER_FILES_V1_ENABLED("offerFilesV1Enabled", Type.BOOLEAN, Scope.HOT, 0, 0,
             "Answer clients asking for OFFERFILES v1 at login and hold them to its pace (new logins)"),
     OFFER_FILES_BATCH_MAX("offerFilesBatchMax", Type.INTEGER, Scope.HOT, 1, 100_000,
@@ -226,6 +232,64 @@ public enum ConfigParameter {
     /** True for a text that may span several lines: the web panel edits it in a multi-line text area. */
     public boolean multiline() {
         return this == WELCOME_MESSAGE || this == LOGIN_MESSAGE;
+    }
+
+    /** The group of settings the web panel shows a parameter in, one entry of its Settings menu each. */
+    public enum Category {
+        SERVER("server", "Server"),
+        CLIENTS("clients", "Clients & network"),
+        NAT("nat", "NAT traversal"),
+        FILES("files", "Files & index"),
+        SEARCHES("searches", "Searches"),
+        PROTECTION("protection", "Protection"),
+        KAD("kad", "Kad"),
+        SERVERS("servers", "Other servers & relay"),
+        DATABASE("database", "Database"),
+        ADMIN("admin", "Administration");
+
+        private final String id;
+        private final String label;
+
+        Category(String id, String label) {
+            this.id = id;
+            this.label = label;
+        }
+
+        public String id() {
+            return id;
+        }
+
+        public String label() {
+            return label;
+        }
+    }
+
+    /** The group of settings of this parameter: a switch without default, so that a new parameter must get one. */
+    public Category category() {
+        return switch (this) {
+            case SERVER_NAME, SERVER_DESCRIPTION, WELCOME_MESSAGE, LOGIN_MESSAGE -> Category.SERVER;
+            case PORT, PUBLIC_IP, MAX_USERS, MAX_PACKET_SIZE, FLOOD_MAX_REQUESTS_PER_SECOND,
+                 TCP_KEEP_ALIVE_TIMEOUT_IN_SECONDS, HEARTBEAT_INTERVAL_SECONDS, LOW_ID_CHECK_TIMEOUT_SECONDS,
+                 OBFUSCATED_FIREWALL_CHECK, IPV6_SOURCES -> Category.CLIENTS;
+            case NAT_CALLBACK, NAT_CALLBACK_TOKEN, NAT_HOLE_PUNCH, NAT_CALLBACK_CROSS_SERVER -> Category.NAT;
+            case MAX_FILES, MAX_FILES_PER_USER, MAX_SOURCES_PER_FILE, FILE_RETENTION_DAYS, SOURCE_COUNT_MAX_AGE_DAYS,
+                 INDEX_REFRESH_SECONDS, OFFER_FILES_V1_ENABLED, OFFER_FILES_BATCH_MAX, OFFER_FILES_MIN_INTERVAL_MS,
+                 OFFER_FILES_GLOBAL_RECORDS_PER_SEC -> Category.FILES;
+            case MAX_SEARCH_RESULTS, REMOTE_SEARCH_CACHE_MINUTES -> Category.SEARCHES;
+            case IP_FILTER_PATH, FAKE_FILE_DETECTION_ENABLED, CHILD_ABUSE_KEYWORDS_PATH, BANNED_HASH_PREFIXES,
+                 BANNED_CLIENT_NICKS, BAN_CLIENTS_PUBLISHING_BANNED_HASHES -> Category.PROTECTION;
+            case KAD_ENABLED, KAD_PORT, KAD_BOOTSTRAP_FROM_CLIENTS, KAD_MAX_ROUTING_CONTACTS, KAD_FORK_SEARCH_ENABLED,
+                 KAD_SEARCH_TIMEOUT_SECONDS, KAD_AUTO_INGEST_TO_H2, KAD_MIN_SOURCES_FOR_INGEST, KAD_NODES_URLS,
+                 KAD_FORK_GLOBAL_SEARCHES, KAD_WORD_SEARCH_MIN_BYTES, KAD_SOURCE_SEARCH_ENABLED, KAD_SOURCE_SEARCH_MIN_LOCAL,
+                 KAD_SOURCE_SEARCHES_PER_MINUTE -> Category.KAD;
+            case SERVER_PEERS, SERVER_MET_URL, SERVER_INDEX_UPDATE_ENABLED, SERVER_INDEX_UPDATE_MAX_PER_HOUR,
+                 SERVER_INDEX_UPDATE_MAX_PER_DAY, SERVER_INDEX_UPDATE_MIN_SOURCES, RELAY_SERVER, RELAY_FEED_PORT,
+                 RELAY_CLIENTS -> Category.SERVERS;
+            case DATABASE_PATH, DATABASE_TYPE, DATABASE_URL, DATABASE_USER, DATABASE_IMPORT_FROM_H2,
+                 CB_FAILURE_RATE_THRESHOLD, CB_MINIMUM_NUMBER_OF_CALLS, CB_WAIT_DURATION_IN_SECONDS -> Category.DATABASE;
+            case ADMIN_PORT, ADMIN_WEB_PORT, ADMIN_BIND_ADDRESS, ADMIN_ALLOWED_IPS, ADMIN_ALLOWED_MACS,
+                 GEO_IP_URL -> Category.ADMIN;
+        };
     }
 
     public double min() {
@@ -355,6 +419,15 @@ public enum ConfigParameter {
             }
             case "databaseType" -> DatabaseConfig.parseType(value);
             case "bannedHashPrefixes" -> org.jemule.core.HashPrefixFilter.parse(value);
+            case "geoIpUrl" -> {
+                if (!value.isBlank()) {
+                    String url = value.strip().replace("{month}", "2000-01");
+                    if (!(url.startsWith("https://") || url.startsWith("http://"))) {
+                        throw new IllegalArgumentException(key + " must be an http(s) URL or empty");
+                    }
+                    java.net.URI.create(url); // throws when malformed
+                }
+            }
             case "bannedClientNicks" -> {
                 if (value.chars().anyMatch(Character::isISOControl)) {
                     throw new IllegalArgumentException(key + " must not contain control characters");

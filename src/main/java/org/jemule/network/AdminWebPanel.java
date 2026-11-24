@@ -153,6 +153,7 @@ final class AdminWebPanel implements AutoCloseable {
                 case "/api/status" -> json(exchange, 200, status());
                 case "/api/overview" -> json(exchange, 200, overview());
                 case "/api/history" -> json(exchange, 200, history(exchange));
+                case "/api/status/history" -> json(exchange, 200, statusHistory(exchange));
                 case "/api/clients" -> clients(exchange);
                 case "/api/peers" -> json(exchange, 200, peers());
                 case "/api/servers" -> json(exchange, 200, servers());
@@ -620,6 +621,47 @@ final class AdminWebPanel implements AutoCloseable {
         return result;
     }
 
+    /**
+     * The curves of the Status view: the metrics (key, label, unit, kind: a level drawn as it is, or a count since the
+     * start drawn as its increase per sample), then the samples of the last {@code hours} (1 to 24, default 24) as
+     * {@code [time, value of each metric...]}, a value that could not be read as null.
+     */
+    private Map<String, Object> statusHistory(HttpExchange exchange) {
+        int hours = parseBounded(query(exchange.getRequestURI()).get("hours"), 24, 1, 24);
+        org.jemule.core.StatusHistory history = server.getStatusHistory();
+        List<Map<String, Object>> metrics = new ArrayList<>();
+        List<List<Object>> points = new ArrayList<>();
+        if (history != null) {
+            for (org.jemule.core.StatusHistory.Metric metric : history.metrics()) {
+                Map<String, Object> entry = new java.util.LinkedHashMap<>();
+                entry.put("key", metric.key());
+                entry.put("label", metric.label());
+                entry.put("unit", metric.unit());
+                entry.put("kind", metric.kind().id());
+                metrics.add(entry);
+            }
+            for (org.jemule.core.StatusHistory.Sample sample
+                    : history.since(System.currentTimeMillis() - hours * 3_600_000L)) {
+                List<Object> point = new ArrayList<>(sample.values().length + 1);
+                point.add(sample.time());
+                for (double value : sample.values()) point.add(jsonNumber(value));
+                points.add(point);
+            }
+        }
+        Map<String, Object> result = new java.util.LinkedHashMap<>();
+        result.put("intervalSeconds", org.jemule.core.StatusHistory.INTERVAL_MS / 1000);
+        result.put("metrics", metrics);
+        result.put("points", points);
+        return result;
+    }
+
+    /** A sampled value for JSON: null when unknown, a whole number without decimals, else two decimals. */
+    static Object jsonNumber(double value) {
+        if (Double.isNaN(value) || Double.isInfinite(value)) return null;
+        if (value == Math.rint(value) && Math.abs(value) < 1e15) return (long) value;
+        return Math.round(value * 100) / 100.0;
+    }
+
     private void clients(HttpExchange exchange) throws IOException {
         String query = query(exchange.getRequestURI()).getOrDefault("q", "").trim().toLowerCase(Locale.ROOT);
         int offset = parseBounded(query(exchange.getRequestURI()).get("offset"), 0, 0, 1_000_000);
@@ -634,16 +676,17 @@ final class AdminWebPanel implements AutoCloseable {
             if (!query.isEmpty() && !(nickname.toLowerCase(Locale.ROOT).contains(query)
                     || address.contains(query) || clientId.contains(query))) continue;
             if (total >= offset && page.size() < limit) {
-                page.add(Map.of(
-                        "nickname", nickname,
-                        "ip", address,
-                        "port", client.port(),
-                        "listenPort", client.listenPort(),
-                        "clientId", clientId,
-                        "idType", client.isHighId() ? "HighID" : "LowID",
-                        "publishedFiles", client.publishedFilesCount().get(),
-                        "connectedSeconds", Math.max(0, (now - client.connectedAt()) / 1000)
-                ));
+                Map<String, Object> row = new java.util.LinkedHashMap<>();
+                row.put("nickname", nickname);
+                row.put("ip", address);
+                row.put("country", server.country(client.address()));
+                row.put("port", client.port());
+                row.put("listenPort", client.listenPort());
+                row.put("clientId", clientId);
+                row.put("idType", client.isHighId() ? "HighID" : "LowID");
+                row.put("publishedFiles", client.publishedFilesCount().get());
+                row.put("connectedSeconds", Math.max(0, (now - client.connectedAt()) / 1000));
+                page.add(row);
             }
             total++;
         }
@@ -657,6 +700,7 @@ final class AdminWebPanel implements AutoCloseable {
             row.put("name", peer.name());
             row.put("type", "eD2K server");
             row.put("address", peer.endpoint().address().getHostAddress());
+            row.put("country", server.country(peer.endpoint().address()));
             row.put("tcpPort", peer.endpoint().tcpPort());
             row.put("udpPort", peer.endpoint().udpPort());
             row.put("kadVersion", null);
@@ -670,6 +714,7 @@ final class AdminWebPanel implements AutoCloseable {
                 row.put("name", "Kad node " + contact.id());
                 row.put("type", "Kad contact");
                 row.put("address", contact.address().getHostAddress());
+                row.put("country", server.country(contact.address()));
                 row.put("tcpPort", contact.tcpPort());
                 row.put("udpPort", contact.udpPort());
                 row.put("kadVersion", contact.kadVersion());
@@ -687,8 +732,10 @@ final class AdminWebPanel implements AutoCloseable {
             Map<String, Object> row = new java.util.LinkedHashMap<>();
             row.put("name", view.name());
             row.put("state", view.state());
+            row.put("version", view.version());
             row.put("source", view.source().name().toLowerCase(Locale.ROOT));
             row.put("address", view.endpoint().address().getHostAddress());
+            row.put("country", server.country(view.endpoint().address()));
             row.put("tcpPort", view.endpoint().tcpPort());
             row.put("udpPort", view.endpoint().udpPort());
             row.put("users", view.users());
@@ -920,7 +967,10 @@ final class AdminWebPanel implements AutoCloseable {
         var config = server.getConfig();
         List<Map<String, Object>> parameters = new ArrayList<>(ConfigParameter.ordered().size());
         Map<String, String> pending = server.pendingRestart();
-        for (ConfigParameter parameter : ConfigParameter.ordered()) {
+        // By group of the Settings menu, in the order of ConfigParameter.Category, then in the order of the file
+        List<ConfigParameter> byCategory = ConfigParameter.ordered().stream()
+                .sorted(java.util.Comparator.comparingInt(p -> p.category().ordinal())).toList();
+        for (ConfigParameter parameter : byCategory) {
             Object value;
             if (parameter == ConfigParameter.FAKE_FILE_DETECTION_ENABLED) {
                 value = server.getFakeFileDetector().isEnabled();
@@ -933,6 +983,9 @@ final class AdminWebPanel implements AutoCloseable {
             entry.put("type", parameter.type().name());
             entry.put("scope", parameter.scope().id());
             entry.put("scopeLabel", parameter.scope().label());
+            // The Settings menu shows the parameters by group, in the order of ConfigParameter.Category
+            entry.put("category", parameter.category().id());
+            entry.put("categoryLabel", parameter.category().label());
             entry.put("description", parameter.description());
             entry.put("multiline", parameter.multiline());
             entry.put("pending", pending.getOrDefault(parameter.key(), ""));

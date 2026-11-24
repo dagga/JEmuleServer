@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react';
 import { DataTable, useRowFilter, withExtraColumns, type Column } from '@/components/DataTable';
 import { ConfirmDialog } from '@/components/Dialog';
+import { countryColumn } from '@/components/Flag';
 import { Card, LoadState, Notice, PageHeader } from '@/components/ui';
 import { message, post } from '@/lib/api';
 import { fmt } from '@/lib/format';
@@ -21,7 +22,13 @@ const COLUMNS: Column<ServerRow>[] = [
     render: (r) => <span className={'badge badge-' + String(r.state)}>{r.state}{r.banned ? ' · banned' : ''}</span>,
     sortValue: (r) => STATE_ORDER[r.state] ?? 9,
   },
+  {
+    key: 'version', label: 'Version', width: '10ch', hint: 'Server software version it gives in its description (ST_VERSION)',
+    render: (r) => (r.version == null ? <span className="muted">–</span> : <span className="mono">{r.version}</span>),
+    sortValue: (r) => (r.version == null ? '' : String(r.version).replace(/\d+/g, (n) => n.padStart(6, '0'))),
+  },
   { key: 'source', label: 'Source', width: '16ch' },
+  countryColumn<ServerRow>(),
   { key: 'address', label: 'Address', kind: 'code', width: '22ch' },
   { key: 'tcpPort', label: 'TCP port', kind: 'int' },
   { key: 'udpPort', label: 'UDP port', kind: 'int' },

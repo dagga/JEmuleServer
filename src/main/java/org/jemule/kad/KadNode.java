@@ -91,6 +91,7 @@ public class KadNode implements AutoCloseable {
         this.searchBridge = new KadSearchBridge(routingTable, udpService, abuseFilter, fakeDetector, fileIndex, db,
                 KadSearchBridge.DEFAULT_ALPHA_NODES, config.searchTimeoutSeconds() * 1000L,
                 config.autoIngestToH2(), config.minSourcesForIngest());
+        this.searchBridge.setWordSearchMinBytes(config.wordSearchMinBytes());
         this.nodesUpdater = nodesCache != null && !config.nodesUrls().isBlank()
                 ? new KadNodesUpdater(bootstrapManager, nodesCache, config.nodesSources())
                 : null;

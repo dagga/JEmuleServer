@@ -84,13 +84,24 @@ export function Delta({ now, before, span }: { now: number; before: number | nul
   );
 }
 
-export function Tile({ label, value, sub, extra, wide }: { label: ReactNode; value: ReactNode; sub: ReactNode; extra?: ReactNode; wide?: boolean }) {
+/**
+ * A headline figure. A feature turned off with nothing to show ({@code off}) is a quiet tile at the end of the grid,
+ * its figures folded away.
+ */
+export function Tile({ label, value, sub, extra, wide, off }: {
+  label: ReactNode; value: ReactNode; sub: ReactNode; extra?: ReactNode; wide?: boolean; off?: boolean;
+}) {
   return (
-    <div className={'card tile' + (wide ? ' tileWide' : '')}>
+    <div className={'card tile' + (wide ? ' tileWide' : '') + (off ? ' tileOff' : '')}>
       <div className="label">{label}</div>
       <div className="value">{value}</div>
       {extra}
-      <div className="sub">{sub}</div>
+      {off ? (
+        <details>
+          <summary>Figures</summary>
+          <div className="sub">{sub}</div>
+        </details>
+      ) : <div className="sub">{sub}</div>}
     </div>
   );
 }
@@ -106,6 +117,13 @@ export function Empty({ children }: { children: ReactNode }) {
 /** Loading, failure or nothing: the placeholder of a view whose data is not there yet. */
 export function LoadState({ loading, error }: { loading: boolean; error: string | null }) {
   if (error) return <div className="card empty errorText">Request failed: {error}</div>;
-  if (loading) return <div className="card empty">Loading…</div>;
+  if (loading) {
+    return (
+      <div className="card skeleton" aria-busy="true">
+        <span className="visuallyHidden">Loading…</span>
+        <i /><i /><i /><i />
+      </div>
+    );
+  }
   return null;
 }

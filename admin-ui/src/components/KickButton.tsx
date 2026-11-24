@@ -2,12 +2,14 @@
 
 import { useState } from 'react';
 import type { Column } from '@/components/DataTable';
+import { countryColumn } from '@/components/Flag';
 import { message, post } from '@/lib/api';
 
 export type Client = Record<string, any>;
 
 export const CLIENT_COLUMNS: Column<Client>[] = [
   { key: 'nickname', label: 'Nickname', width: '24ch' },
+  countryColumn<Client>(),
   { key: 'ip', label: 'IP', kind: 'code', width: '22ch' },
   { key: 'port', label: 'Port', kind: 'int' },
   { key: 'listenPort', label: 'Listen port', kind: 'int' },

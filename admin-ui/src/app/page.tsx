@@ -176,6 +176,7 @@ function Figures({ o }: { o: Obj }) {
         <Tile
           label="Kad and server sources for clients"
           value={fmt(k.sourcesDelivered || 0)}
+          off={!k.enabled && !k.sourcesDelivered}
           extra={k.enabled ? <State level="good" label="Enabled" /> : <Disabled>Disabled (kadSourceSearchEnabled)</Disabled>}
           sub={'sent in ' + fmt(k.answersSent || 0) + ' answers · ' + fmt(k.searches || 0) + ' searches, ' + fmt(k.cacheHits || 0)
             + ' from cache · ' + fmt(ss.highIdSources || 0) + ' HighID sources from other servers · ' + fmt(k.firewalledMatched || 0)
@@ -185,6 +186,7 @@ function Figures({ o }: { o: Obj }) {
         <Tile
           label="Index update from eD2K index peers"
           value={fmt(iu.newFiles || 0)}
+          off={!iu.enabled && !iu.newFiles}
           extra={iu.enabled ? <State level="good" label="Enabled" /> : <Disabled>Disabled (serverIndexUpdateEnabled)</Disabled>}
           sub={'new files since the last start · ' + fmt(iu.searches || 0) + ' searches (' + fmt(iu.refinements || 0) + ' refinements, '
             + fmt(iu.fullPages || 0) + ' full pages) on ' + fmt(iu.servers || 0) + ' peers · ' + fmt(iu.accepted || 0) + ' of '
@@ -193,6 +195,7 @@ function Figures({ o }: { o: Obj }) {
         <Tile
           label="Relay server"
           value={fmt(r.searches || 0)}
+          off={!r.active && !r.searches}
           extra={r.active ? <State level="good" label="Relay mode: this index is only a fallback" /> : <Disabled>Not configured (relayServer)</Disabled>}
           sub={'searches played on ' + (r.server || 'no relay server')
             + (r.announcedFiles != null ? ' · ' + fmt(r.announcedFiles) + ' files announced to the clients' : '')
@@ -213,6 +216,7 @@ function Figures({ o }: { o: Obj }) {
         <Tile
           label="NAT traversal"
           value={fmt(nat.sessions || 0)}
+          off={!nat.callbackEnabled && !nat.sessions}
           extra={nat.callbackEnabled
             ? <State level="good" label={'Callback' + (nat.tokenEnabled ? ', token' : '') + (nat.holePunchEnabled ? ', hole punch' : '')
               + (nat.crossServerEnabled ? ', cross-server' : '')} />
@@ -228,6 +232,7 @@ function Figures({ o }: { o: Obj }) {
         <Tile
           label="OFFERFILES v1"
           value={fmt(v.newFiles)}
+          off={!v.enabled && !v.newFiles}
           extra={v.enabled ? <State level="good" label="Enabled" /> : <Disabled>Disabled (offerFilesV1Enabled)</Disabled>}
           sub={'new files from fast-publishing clients since the last start · ' + fmt(v.newFilesLegacy) + ' from legacy clients · '
             + fmt(v.sessionsAdvertised) + ' of ' + fmt(v.loginsAsked) + ' asking logins answered'}

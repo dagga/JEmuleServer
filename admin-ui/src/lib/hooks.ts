@@ -56,6 +56,21 @@ export function useInterval(fn: () => void, delay: number | null) {
   }, [delay]);
 }
 
+/**
+ * The fragment of the address without its '#', followed as it changes: the section of the Settings view, chosen in
+ * its sub-menu by plain links (a fragment link fires hashchange, a router navigation would not).
+ */
+export function useHash(): string {
+  const [hash, setHash] = useState('');
+  useEffect(() => {
+    const read = () => setHash(decodeURIComponent(window.location.hash.replace(/^#/, '')));
+    read();
+    window.addEventListener('hashchange', read);
+    return () => window.removeEventListener('hashchange', read);
+  }, []);
+  return hash;
+}
+
 /** Width of an element, followed as it changes. */
 export function useWidth<E extends HTMLElement>(): [React.RefObject<E | null>, number] {
   const ref = useRef<E>(null);

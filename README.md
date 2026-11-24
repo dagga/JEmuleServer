@@ -691,8 +691,8 @@ that brings this content to its clients without exposing them to illicit files:
   seconds (under the 3 requests a minute a node accepts), while its pages come back full, until the search has kept
   60,000 results from all its nodes (files with at least `kadMinSourcesForIngest` sources that pass the filters).
   These files only go to the index; the Searches view counts these background pages.
-- **Word searches for the index**: Kad indexes files by word, so the other words of a search, of at least 4
-  characters (5 at most, longest first, never the words of excluded terms nor a word the child abuse filter matches),
+- **Word searches for the index**: Kad indexes files by word, so the other words of a search, of at least
+  `kadWordSearchMinBytes` UTF-8 bytes (3 by default, Kad's own rule; 5 at most, longest first, never the words of excluded terms nor a word the child abuse filter matches),
   are then searched alone in their own keyword index, in the background. The client neither waits for them nor gets
   their files: their clean files only go to the index, even those not matching the search. These searches wait in a
   queue of 100 words (further words are dropped), 2 at a time and 20 a minute at most, and are counted in the admin
@@ -772,9 +772,10 @@ kadMaxRoutingContacts=500
 kadForkSearchEnabled=true
 kadSearchTimeoutSeconds=4
 kadAutoIngestToH2=true
-kadMinSourcesForIngest=1
+kadMinSourcesForIngest=2
 kadNodesUrls=https://upd.emule-security.org/nodes.dat,http://www.alldivx.de/nodes/nodes.dat
 kadForkGlobalSearches=true
+kadWordSearchMinBytes=3
 kadSourceSearchEnabled=false
 kadSourceSearchMinLocal=10
 kadSourceSearchesPerMinute=60

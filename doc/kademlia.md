@@ -171,9 +171,10 @@ The keys live in [`server.properties`](../server.properties):
 | `kadForkSearchEnabled` | `true` | Forks the client searches to Kad. |
 | `kadSearchTimeoutSeconds` | `4` | Maximum wait for the Kad answers of a cold search. |
 | `kadAutoIngestToH2` | `true` | Stores and indexes the clean Kad files. |
-| `kadMinSourcesForIngest` | `1` | Minimum number of sources for a Kad file to be delivered and stored. |
+| `kadMinSourcesForIngest` | `2` | Minimum number of sources for a Kad file to be delivered and stored. |
 | `kadNodesUrls` | eMule Security + alldivx | Comma-separated `nodes.dat` URLs; downloaded at startup, refreshed daily and cached next to the database (empty = disabled). |
 | `kadForkGlobalSearches` | `true` | Also searches on Kad, in the background, the UDP global searches of other servers' clients (section 3.5). |
+| `kadWordSearchMinBytes` | `3` | UTF-8 bytes a word of a multi-word search needs to be searched alone on Kad in the background (5 words at most per search); 3, the least, is Kad's own rule. |
 
 Open the Kad UDP port in the firewall (`4672/udp` by default) so that the answers of the Kad nodes reach the server.
 

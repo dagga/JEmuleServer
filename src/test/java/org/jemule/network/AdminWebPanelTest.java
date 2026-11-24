@@ -101,7 +101,7 @@ class AdminWebPanelTest {
                 ServerGossip.ServerSource.SERVER_MET,
                 new ServerGossip.Endpoint(InetAddress.getLoopbackAddress(), 4661),
                 120L, 340L, 500L, 4000L, 6000L, 7L, true, 12L,
-                System.currentTimeMillis(), System.currentTimeMillis(), 0);
+                System.currentTimeMillis(), System.currentTimeMillis(), 0, "17.15");
         when(server.getServerViews()).thenReturn(List.of(view));
 
         try (AdminWebPanel panel = new AdminWebPanel(server)) {
@@ -114,6 +114,7 @@ class AdminWebPanelTest {
             assertTrue(response.body().contains("\"source\":\"server_met\""), response.body());
             assertTrue(response.body().contains("\"users\":120"), response.body());
             assertTrue(response.body().contains("\"latencyMs\":12"), response.body());
+            assertTrue(response.body().contains("\"version\":\"17.15\""), response.body());
         }
     }
 
@@ -229,6 +230,39 @@ class AdminWebPanelTest {
     }
 
     @Test
+    void statusHistoryGivesTheMetricsAndTheirSamples() throws Exception {
+        Server server = mock(Server.class);
+        when(server.getConfig()).thenReturn(ServerConfig.DEFAULT.withAdminWebPort(0));
+        java.util.concurrent.atomic.AtomicLong refused = new java.util.concurrent.atomic.AtomicLong(3);
+        org.jemule.core.StatusHistory history = new org.jemule.core.StatusHistory()
+                .add("connectedClients", "Connected clients", "clients", org.jemule.core.StatusHistory.Kind.GAUGE, () -> 12)
+                .add("systemLoad", "System load", "", org.jemule.core.StatusHistory.Kind.GAUGE, () -> Double.NaN)
+                .add("clientConnectionsRefused", "Connections refused", "connections",
+                        org.jemule.core.StatusHistory.Kind.COUNTER, refused::get);
+        long now = System.currentTimeMillis();
+        history.record(now - 60_000);
+        refused.set(5);
+        history.record(now);
+        when(server.getStatusHistory()).thenReturn(history);
+
+        try (AdminWebPanel panel = new AdminWebPanel(server)) {
+            panel.start(0);
+            HttpResponse<String> response = HttpClient.newHttpClient().send(
+                    HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + panel.port() + "/api/status/history?hours=1"))
+                            .GET().build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, response.statusCode());
+            String body = response.body();
+            assertTrue(body.startsWith("{\"intervalSeconds\":60,"), body);
+            assertTrue(body.contains("{\"key\":\"connectedClients\",\"label\":\"Connected clients\",\"unit\":\"clients\","
+                    + "\"kind\":\"gauge\"}"), body);
+            assertTrue(body.contains("\"kind\":\"counter\""), body);
+            // A value that cannot be read is null; the counters are sent as counted, the view draws their increase
+            assertTrue(body.contains("[" + (now - 60_000) + ",12,null,3]"), body);
+            assertTrue(body.contains("[" + now + ",12,null,5]"), body);
+        }
+    }
+
+    @Test
     void settingsListsEveryEditableParameter() throws Exception {
         Server server = mock(Server.class);
         FakeFileDetector detector = mock(FakeFileDetector.class);
@@ -250,6 +284,12 @@ class AdminWebPanelTest {
             assertTrue(entry(response.body(), "welcomeMessage").contains("\"multiline\":true"), response.body());
             assertTrue(entry(response.body(), "loginMessage").contains("\"multiline\":true"), response.body());
             assertTrue(entry(response.body(), "serverName").contains("\"multiline\":false"), response.body());
+            // Each parameter comes with its group of the Settings menu
+            assertTrue(entry(response.body(), "serverName").contains("\"category\":\"server\",\"categoryLabel\":\"Server\""),
+                    response.body());
+            assertTrue(entry(response.body(), "kadEnabled").contains("\"category\":\"kad\""), response.body());
+            assertTrue(entry(response.body(), "bannedHashPrefixes").contains("\"category\":\"protection\""),
+                    response.body());
         }
     }
 
@@ -352,7 +392,7 @@ class AdminWebPanelTest {
                 .thenAnswer(call -> bans.unban(call.getArgument(0)));
         ServerGossip.ServerView view = new ServerGossip.ServerView("Listed", "verified",
                 ServerGossip.ServerSource.GOSSIP, new ServerGossip.Endpoint(InetAddress.getByName("198.51.100.9"), 4661),
-                null, null, null, null, null, null, false, null, null, null, 0);
+                null, null, null, null, null, null, false, null, null, null, 0, null);
         when(server.getServerViews()).thenReturn(List.of(view));
 
         try (AdminWebPanel panel = new AdminWebPanel(server)) {
