@@ -101,6 +101,8 @@ public enum ConfigParameter {
     ADMIN_BIND_ADDRESS("adminBindAddress", Type.STRING, Scope.ADMIN, 0, 0, "Admin interfaces bind address"),
     ADMIN_ALLOWED_IPS("adminAllowedIps", Type.STRING, Scope.ADMIN, 0, 0, "Admin allowed IPs / CIDR blocks"),
     ADMIN_ALLOWED_MACS("adminAllowedMacs", Type.STRING, Scope.ADMIN, 0, 0, "Admin allowed MAC addresses"),
+    GEO_IP_URL("geoIpUrl", Type.STRING, Scope.RESTART, 0, 0,
+            "Country database of IP addresses shown by the web panel ({month} = yyyy-MM, empty = no country)"),
     SERVER_PEERS("serverPeers", Type.STRING, Scope.RESTART, 0, 0, "eD2K server seeds (host:port,...)"),
     SERVER_MET_URL("serverMetUrl", Type.STRING, Scope.RESTART, 0, 0, "HTTPS server.met source (empty = disabled)"),
     KAD_ENABLED("kadEnabled", Type.BOOLEAN, Scope.RESTART, 0, 0, "Embedded Kademlia node"),
@@ -121,6 +123,10 @@ public enum ConfigParameter {
             "nodes.dat sources used to bootstrap Kad (comma-separated, empty = disabled)"),
     KAD_FORK_GLOBAL_SEARCHES("kadForkGlobalSearches", Type.BOOLEAN, Scope.RESTART, 0, 0,
             "Search the UDP global searches of other servers' clients on Kad to populate the database"),
+    KAD_WORD_SEARCH_MIN_BYTES("kadWordSearchMinBytes", Type.INTEGER, Scope.RESTART, KadConfig.MIN_WORD_SEARCH_BYTES,
+            KadConfig.MAX_WORD_SEARCH_MIN_BYTES,
+            "UTF-8 bytes a word of a multi-word search needs to be searched alone on Kad in the background"
+                    + " (3 = Kad's own rule)"),
     OFFER_FILES_V1_ENABLED("offerFilesV1Enabled", Type.BOOLEAN, Scope.HOT, 0, 0,
             "Answer clients asking for OFFERFILES v1 at login and hold them to its pace (new logins)"),
     OFFER_FILES_BATCH_MAX("offerFilesBatchMax", Type.INTEGER, Scope.HOT, 1, 100_000,
@@ -274,14 +280,15 @@ public enum ConfigParameter {
                  BANNED_CLIENT_NICKS, BAN_CLIENTS_PUBLISHING_BANNED_HASHES -> Category.PROTECTION;
             case KAD_ENABLED, KAD_PORT, KAD_BOOTSTRAP_FROM_CLIENTS, KAD_MAX_ROUTING_CONTACTS, KAD_FORK_SEARCH_ENABLED,
                  KAD_SEARCH_TIMEOUT_SECONDS, KAD_AUTO_INGEST_TO_H2, KAD_MIN_SOURCES_FOR_INGEST, KAD_NODES_URLS,
-                 KAD_FORK_GLOBAL_SEARCHES, KAD_SOURCE_SEARCH_ENABLED, KAD_SOURCE_SEARCH_MIN_LOCAL,
+                 KAD_FORK_GLOBAL_SEARCHES, KAD_WORD_SEARCH_MIN_BYTES, KAD_SOURCE_SEARCH_ENABLED, KAD_SOURCE_SEARCH_MIN_LOCAL,
                  KAD_SOURCE_SEARCHES_PER_MINUTE -> Category.KAD;
             case SERVER_PEERS, SERVER_MET_URL, SERVER_INDEX_UPDATE_ENABLED, SERVER_INDEX_UPDATE_MAX_PER_HOUR,
                  SERVER_INDEX_UPDATE_MAX_PER_DAY, SERVER_INDEX_UPDATE_MIN_SOURCES, RELAY_SERVER, RELAY_FEED_PORT,
                  RELAY_CLIENTS -> Category.SERVERS;
             case DATABASE_PATH, DATABASE_TYPE, DATABASE_URL, DATABASE_USER, DATABASE_IMPORT_FROM_H2,
                  CB_FAILURE_RATE_THRESHOLD, CB_MINIMUM_NUMBER_OF_CALLS, CB_WAIT_DURATION_IN_SECONDS -> Category.DATABASE;
-            case ADMIN_PORT, ADMIN_WEB_PORT, ADMIN_BIND_ADDRESS, ADMIN_ALLOWED_IPS, ADMIN_ALLOWED_MACS -> Category.ADMIN;
+            case ADMIN_PORT, ADMIN_WEB_PORT, ADMIN_BIND_ADDRESS, ADMIN_ALLOWED_IPS, ADMIN_ALLOWED_MACS,
+                 GEO_IP_URL -> Category.ADMIN;
         };
     }
 
@@ -412,6 +419,15 @@ public enum ConfigParameter {
             }
             case "databaseType" -> DatabaseConfig.parseType(value);
             case "bannedHashPrefixes" -> org.jemule.core.HashPrefixFilter.parse(value);
+            case "geoIpUrl" -> {
+                if (!value.isBlank()) {
+                    String url = value.strip().replace("{month}", "2000-01");
+                    if (!(url.startsWith("https://") || url.startsWith("http://"))) {
+                        throw new IllegalArgumentException(key + " must be an http(s) URL or empty");
+                    }
+                    java.net.URI.create(url); // throws when malformed
+                }
+            }
             case "bannedClientNicks" -> {
                 if (value.chars().anyMatch(Character::isISOControl)) {
                     throw new IllegalArgumentException(key + " must not contain control characters");

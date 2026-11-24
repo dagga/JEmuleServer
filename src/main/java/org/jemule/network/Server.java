@@ -110,6 +110,9 @@ public class Server {
     /** eD2K servers banned by the administrator (banned_servers). */
     private final ServerBans serverBans = new ServerBans();
     private final IPFilterUpdater ipFilterUpdater;
+    /** Countries of the addresses shown by the web panel; null when geoIpUrl is empty. */
+    private final org.jemule.core.GeoIpUpdater geoIp;
+    private final java.util.concurrent.atomic.AtomicBoolean geoIpStarted = new java.util.concurrent.atomic.AtomicBoolean();
     private final FakeFileDetector fakeFileDetector;
     private final ExecutorService executor;
     private final DatabaseManager db;
@@ -364,6 +367,8 @@ public class Server {
         this.floodProtector = new FloodProtector(config.floodMaxRequestsPerSecond());
         this.ipFilter = new IPFilter();
         this.ipFilterUpdater = createIpFilterUpdater(config.ipFilterPath());
+        this.geoIp = config.geoIpUrl().isEmpty() ? null
+                : new org.jemule.core.GeoIpUpdater(config.geoIpUrl(), geoIpCachePath(config));
         this.serverGossip = new ServerGossip(config.serverPeers(), this.ipFilter, serverBans);
         this.serverGossip.useSockets(() -> boundUdpSockets.get(config.port() + 4),
                 () -> boundUdpSockets.get(config.port() + 14), this::buildGlobServStatRes);
@@ -503,6 +508,22 @@ public class Server {
         } catch (RuntimeException e) {
             return null;
         }
+    }
+
+    /** Cache of the country database, next to the H2 database when its path is a real file. */
+    private static java.nio.file.Path geoIpCachePath(ServerConfig config) {
+        String path = config.databasePath();
+        if (path == null || path.isBlank() || path.trim().startsWith("mem:")) return null;
+        try {
+            return java.nio.file.Path.of(path.trim() + ".geoip.csv.gz");
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    /** The ISO country code of an address for the web panel, or null when unknown or not configured. */
+    public String country(java.net.InetAddress address) {
+        return geoIp == null ? null : geoIp.country(address);
     }
 
     private IPFilterUpdater createIpFilterUpdater(String filterPath) {
@@ -1027,6 +1048,8 @@ public class Server {
 
     private void startWebPanel(AdminWebPanel panel, int port) {
         stopAdminWeb = false;
+        // The countries are only shown by the web panel: read or downloaded once it runs
+        if (geoIp != null && geoIpStarted.compareAndSet(false, true)) geoIp.start();
         ServerThreads.start(Tier.ADMIN, "AdminWebSupervisor", () -> {
             while (running && !stopAdminWeb) {
                 try {
@@ -1927,6 +1950,7 @@ public class Server {
         serverIndexUpdater.close();
         serverRelay.close();
         if (ipFilterUpdater != null) ipFilterUpdater.close();
+        if (geoIp != null) geoIp.close();
         kadSearchBridge = null;
         if (kadNode != null) {
             kadNode.close();

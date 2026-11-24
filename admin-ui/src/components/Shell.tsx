@@ -77,6 +77,29 @@ function Icon({ path }: { path: string }) {
 
 const SETTINGS = '/settings/';
 
+const THEME_KEY = 'jemule.theme';
+const SUN = 'M10 6.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 1 0 0-7M10 1.5v2M10 16.5v2M1.5 10h2M16.5 10h2M4 4l1.4 1.4M14.6 14.6L16 16M4 16l1.4-1.4M14.6 5.4L16 4';
+const MOON = 'M16.5 12.5A7 7 0 0 1 7.5 3.5a7 7 0 1 0 9 9z';
+
+/** Light, the colors of the logo, unless the administrator chose dark (remembered in this browser). */
+function useTheme(): [boolean, () => void] {
+  const [dark, setDark] = useState(false);
+  useEffect(() => setDark(document.documentElement.dataset.theme === 'dark'), []);
+  function toggle() {
+    const next = !dark;
+    setDark(next);
+    if (next) document.documentElement.dataset.theme = 'dark';
+    else delete document.documentElement.dataset.theme;
+    try {
+      if (next) window.localStorage.setItem(THEME_KEY, 'dark');
+      else window.localStorage.removeItem(THEME_KEY);
+    } catch {
+      // not remembered, still applied
+    }
+  }
+  return [dark, toggle];
+}
+
 const normalize = (path: string) => (path.endsWith('/') ? path : path + '/');
 
 export function Shell({ children }: { children: ReactNode }) {
@@ -87,6 +110,7 @@ export function Shell({ children }: { children: ReactNode }) {
   // The Settings sub-menu, read once the Settings view is opened
   const [sections, setSections] = useState<SettingsSection[]>([]);
   const hash = useHash();
+  const [dark, toggleTheme] = useTheme();
   const onSettings = pathname === SETTINGS;
 
   useEffect(() => {
@@ -147,7 +171,18 @@ export function Shell({ children }: { children: ReactNode }) {
               </div>
             ))}
           </nav>
-          <p className="sideNote">Administration only. Potential bots are identified by nickname heuristic, not verified.</p>
+          {/* Names the theme a click gives */}
+          <button type="button" className="themeSwitch" onClick={toggleTheme} aria-label={dark ? 'Switch to the light theme' : 'Switch to the dark theme'}>
+            <svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true">
+              <path d={dark ? SUN : MOON} fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            <span>{dark ? 'Light theme' : 'Dark theme'}</span>
+          </button>
+          <p className="sideNote">
+            Administration only. Potential bots are identified by nickname heuristic, not verified.
+            {/* The attribution the licence of the country database asks for (CC BY 4.0) */}
+            {' '}Countries: <a href="https://db-ip.com" target="_blank" rel="noopener noreferrer">IP Geolocation by DB-IP</a>.
+          </p>
         </aside>
         <main className="main">{children}</main>
       </div>

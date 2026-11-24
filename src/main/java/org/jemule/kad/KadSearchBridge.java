@@ -98,8 +98,8 @@ public class KadSearchBridge implements AutoCloseable {
     public static final int MAX_REPLAYS = 3;
     /** Other words of one client search searched at most on Kad in the background, for the index. */
     public static final int MAX_WORD_SEARCHES = 5;
-    /** Characters a word needs to be searched in the background (shorter words have too large an index). */
-    public static final int MIN_WORD_CHARS = 4;
+    /** UTF-8 bytes a word needs to be searched in the background by default: Kad's own rule (kadWordSearchMinBytes). */
+    public static final int MIN_WORD_BYTES = org.jemule.config.KadConfig.MIN_WORD_SEARCH_BYTES;
     /** Words waiting for their background search at most; the words of the next client searches are dropped. */
     static final int MAX_QUEUED_WORD_SEARCHES = 100;
     /** Background word searches running at the same time at most. */
@@ -128,6 +128,8 @@ public class KadSearchBridge implements AutoCloseable {
     private final long searchTimeoutMs;
     private final boolean autoIngestToH2;
     private final int minSourcesForIngest;
+    /** UTF-8 bytes a word needs to be searched alone in the background (kadWordSearchMinBytes). */
+    private volatile int wordSearchMinBytes = MIN_WORD_BYTES;
 
     private final ConcurrentHashMap<SessionKey, KadSearchSession> activeSessions = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<KadId, NodeLookup> pendingLookups = new ConcurrentHashMap<>();
@@ -338,6 +340,11 @@ public class KadSearchBridge implements AutoCloseable {
         this.minSourcesForIngest = Math.max(0, minSourcesForIngest);
     }
 
+    /** Sets the UTF-8 bytes a word of a client search needs to be searched alone in the background (at least 3). */
+    public void setWordSearchMinBytes(int bytes) {
+        wordSearchMinBytes = Math.max(MIN_WORD_BYTES, bytes);
+    }
+
     public KadSearchBridge(KadRoutingTable routingTable, KadUdpService udpService,
                            ChildAbuseFilter abuseFilter, FakeFileDetector fakeDetector,
                            FileIndex fileIndex, DatabaseManager databaseManager) {
@@ -404,7 +411,7 @@ public class KadSearchBridge implements AutoCloseable {
      * the keyword index, and the whole query is sent along (restrictive search), so that the index holders only
      * count matching entries in the 300 they return.
      * <p>
-     * Kad indexes files by word: the other words of the query, of at least {@link #MIN_WORD_CHARS} characters
+     * Kad indexes files by word: the other words of the query, of at least {@code kadWordSearchMinBytes} UTF-8 bytes
      * ({@link #MAX_WORD_SEARCHES} at most, longest first), are queued to be searched alone later, in the background.
      * Their files only go to the index when clean, even those not matching the query: the client never waits for
      * them nor gets them. A query matching the child abuse filter is never sent, nor any word the filter matches.
@@ -443,7 +450,8 @@ public class KadSearchBridge implements AutoCloseable {
         int words = 0;
         for (String word : KadSearchTerms.keywords(query)) {
             if (words == MAX_WORD_SEARCHES) break;
-            if (word.equals(searched) || word.codePointCount(0, word.length()) < MIN_WORD_CHARS
+            if (word.equals(searched)
+                    || word.getBytes(java.nio.charset.StandardCharsets.UTF_8).length < wordSearchMinBytes
                     || abuseFilter.matches(word)) {
                 continue;
             }

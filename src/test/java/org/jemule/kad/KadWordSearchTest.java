@@ -174,30 +174,45 @@ class KadWordSearchTest {
     }
 
     @Test
-    void wordsNeedFourCharactersToBeSearchedInTheBackground() throws Exception {
+    void wordsAreSearchedInTheBackgroundFromKadsThreeBytes() throws Exception {
         addContact();
-        start("documentary", "rover", "dune", "élan", "été");
+        start("documentary", "rover", "dune", "été", "sky");
 
-        bridge.forkSearch(new SearchQuery.TermQuery("documentary rover dune élan été", SearchQuery.ID_FILENAME))
+        bridge.forkSearch(new SearchQuery.TermQuery("documentary rover dune été sky ab", SearchQuery.ID_FILENAME))
                 .get(5, TimeUnit.SECONDS);
-        runWordSearchesUntil(() -> bridge.getWordSearches() == 3 && ingested.size() == 5);
+        runWordSearchesUntil(() -> bridge.getWordSearches() == 4 && ingested.size() == 6);
 
-        // "été" has 3 characters (5 bytes): never searched alone; "dune" and "élan" (5 bytes) have 4
-        assertEquals(hashes("documentary", "rover", "dune", "élan"), requests.keySet());
-        assertTrue(ingested.containsAll(Set.of(onlyHash("rover"), onlyHash("dune"), onlyHash("élan"))));
+        // Every word Kad indexes, of 3 UTF-8 bytes or more ("sky", "été" of 5 bytes), not "ab"
+        assertEquals(hashes("documentary", "rover", "dune", "été", "sky"), requests.keySet());
+        assertTrue(ingested.containsAll(Set.of(onlyHash("rover"), onlyHash("dune"), onlyHash("été"),
+                onlyHash("sky"))));
+    }
+
+    @Test
+    void theLengthOfTheWordsSearchedInTheBackgroundIsASetting() throws Exception {
+        addContact();
+        start("documentary", "rover", "dune", "élan");
+        bridge.setWordSearchMinBytes(5); // kadWordSearchMinBytes=5
+
+        bridge.forkSearch(new SearchQuery.TermQuery("documentary rover dune élan", SearchQuery.ID_FILENAME))
+                .get(5, TimeUnit.SECONDS);
+        runWordSearchesUntil(() -> bridge.getWordSearches() == 2 && ingested.size() == 4);
+
+        // "dune" has 4 bytes; "élan" 5, as "rover"
+        assertEquals(hashes("documentary", "rover", "élan"), requests.keySet());
     }
 
     @Test
     void theQueryKeywordIsSearchedForTheClientEvenWhenShort() throws Exception {
         addContact();
-        start("dune", "sky");
+        start("dune", "sk");
 
-        List<FileMetadata> results = bridge.forkSearch(new SearchQuery.TermQuery("dune sky", SearchQuery.ID_FILENAME))
+        List<FileMetadata> results = bridge.forkSearch(new SearchQuery.TermQuery("dune sk", SearchQuery.ID_FILENAME))
                 .get(5, TimeUnit.SECONDS);
         bridge.startQueuedWordSearches(System.currentTimeMillis());
 
         assertEquals(2, results.size(), "as before");
-        assertEquals(hashes("dune"), requests.keySet(), "no other word of 4 characters");
+        assertEquals(hashes("dune"), requests.keySet(), "no other word Kad indexes (3 bytes)");
         assertEquals(0, bridge.getWordSearches());
     }
 

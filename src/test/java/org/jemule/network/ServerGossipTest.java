@@ -194,6 +194,23 @@ class ServerGossipTest {
     }
 
     @Test
+    void readsTheServerVersionAsEmuleShowsIt() {
+        int challenge = 0x1234F0FF;
+        // ST_VERSION as a string (eMule-Nordic) and as (major << 16) | minor (Mazinga, 17.15)
+        assertEquals("18.1", ServerGossip.parseDescription(HexFormat.of().parseHex(
+                "e3a3fff0341203000000020100010c00654d756c652d4e6f726469630201000b1200214e464f2d53657276657220762e"
+                        + "31382e3102010091040031382e31"), challenge).version());
+        assertEquals("17.15", ServerGossip.parseDescription(HexFormat.of().parseHex(
+                "e3a3fff0341204000000020100010e004d617a696e6761205365727665720201000b27004d617a696e676120486967"
+                        + "682d706572666f726d616e63652065446f6e6b657920736572766572020100930e00343233332c343233342c3432"
+                        + "3335030100910f001100"), challenge).version());
+        assertEquals("17.05", ServerGossip.version((17 << 16) | 5));
+        assertNull(ServerGossip.version("  "));
+        assertNull(ServerGossip.version(null));
+        assertEquals(32, ServerGossip.version("x".repeat(100)).length());
+    }
+
+    @Test
     void requiresWellFormedServerDescriptionAndExcludesMldonkeyIdentity() throws Exception {
         int descriptionChallenge = 0x5678F0FF;
         assertEquals("Verified eD2K", ServerGossip.validateDescription(

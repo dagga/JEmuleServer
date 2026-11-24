@@ -101,7 +101,7 @@ class AdminWebPanelTest {
                 ServerGossip.ServerSource.SERVER_MET,
                 new ServerGossip.Endpoint(InetAddress.getLoopbackAddress(), 4661),
                 120L, 340L, 500L, 4000L, 6000L, 7L, true, 12L,
-                System.currentTimeMillis(), System.currentTimeMillis(), 0);
+                System.currentTimeMillis(), System.currentTimeMillis(), 0, "17.15");
         when(server.getServerViews()).thenReturn(List.of(view));
 
         try (AdminWebPanel panel = new AdminWebPanel(server)) {
@@ -114,6 +114,7 @@ class AdminWebPanelTest {
             assertTrue(response.body().contains("\"source\":\"server_met\""), response.body());
             assertTrue(response.body().contains("\"users\":120"), response.body());
             assertTrue(response.body().contains("\"latencyMs\":12"), response.body());
+            assertTrue(response.body().contains("\"version\":\"17.15\""), response.body());
         }
     }
 
@@ -391,7 +392,7 @@ class AdminWebPanelTest {
                 .thenAnswer(call -> bans.unban(call.getArgument(0)));
         ServerGossip.ServerView view = new ServerGossip.ServerView("Listed", "verified",
                 ServerGossip.ServerSource.GOSSIP, new ServerGossip.Endpoint(InetAddress.getByName("198.51.100.9"), 4661),
-                null, null, null, null, null, null, false, null, null, null, 0);
+                null, null, null, null, null, null, false, null, null, null, 0, null);
         when(server.getServerViews()).thenReturn(List.of(view));
 
         try (AdminWebPanel panel = new AdminWebPanel(server)) {

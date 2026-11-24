@@ -15,9 +15,16 @@ export const viewport: Viewport = {
   colorScheme: 'light dark',
 };
 
+/** The theme chosen in the side bar, set before the first paint so that a dark choice never flashes light. */
+const THEME_SCRIPT = "try{if(localStorage.getItem('jemule.theme')==='dark')document.documentElement.dataset.theme='dark'}catch(e){}";
+
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en">
+    // The theme attribute is set by the script before React hydrates
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
+      </head>
       <body>
         <Shell>{children}</Shell>
       </body>

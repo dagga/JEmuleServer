@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { DataTable, useRowFilter, withExtraColumns, type Column } from '@/components/DataTable';
+import { countryColumn } from '@/components/Flag';
 import { Card, LoadState, PageHeader } from '@/components/ui';
 import { fmt } from '@/lib/format';
 import { useApi } from '@/lib/hooks';
@@ -11,6 +12,7 @@ type Peer = Record<string, any>;
 const COLUMNS: Column<Peer>[] = [
   { key: 'name', label: 'Name', width: '30ch' },
   { key: 'type', label: 'Type' },
+  countryColumn<Peer>(),
   { key: 'address', label: 'Address', kind: 'code', width: '22ch' },
   { key: 'tcpPort', label: 'TCP port', kind: 'int' },
   { key: 'udpPort', label: 'UDP port', kind: 'int' },

@@ -26,7 +26,7 @@ Options not set in that file use the defaults built into the server. Keep runtim
 | Protection | `floodMaxRequestsPerSecond`, `cbFailureRateThreshold`, `cbMinimumNumberOfCalls`, `cbWaitDurationInSeconds` | Per-IP flood threshold and database circuit-breaker behavior. |
 | Server federation | `serverPeers`, `serverMetUrl` | Comma-separated IPv4 seeds and optional HTTPS `server.met` source loaded at startup. Downloaded endpoints are merged with existing candidates, not used to replace them; peers are verified before gossip or searches. |
 | Index update | `serverIndexUpdateEnabled`, `serverIndexUpdateMaxPerHour`, `serverIndexUpdateMaxPerDay`, `serverIndexUpdateMinSources` | Searches on the eD2K index peers (the verified eD2K servers), logged in as a client, to index the files they know. |
-| Kademlia | `kadEnabled`, `kadPort`, `kadBootstrapFromClients`, `kadMaxRoutingContacts`, `kadForkSearchEnabled`, `kadSearchTimeoutSeconds`, `kadAutoIngestToH2`, `kadMinSourcesForIngest`, `kadNodesUrls`, `kadForkGlobalSearches`, `kadSourceSearchEnabled`, `kadSourceSearchMinLocal`, `kadSourceSearchesPerMinute` | Embedded Kad node, search forwarding, bootstrapping (including nodes.dat downloads), result ingestion and source searches for the clients. |
+| Kademlia | `kadEnabled`, `kadPort`, `kadBootstrapFromClients`, `kadMaxRoutingContacts`, `kadForkSearchEnabled`, `kadSearchTimeoutSeconds`, `kadAutoIngestToH2`, `kadMinSourcesForIngest`, `kadNodesUrls`, `kadForkGlobalSearches`, `kadWordSearchMinBytes`, `kadSourceSearchEnabled`, `kadSourceSearchMinLocal`, `kadSourceSearchesPerMinute` | Embedded Kad node, search forwarding, bootstrapping (including nodes.dat downloads), result ingestion and source searches for the clients. |
 
 Use `server.properties` for option defaults and additional details. Relative file paths are resolved from the process
 working directory.
@@ -37,6 +37,10 @@ The terminal CLI is available when the server has an interactive console. For se
 
 - `adminPort` optionally exposes the CLI on a TCP port bound to `127.0.0.1`; it is disabled by default (`0`).
 - `adminWebPort` enables the HTTP dashboard on loopback, defaulting to `8080`; set it to `0` to disable the panel.
+- `geoIpUrl` is the country database the panel uses to show the flag of servers, peers and clients: by default the
+  free DB-IP "IP to Country Lite" CSV (CC BY 4.0, `{month}` replaced by `yyyy-MM`), downloaded when the panel starts,
+  cached next to the database (`databasePath.geoip.csv.gz`) and refreshed every 30 days; empty, no country is shown and
+  nothing is downloaded.
 
 Neither interface has password authentication. Any local user who can access loopback can administer the server. Do not
 forward or proxy these ports to untrusted networks.

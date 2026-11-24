@@ -676,16 +676,17 @@ final class AdminWebPanel implements AutoCloseable {
             if (!query.isEmpty() && !(nickname.toLowerCase(Locale.ROOT).contains(query)
                     || address.contains(query) || clientId.contains(query))) continue;
             if (total >= offset && page.size() < limit) {
-                page.add(Map.of(
-                        "nickname", nickname,
-                        "ip", address,
-                        "port", client.port(),
-                        "listenPort", client.listenPort(),
-                        "clientId", clientId,
-                        "idType", client.isHighId() ? "HighID" : "LowID",
-                        "publishedFiles", client.publishedFilesCount().get(),
-                        "connectedSeconds", Math.max(0, (now - client.connectedAt()) / 1000)
-                ));
+                Map<String, Object> row = new java.util.LinkedHashMap<>();
+                row.put("nickname", nickname);
+                row.put("ip", address);
+                row.put("country", server.country(client.address()));
+                row.put("port", client.port());
+                row.put("listenPort", client.listenPort());
+                row.put("clientId", clientId);
+                row.put("idType", client.isHighId() ? "HighID" : "LowID");
+                row.put("publishedFiles", client.publishedFilesCount().get());
+                row.put("connectedSeconds", Math.max(0, (now - client.connectedAt()) / 1000));
+                page.add(row);
             }
             total++;
         }
@@ -699,6 +700,7 @@ final class AdminWebPanel implements AutoCloseable {
             row.put("name", peer.name());
             row.put("type", "eD2K server");
             row.put("address", peer.endpoint().address().getHostAddress());
+            row.put("country", server.country(peer.endpoint().address()));
             row.put("tcpPort", peer.endpoint().tcpPort());
             row.put("udpPort", peer.endpoint().udpPort());
             row.put("kadVersion", null);
@@ -712,6 +714,7 @@ final class AdminWebPanel implements AutoCloseable {
                 row.put("name", "Kad node " + contact.id());
                 row.put("type", "Kad contact");
                 row.put("address", contact.address().getHostAddress());
+                row.put("country", server.country(contact.address()));
                 row.put("tcpPort", contact.tcpPort());
                 row.put("udpPort", contact.udpPort());
                 row.put("kadVersion", contact.kadVersion());
@@ -729,8 +732,10 @@ final class AdminWebPanel implements AutoCloseable {
             Map<String, Object> row = new java.util.LinkedHashMap<>();
             row.put("name", view.name());
             row.put("state", view.state());
+            row.put("version", view.version());
             row.put("source", view.source().name().toLowerCase(Locale.ROOT));
             row.put("address", view.endpoint().address().getHostAddress());
+            row.put("country", server.country(view.endpoint().address()));
             row.put("tcpPort", view.endpoint().tcpPort());
             row.put("udpPort", view.endpoint().udpPort());
             row.put("users", view.users());

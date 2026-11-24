@@ -37,6 +37,8 @@ import java.util.Properties;
  * @param nodesUrls             Comma-separated nodes.dat URLs used to bootstrap the routing table (empty disables it).
  * @param forkGlobalSearches    Whether the UDP global searches of other servers' clients are also searched on Kad,
  *                              in the background, to populate the database.
+ * @param wordSearchMinBytes    UTF-8 bytes a word of a client search needs to be searched alone on Kad in the
+ *                              background, besides the keyword of the search: at least Kad's own rule, 3 bytes.
  */
 public record KadConfig(
         boolean enabled,
@@ -48,7 +50,8 @@ public record KadConfig(
         boolean autoIngestToH2,
         int minSourcesForIngest,
         String nodesUrls,
-        boolean forkGlobalSearches
+        boolean forkGlobalSearches,
+        int wordSearchMinBytes
 ) {
     /** Offset of the default Kad UDP port from the server TCP port (4661 + 11 = 4672). */
     public static final int PORT_OFFSET = 11;
@@ -61,10 +64,18 @@ public record KadConfig(
             "https://upd.emule-security.org/nodes.dat,http://www.alldivx.de/nodes/nodes.dat";
 
     /** Default configuration: every Kad feature enabled, as documented in server.properties. */
-    public static final KadConfig DEFAULT = new KadConfig(true, 0, true, 500, true, 4, true, 1, DEFAULT_NODES_URLS, true);
+    /** Default sources a Kad file needs to be kept: one source alone is often a fake or a file gone. */
+    public static final int DEFAULT_MIN_SOURCES_FOR_INGEST = 2;
+    /** Kad indexes no word under 3 UTF-8 bytes (CSearchManager::GetWords): the least and default length searched. */
+    public static final int MIN_WORD_SEARCH_BYTES = 3;
+    /** Most bytes asked of a word searched in the background. */
+    public static final int MAX_WORD_SEARCH_MIN_BYTES = 64;
+    public static final KadConfig DEFAULT = new KadConfig(true, 0, true, 500, true, 4, true,
+            DEFAULT_MIN_SOURCES_FOR_INGEST, DEFAULT_NODES_URLS, true, MIN_WORD_SEARCH_BYTES);
 
     /** Configuration with the embedded Kademlia node turned off. */
-    public static final KadConfig DISABLED = new KadConfig(false, 0, false, 500, false, 4, false, 1);
+    public static final KadConfig DISABLED = new KadConfig(false, 0, false, 500, false, 4, false,
+            DEFAULT_MIN_SOURCES_FOR_INGEST);
 
     /** Keeps source compatibility for callers that do not provide the nodes.dat sources. */
     public KadConfig(boolean enabled, int port, boolean bootstrapFromClients, int maxRoutingContacts,
@@ -82,6 +93,14 @@ public record KadConfig(
                 autoIngestToH2, minSourcesForIngest, nodesUrls, true);
     }
 
+    /** Keeps source compatibility for callers that do not choose the length of the words searched in background. */
+    public KadConfig(boolean enabled, int port, boolean bootstrapFromClients, int maxRoutingContacts,
+                     boolean forkSearchEnabled, int searchTimeoutSeconds, boolean autoIngestToH2,
+                     int minSourcesForIngest, String nodesUrls, boolean forkGlobalSearches) {
+        this(enabled, port, bootstrapFromClients, maxRoutingContacts, forkSearchEnabled, searchTimeoutSeconds,
+                autoIngestToH2, minSourcesForIngest, nodesUrls, forkGlobalSearches, MIN_WORD_SEARCH_BYTES);
+    }
+
     public KadConfig {
         if (port < 0 || port > 65535) {
             throw new IllegalArgumentException("kadPort must be between 0 (TCP port + " + PORT_OFFSET + ") and 65535");
@@ -94,6 +113,10 @@ public record KadConfig(
         }
         if (minSourcesForIngest < 0) {
             throw new IllegalArgumentException("kadMinSourcesForIngest cannot be negative");
+        }
+        if (wordSearchMinBytes < MIN_WORD_SEARCH_BYTES || wordSearchMinBytes > MAX_WORD_SEARCH_MIN_BYTES) {
+            throw new IllegalArgumentException("kadWordSearchMinBytes must be between " + MIN_WORD_SEARCH_BYTES
+                    + " (Kad's own rule) and " + MAX_WORD_SEARCH_MIN_BYTES);
         }
         nodesUrls = nodesUrls == null ? "" : nodesUrls.trim();
         parseNodesUrls(nodesUrls);
@@ -143,7 +166,9 @@ public record KadConfig(
                 Boolean.parseBoolean(props.getProperty("kadAutoIngestToH2", String.valueOf(DEFAULT.autoIngestToH2()))),
                 Integer.parseInt(props.getProperty("kadMinSourcesForIngest", String.valueOf(DEFAULT.minSourcesForIngest())).trim()),
                 props.getProperty("kadNodesUrls", DEFAULT.nodesUrls()),
-                Boolean.parseBoolean(props.getProperty("kadForkGlobalSearches", String.valueOf(DEFAULT.forkGlobalSearches())))
+                Boolean.parseBoolean(props.getProperty("kadForkGlobalSearches", String.valueOf(DEFAULT.forkGlobalSearches()))),
+                Integer.parseInt(props.getProperty("kadWordSearchMinBytes",
+                        String.valueOf(DEFAULT.wordSearchMinBytes())).trim())
         );
     }
 }

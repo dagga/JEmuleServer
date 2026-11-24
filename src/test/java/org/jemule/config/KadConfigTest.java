@@ -41,7 +41,8 @@ class KadConfigTest {
         assertTrue(kad.forkSearchEnabled());
         assertEquals(4, kad.searchTimeoutSeconds());
         assertTrue(kad.autoIngestToH2());
-        assertEquals(1, kad.minSourcesForIngest());
+        assertEquals(2, kad.minSourcesForIngest());
+        assertEquals(3, kad.wordSearchMinBytes());
         assertEquals(2, kad.nodesSources().size());
         assertEquals("https://upd.emule-security.org/nodes.dat", kad.nodesSources().get(0).toString());
     }

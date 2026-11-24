@@ -1,16 +1,17 @@
-/* JEmuleServer admin panel: one stylesheet, system fonts, light and dark themes from the system, the colors of the JEmuleServer logo. */
+/* JEmuleServer admin panel: one stylesheet, system fonts, the colors of the JEmuleServer logo. Light like the logo and the
+   historic eMule site; the dark theme is a choice of the administrator (data-theme="dark", the switch of the side bar). */
 
 :root {
   color-scheme: light;
   /* The colors of the JEmuleServer logo: the blue bubble of eMule's "e" (#6fb6ff, #2a78d6, #174f9e), the caramel of
      the mule (#c97a3a, #9c5524), the grey of its muzzle; the word mark in bold italic blue (#1f63b8) */
-  --page: #eef1f5;
+  --page: #f4f8fd;
   --surface: #ffffff;
-  --raised: #f1f4f8;
-  --ink: #142030;
-  --ink2: #44505f;
+  --raised: #edf4fc;
+  --ink: #15263c;
+  --ink2: #3f5068;
   --muted: #6a7686;
-  --grid: #e5eaf0;
+  --grid: #e3ebf5;
   --axis: #c8d1dc;
   --border: rgba(23, 79, 158, 0.12);
   --accent: #1f63b8;
@@ -23,7 +24,8 @@
   --bandInk: #ffffff;
   --bandLine: #174f9e;
   --strip: linear-gradient(90deg, #6fb6ff 0%, #2a78d6 55%, #c97a3a 100%);
-  --sideBg: linear-gradient(180deg, #e6ebf1 0%, #eef1f5 100%);
+  /* The sky of the eMule banner over the menu */
+  --sideBg: linear-gradient(180deg, #d6e8fc 0%, #e8f2fd 45%, #f4f8fd 100%);
   --wordStrong: #1f63b8;
   --wordThin: #4f4e4a;
   --s1: #2a78d6;
@@ -37,53 +39,51 @@
   --criticalSoft: #fbe9e9;
   --shadow: 0 1px 2px rgba(20, 40, 80, 0.06), 0 6px 20px rgba(20, 40, 80, 0.06);
   --shadowHover: 0 2px 4px rgba(20, 40, 80, 0.08), 0 14px 32px rgba(23, 79, 158, 0.14);
-  --bandSoft: #e2ebf6;
-  --zebra: #f6f8fb;
-  --glow: rgba(111, 182, 255, 0.28);
-  --glow2: rgba(201, 122, 58, 0.12);
+  --bandSoft: #e1edfb;
+  --zebra: #f5f9fe;
+  --glow: rgba(111, 182, 255, 0.38);
+  --glow2: rgba(201, 122, 58, 0.16);
   --radius: 12px;
   --brandFont: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    color-scheme: dark;
-    /* The dark logo: the word mark in #4f9cf0 and #c3c2b7, the bubble and the mule over a night blue */
-    --page: #0f141b;
-    --surface: #17202b;
-    --raised: #202b38;
-    --ink: #e9eef4;
-    --ink2: #b6c1cd;
-    --muted: #8592a1;
-    --grid: #222d3a;
-    --axis: #334152;
-    --border: rgba(255, 255, 255, 0.07);
-    --accent: #4f9cf0;
-    --accentInk: #0f141b;
-    --accentSoft: #16314f;
-    --brand: #e7a978;
-    --brandBright: #e7a978;
-    --band: linear-gradient(180deg, #2a6fc9 0%, #1d56a8 100%);
-    --bandInk: #f2f7fd;
-    --bandLine: #174f9e;
-    --strip: linear-gradient(90deg, #6fb6ff 0%, #2a78d6 55%, #e7a978 100%);
-    --sideBg: linear-gradient(180deg, #141b25 0%, #0f141b 100%);
-    --wordStrong: #4f9cf0;
-    --wordThin: #c3c2b7;
-    --s1: #4f9cf0;
-    --s2: #e7a978;
-    --track: #1d3350;
-    --goodText: #5fd16a;
-    --criticalText: #f07a7a;
-    --criticalSoft: #3a1d1d;
-    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
-    --shadowHover: 0 2px 6px rgba(0, 0, 0, 0.35), 0 14px 32px rgba(0, 0, 0, 0.35);
-    --bandSoft: #1b2735;
-    --zebra: #1a2430;
-    --glow: rgba(42, 120, 214, 0.22);
-    --glow2: rgba(201, 122, 58, 0.1);
-  }
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  /* The dark logo: the word mark in #4f9cf0 and #c3c2b7, the bubble and the mule over a night blue */
+  --page: #121b27;
+  --surface: #1a2534;
+  --raised: #233144;
+  --ink: #e9eef4;
+  --ink2: #b6c1cd;
+  --muted: #8592a1;
+  --grid: #222d3a;
+  --axis: #334152;
+  --border: rgba(255, 255, 255, 0.07);
+  --accent: #4f9cf0;
+  --accentInk: #121b27;
+  --accentSoft: #16314f;
+  --brand: #e7a978;
+  --brandBright: #e7a978;
+  --band: linear-gradient(180deg, #2a6fc9 0%, #1d56a8 100%);
+  --bandInk: #f2f7fd;
+  --bandLine: #174f9e;
+  --strip: linear-gradient(90deg, #6fb6ff 0%, #2a78d6 55%, #e7a978 100%);
+  --sideBg: linear-gradient(180deg, #17263a 0%, #121b27 100%);
+  --wordStrong: #4f9cf0;
+  --wordThin: #c3c2b7;
+  --s1: #4f9cf0;
+  --s2: #e7a978;
+  --track: #1d3350;
+  --goodText: #5fd16a;
+  --criticalText: #f07a7a;
+  --criticalSoft: #3a1d1d;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadowHover: 0 2px 6px rgba(0, 0, 0, 0.35), 0 14px 32px rgba(0, 0, 0, 0.35);
+  --bandSoft: #1b2735;
+  --zebra: #1a2430;
+  --glow: rgba(42, 120, 214, 0.22);
+  --glow2: rgba(201, 122, 58, 0.1);
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -148,7 +148,7 @@ h1, h2 { margin: 0; }
 }
 .navSubLink:hover { background: var(--raised); color: var(--ink); }
 .navSubLink[aria-current="location"] { color: var(--brand); font-weight: 600; background: var(--surface); }
-.sideNote { margin: auto 6px 0; color: var(--muted); font-size: 12px; }
+.sideNote { margin: 0 6px; color: var(--muted); font-size: 12px; }
 .main { min-width: 0; padding: 28px 32px 64px; max-width: 1440px; width: 100%; }
 
 @media (max-width: 900px) {
@@ -526,3 +526,24 @@ select {
   background-image: linear-gradient(45deg, transparent 50%, var(--accent) 50%), linear-gradient(135deg, var(--accent) 50%, transparent 50%);
   background-position: calc(100% - 16px) 55%, calc(100% - 11px) 55%; background-size: 5px 5px; background-repeat: no-repeat;
 }
+
+/* The switch of the theme, at the foot of the side bar */
+.themeSwitch {
+  display: inline-flex; align-items: center; gap: 8px; align-self: flex-start;
+  margin: auto 6px 0; padding: 6px 12px; border-radius: 999px; cursor: pointer;
+  font: inherit; font-size: 12.5px; color: var(--ink2);
+  background: var(--surface); border: 1px solid var(--border); box-shadow: var(--shadow);
+}
+.themeSwitch:hover { color: var(--accent); }
+.themeSwitch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.themeSwitch svg { flex: none; }
+@media (max-width: 900px) {
+  .themeSwitch { position: absolute; top: 16px; right: 16px; margin: 0; padding: 6px 10px; }
+  .themeSwitch span { display: none; }
+}
+
+/* Country of an address: the flag the system draws, then the code */
+.flag { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.flagEmoji { font-size: 16px; line-height: 1; font-family: "Twemoji Mozilla", "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif; }
+.flagCode { font-family: var(--mono); font-size: 12px; color: var(--ink2); }
+.sideNote a { color: inherit; text-decoration: underline; text-decoration-color: var(--axis); }
