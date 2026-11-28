@@ -36,10 +36,12 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
@@ -56,12 +58,24 @@ public final class ServerRelay implements AutoCloseable {
     static final String CLIENT_NAME = "JEmuleServer relay";
     /** Searches played on the relay server at the same time: one session each. */
     static final int SESSIONS = 4;
+    /**
+     * Requests waiting for a free session, searches and source requests together: the ones above stay local. Without
+     * a bound, the source requests of the clients piled up whenever the relay server answered slower than they came
+     * (790,000 waiting, 350 MB, before an OutOfMemoryError on a 560 MB heap).
+     */
+    static final int MAX_QUEUED = 64;
+    /** Source requests waiting at most: the room left above them is kept for the searches, which a client waits for. */
+    static final int MAX_QUEUED_SOURCES = 32;
     /** Pages of 300 results asked per client search: the first answer and two "More", as an eMule client would. */
     public static final int MAX_PAGES = 3;
     /** Time a login, a search or a page may take. */
     static final int ANSWER_TIMEOUT = 10_000;
     /** Time without a new session after the relay server could not be reached or warned. */
     static final long RETRY_AFTER = 30_000;
+    /** Time a request may wait for a free session: older, its client has moved on and it is dropped. */
+    static final long MAX_WAIT = ANSWER_TIMEOUT;
+    /** Time between two warnings of a busy relay server. */
+    private static final long BUSY_WARNING_EVERY = 60_000;
     private static final int MAX_QUERY_BYTES = 1024;
 
     /** Opens a session on the relay server (a fake one in the tests). */
@@ -86,7 +100,9 @@ public final class ServerRelay implements AutoCloseable {
     private final FakeFileDetector fakeDetector;
     private final Connector connector;
     private final LongSupplier clock;
-    private final ExecutorService executor;
+    private final ThreadPoolExecutor executor;
+    /** Source requests waiting in {@link #executor}, not started yet. */
+    private final AtomicInteger queuedSources = new AtomicInteger();
     private final ConcurrentLinkedQueue<Session> idle = new ConcurrentLinkedQueue<>();
     private final byte[] userHash = userHash();
     private volatile boolean running = true;
@@ -103,6 +119,9 @@ public final class ServerRelay implements AutoCloseable {
     private final AtomicLong sourcesFound = new AtomicLong();
     private final AtomicLong failures = new AtomicLong();
     private final AtomicLong announced = new AtomicLong();
+    private final AtomicLong rejected = new AtomicLong();
+    private final AtomicLong expired = new AtomicLong();
+    private final AtomicLong lastBusyWarning = new AtomicLong(Long.MIN_VALUE);
 
     ServerRelay(Supplier<String> relayServer, FileIndex fileIndex, FakeFileDetector fakeDetector) {
         this(relayServer, fileIndex, fakeDetector, (endpoint, hash) -> {
@@ -134,7 +153,9 @@ public final class ServerRelay implements AutoCloseable {
         this.fakeDetector = fakeDetector;
         this.connector = connector;
         this.clock = clock;
-        this.executor = Executors.newFixedThreadPool(SESSIONS, ServerThreads.factory(ServerThreads.Tier.SEARCH, "relay"));
+        // A full queue rejects the request (AbortPolicy): submit answers it locally
+        this.executor = new ThreadPoolExecutor(SESSIONS, SESSIONS, 0L, TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(MAX_QUEUED), ServerThreads.factory(ServerThreads.Tier.SEARCH, "relay"));
     }
 
     /** Tells which servers the administrator banned. */
@@ -219,7 +240,7 @@ public final class ServerRelay implements AutoCloseable {
     public CompletableFuture<List<FileMetadata>> forkSearch(byte[] searchTree, int maxPages) {
         if (!active() || searchTree == null || searchTree.length == 0 || searchTree.length > MAX_QUERY_BYTES) return null;
         searches.incrementAndGet();
-        return submit(session -> search(session, searchTree, maxPages), null);
+        return submit(session -> search(session, searchTree, maxPages), null, false);
     }
 
     /**
@@ -235,7 +256,7 @@ public final class ServerRelay implements AutoCloseable {
             List<FoundSource> found = highIds(session.sources(request));
             sourcesFound.addAndGet(found.size());
             return found;
-        }, List.of());
+        }, List.of(), true);
     }
 
     /**
@@ -263,13 +284,53 @@ public final class ServerRelay implements AutoCloseable {
         T run(Session session) throws IOException;
     }
 
-    private <T> CompletableFuture<T> submit(Request<T> request, T none) {
-        if (clock.getAsLong() < retryAt) return CompletableFuture.completedFuture(none);
-        try {
-            return CompletableFuture.supplyAsync(() -> play(request, none), executor);
-        } catch (RejectedExecutionException e) {
-            return CompletableFuture.completedFuture(none);
+    /**
+     * Queues a request for the next free session; answers {@code none} at once while the relay server is left alone
+     * or when too many requests wait already.
+     *
+     * @param source a source request: at most {@link #MAX_QUEUED_SOURCES} of them wait
+     */
+    private <T> CompletableFuture<T> submit(Request<T> request, T none, boolean source) {
+        long queuedAt = clock.getAsLong();
+        if (queuedAt < retryAt) return CompletableFuture.completedFuture(none);
+        if (source && queuedSources.incrementAndGet() > MAX_QUEUED_SOURCES) {
+            queuedSources.decrementAndGet();
+            return busy(none, queuedAt);
         }
+        try {
+            return CompletableFuture.supplyAsync(() -> {
+                if (source) queuedSources.decrementAndGet();
+                return start(request, none, queuedAt);
+            }, executor);
+        } catch (RejectedExecutionException e) {
+            if (source) queuedSources.decrementAndGet();
+            return busy(none, queuedAt);
+        }
+    }
+
+    /** A request refused because too many wait: it stays local. */
+    private <T> CompletableFuture<T> busy(T none, long now) {
+        long count = rejected.incrementAndGet();
+        long last = lastBusyWarning.get();
+        if (now - last >= BUSY_WARNING_EVERY && lastBusyWarning.compareAndSet(last, now)) {
+            log.warn("Relay server {} busy: {} requests waiting, {} kept local since the start", describe(),
+                    executor.getQueue().size(), count);
+        }
+        return CompletableFuture.completedFuture(none);
+    }
+
+    /**
+     * Plays a request taken from the queue, unless it waited too long (its client has given up) or the relay server
+     * failed meanwhile (the requests queued before the failure would each open a new session).
+     */
+    private <T> T start(Request<T> request, T none, long queuedAt) {
+        long now = clock.getAsLong();
+        if (now - queuedAt > MAX_WAIT) {
+            expired.incrementAndGet();
+            return none;
+        }
+        if (now < retryAt) return none;
+        return play(request, none);
     }
 
     /** Runs a request on an idle session, or a new one; a session the relay server closed is opened again once. */
@@ -346,6 +407,9 @@ public final class ServerRelay implements AutoCloseable {
         stats.put("failures", failures.get());
         stats.put("announcedLogins", announced.get());
         stats.put("sessions", idle.size());
+        stats.put("queued", executor.getQueue().size());
+        stats.put("rejected", rejected.get());
+        stats.put("expired", expired.get());
         return stats;
     }
 
