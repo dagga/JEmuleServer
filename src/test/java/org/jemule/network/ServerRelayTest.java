@@ -10,9 +10,12 @@ import java.io.IOException;
 import java.net.InetAddress;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Properties;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -29,7 +32,12 @@ class ServerRelayTest {
         volatile int pages = 5;
         volatile boolean unreachable;
         volatile boolean cutNextRequest;
+        /** Every request fails: the relay server went down. */
+        volatile boolean cutAll;
         volatile byte[] sources = new byte[17];
+        /** While not null, every request waits for it: the sessions stay busy. */
+        volatile CountDownLatch gate;
+        final AtomicInteger started = new AtomicInteger();
 
         ServerRelay.Session open() throws IOException {
             if (unreachable) throw new IOException("connection refused");
@@ -37,6 +45,7 @@ class ServerRelayTest {
             AtomicInteger page = new AtomicInteger();
             return new ServerRelay.Session() {
                 public ServerUpdateSession.Answer search(byte[] tree) throws IOException {
+                    hold();
                     cut();
                     requests.add("search");
                     page.set(1);
@@ -49,6 +58,7 @@ class ServerRelayTest {
                 }
 
                 public byte[] sources(byte[] request) throws IOException {
+                    hold();
                     cut();
                     requests.add("sources");
                     return sources;
@@ -59,7 +69,29 @@ class ServerRelayTest {
             };
         }
 
+        private void hold() throws IOException {
+            started.incrementAndGet();
+            CountDownLatch g = gate;
+            if (g == null) return;
+            try {
+                if (!g.await(10, TimeUnit.SECONDS)) throw new IOException("gate never opened");
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IOException(e);
+            }
+        }
+
+        /** Waits until {@code count} requests reached the relay server. */
+        void awaitStarted(int count) throws InterruptedException {
+            long end = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (started.get() < count) {
+                if (System.nanoTime() > end) throw new AssertionError(started.get() + " requests started, not " + count);
+                Thread.sleep(5);
+            }
+        }
+
         private void cut() throws IOException {
+            if (cutAll) throw new IOException("relay server down");
             if (cutNextRequest) {
                 cutNextRequest = false;
                 throw new IOException("session closed by the server");
@@ -179,6 +211,103 @@ class ServerRelayTest {
             fake.clock.addAndGet(ServerRelay.RETRY_AFTER);
             fake.pages = 1;
             assertEquals(300, relay.forkSearch(tree(), 1).get(5, TimeUnit.SECONDS).size());
+        }
+    }
+
+    @Test
+    void theSourceRequestsAboveTheQueueStayLocal() throws Exception {
+        FakeRelay fake = new FakeRelay();
+        fake.pages = 1;
+        fake.gate = new CountDownLatch(1);
+        try (ServerRelay relay = relay(fake, "192.0.2.1:4661")) {
+            List<CompletableFuture<List<FoundSource>>> waiting = new ArrayList<>();
+            for (int i = 0; i < ServerRelay.SESSIONS; i++) waiting.add(relay.forkSources(new byte[20]));
+            fake.awaitStarted(ServerRelay.SESSIONS);
+            for (int i = 0; i < ServerRelay.MAX_QUEUED_SOURCES; i++) waiting.add(relay.forkSources(new byte[20]));
+            assertEquals(ServerRelay.MAX_QUEUED_SOURCES, relay.stats().get("queued"));
+
+            CompletableFuture<List<FoundSource>> refused = relay.forkSources(new byte[20]);
+            assertTrue(refused.isDone(), "answered at once: no source from the relay server");
+            assertEquals(List.of(), refused.get());
+            assertEquals(1L, relay.stats().get("rejected"));
+
+            CompletableFuture<List<FileMetadata>> search = relay.forkSearch(tree(), 1);
+            assertFalse(search.isDone(), "a search still finds room behind the source requests");
+
+            fake.gate.countDown();
+            for (CompletableFuture<List<FoundSource>> f : waiting) assertNotNull(f.get(5, TimeUnit.SECONDS));
+            assertEquals(300, search.get(5, TimeUnit.SECONDS).size());
+            assertEquals(1L + ServerRelay.SESSIONS + ServerRelay.MAX_QUEUED_SOURCES, fake.started.get());
+        }
+    }
+
+    @Test
+    void theSearchesAboveTheQueueStayLocal() throws Exception {
+        FakeRelay fake = new FakeRelay();
+        fake.pages = 1;
+        fake.gate = new CountDownLatch(1);
+        try (ServerRelay relay = relay(fake, "192.0.2.1:4661")) {
+            List<CompletableFuture<List<FileMetadata>>> waiting = new ArrayList<>();
+            for (int i = 0; i < ServerRelay.SESSIONS; i++) waiting.add(relay.forkSearch(tree(), 1));
+            fake.awaitStarted(ServerRelay.SESSIONS);
+            for (int i = 0; i < ServerRelay.MAX_QUEUED; i++) waiting.add(relay.forkSearch(tree(), 1));
+            CompletableFuture<List<FileMetadata>> refused = relay.forkSearch(tree(), 1);
+            assertTrue(refused.isDone());
+            assertNull(refused.get(), "the local index answers");
+            assertEquals(1L, relay.stats().get("rejected"));
+            fake.gate.countDown();
+            for (CompletableFuture<List<FileMetadata>> f : waiting) assertEquals(300, f.get(5, TimeUnit.SECONDS).size());
+        }
+    }
+
+    @Test
+    void aRequestThatWaitedTooLongIsDropped() throws Exception {
+        FakeRelay fake = new FakeRelay();
+        fake.gate = new CountDownLatch(1);
+        try (ServerRelay relay = relay(fake, "192.0.2.1:4661")) {
+            List<CompletableFuture<List<FoundSource>>> busy = new ArrayList<>();
+            for (int i = 0; i < ServerRelay.SESSIONS; i++) busy.add(relay.forkSources(new byte[20]));
+            fake.awaitStarted(ServerRelay.SESSIONS);
+            CompletableFuture<List<FoundSource>> late = relay.forkSources(new byte[20]);
+            fake.clock.addAndGet(ServerRelay.MAX_WAIT + 1);
+            fake.gate.countDown();
+            assertEquals(List.of(), late.get(5, TimeUnit.SECONDS));
+            for (CompletableFuture<List<FoundSource>> f : busy) f.get(5, TimeUnit.SECONDS);
+            assertEquals(ServerRelay.SESSIONS, fake.started.get(), "never played on the relay server");
+            assertEquals(1L, relay.stats().get("expired"));
+        }
+    }
+
+    @Test
+    void theRequestsQueuedBeforeAFailureDoNotOpenSessions() throws Exception {
+        FakeRelay fake = new FakeRelay();
+        try (ServerRelay relay = relay(fake, "192.0.2.1:4661")) {
+            // SESSIONS sessions opened, then idle
+            fake.gate = new CountDownLatch(1);
+            List<CompletableFuture<List<FoundSource>>> first = new ArrayList<>();
+            for (int i = 0; i < ServerRelay.SESSIONS; i++) first.add(relay.forkSources(new byte[20]));
+            fake.awaitStarted(ServerRelay.SESSIONS);
+            fake.gate.countDown();
+            for (CompletableFuture<List<FoundSource>> f : first) f.get(5, TimeUnit.SECONDS);
+            assertEquals(ServerRelay.SESSIONS, fake.logins.get());
+
+            // The sessions are busy, requests wait; then the relay server goes down
+            fake.gate = new CountDownLatch(1);
+            fake.started.set(0);
+            List<CompletableFuture<List<FoundSource>>> busy = new ArrayList<>();
+            for (int i = 0; i < ServerRelay.SESSIONS; i++) busy.add(relay.forkSources(new byte[20]));
+            fake.awaitStarted(ServerRelay.SESSIONS);
+            List<CompletableFuture<List<FoundSource>>> queued = new ArrayList<>();
+            for (int i = 0; i < 10; i++) queued.add(relay.forkSources(new byte[20]));
+            fake.unreachable = true;
+            fake.cutAll = true;
+            fake.gate.countDown();
+            for (CompletableFuture<List<FoundSource>> f : busy) assertEquals(List.of(), f.get(5, TimeUnit.SECONDS));
+            for (CompletableFuture<List<FoundSource>> f : queued) assertEquals(List.of(), f.get(5, TimeUnit.SECONDS));
+            assertEquals(ServerRelay.SESSIONS, fake.started.get(), "the queued requests stay local");
+            long failures = (Long) relay.stats().get("failures");
+            assertTrue(failures >= 1 && failures <= ServerRelay.SESSIONS,
+                    "one failure per busy session at most, none for the queued requests: " + failures);
         }
     }
 
